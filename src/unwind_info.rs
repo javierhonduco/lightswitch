@@ -1,9 +1,10 @@
+use anyhow::Result;
 use gimli::{CfaRule, CieOrFde, EhFrame, UnwindContext, UnwindSection};
 use lazy_static::lazy_static;
 use memmap2::Mmap;
 use object::{Object, ObjectSection};
 use std::fs::File;
-use std::process;
+use thiserror::Error;
 
 #[repr(u8)]
 pub enum CfaType {
@@ -35,7 +36,7 @@ enum PltType {
 #[derive(Debug, Default, Copy, Clone)]
 pub struct CompactUnwindRow {
     pub pc: u64,
-    pub ra: u16,
+    // pub ra: u16,
     pub cfa_type: u8,
     pub rbp_type: u8,
     pub cfa_offset: u16,
@@ -70,6 +71,16 @@ lazy_static! {
         gimli::constants::DW_OP_shl,
         gimli::constants::DW_OP_plus,
     ].map(|a| a.0);
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("no eh_frame section found")]
+    ErrorNoEhFrameSection,
+    #[error("object file could not be parsed")]
+    ErrorParsingFile,
+    #[error("no text section found")]
+    ErrorNoTextSection,
 }
 
 const RBP_X86: gimli::Register = gimli::Register(6);
@@ -115,40 +126,79 @@ pub struct UnwindInfoBuilder<'a> {
 }
 
 impl<'a> UnwindInfoBuilder<'a> {
-    pub fn new(path: &'a str, callback: impl FnMut(&UnwindData) + 'a) -> Self {
-        let in_file = match File::open(path) {
-            Ok(file) => file,
-            Err(_) => {
-                process::exit(1);
-            }
-        };
+    pub fn with_callback(
+        path: &'a str,
+        callback: impl FnMut(&UnwindData) + 'a,
+    ) -> anyhow::Result<Self> {
+        let in_file = File::open(path)?;
+        let mmap = unsafe { memmap2::Mmap::map(&in_file)? };
 
-        let mmap = match unsafe { memmap2::Mmap::map(&in_file) } {
-            Ok(mmap) => mmap,
-            Err(_) => {
-                process::exit(1);
-            }
-        };
-
-        Self {
+        Ok(Self {
             mmap,
             callback: Box::new(callback),
-        }
+        })
     }
 
-    pub fn process(&mut self) {
-        let object_file = object::File::parse(&self.mmap[..]).unwrap();
-        if object_file.section_by_name(".eh_frame").is_none() {
-            process::exit(1);
-        }
-        let eh_frame_section = match object_file.section_by_name(".eh_frame") {
-            Some(eh_frame_section) => eh_frame_section,
-            None => {
-                process::exit(1);
-            }
-        };
+    pub fn to_vec(path: &str) -> anyhow::Result<Vec<CompactUnwindRow>> {
+        let mut result = Vec::new();
+        let mut last_function_end_addr: Option<u64> = None;
 
-        let text = object_file.section_by_name(".text").unwrap();
+        let builder = UnwindInfoBuilder::with_callback(path, |unwind_data| {
+            match unwind_data {
+                UnwindData::Function(_, end_addr) => {
+                    // Add a function marker for the previous function.
+                    if let Some(addr) = last_function_end_addr {
+                        let marker = end_of_function_marker(addr);
+                        let row = CompactUnwindRow {
+                            pc: marker.pc,
+                            cfa_offset: marker.cfa_offset,
+                            cfa_type: marker.cfa_type,
+                            rbp_type: marker.rbp_type,
+                            rbp_offset: marker.rbp_offset,
+                        };
+                        result.push(row)
+                    }
+                    last_function_end_addr = Some(*end_addr);
+                }
+                UnwindData::Instruction(compact_row) => {
+                    let row = CompactUnwindRow {
+                        pc: compact_row.pc,
+                        cfa_offset: compact_row.cfa_offset,
+                        cfa_type: compact_row.cfa_type,
+                        rbp_type: compact_row.rbp_type,
+                        rbp_offset: compact_row.rbp_offset,
+                    };
+                    result.push(row);
+                }
+            }
+        });
+
+        builder?.process()?;
+
+        // Add marker for the last function.
+        if let Some(last_addr) = last_function_end_addr {
+            let marker = end_of_function_marker(last_addr);
+            let row = CompactUnwindRow {
+                pc: marker.pc,
+                cfa_offset: marker.cfa_offset,
+                cfa_type: marker.cfa_type,
+                rbp_type: marker.rbp_type,
+                rbp_offset: marker.rbp_offset,
+            };
+            result.push(row);
+        }
+
+        Ok(result)
+    }
+
+    pub fn process(mut self) -> Result<(), anyhow::Error> {
+        let object_file = object::File::parse(&self.mmap[..])?;
+        let eh_frame_section = object_file
+            .section_by_name(".eh_frame")
+            .ok_or(Error::ErrorNoEhFrameSection)?;
+        let text = object_file
+            .section_by_name(".text")
+            .ok_or(Error::ErrorNoTextSection)?;
 
         let bases = gimli::BaseAddresses::default()
             .set_eh_frame(eh_frame_section.address())
@@ -160,7 +210,7 @@ impl<'a> UnwindInfoBuilder<'a> {
             gimli::RunTimeEndian::Big
         };
 
-        let eh_frame_data = &eh_frame_section.uncompressed_data().unwrap();
+        let eh_frame_data = &eh_frame_section.uncompressed_data()?;
 
         let eh_frame = EhFrame::new(eh_frame_data, endian);
         let mut entries_iter = eh_frame.entries(&bases);
@@ -191,9 +241,7 @@ impl<'a> UnwindInfoBuilder<'a> {
                             fde.initial_address() + fde.len(),
                         ));
 
-                        let mut table: gimli::UnwindTable<
-                            gimli::EndianSlice<gimli::RunTimeEndian>,
-                        > = fde.rows(&eh_frame, &bases, &mut ctx).unwrap();
+                        let mut table = fde.rows(&eh_frame, &bases, &mut ctx)?;
 
                         loop {
                             let mut compact_row = CompactUnwindRow::default();
@@ -242,7 +290,8 @@ impl<'a> UnwindInfoBuilder<'a> {
                                         gimli::RegisterRule::Undefined => {}
                                         gimli::RegisterRule::Offset(offset) => {
                                             compact_row.rbp_type = RbpType::CfaOffset as u8;
-                                            compact_row.rbp_offset = i16::try_from(offset).unwrap();
+                                            compact_row.rbp_offset =
+                                                i16::try_from(offset).expect("convert rbp offset");
                                         }
                                         gimli::RegisterRule::Register(_reg) => {
                                             compact_row.rbp_type = RbpType::Register as u8;
@@ -275,5 +324,6 @@ impl<'a> UnwindInfoBuilder<'a> {
                 }
             }
         }
+        Ok(())
     }
 }

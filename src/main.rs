@@ -1,7 +1,11 @@
 use lightswitch::unwind_info::{compact_printing_callback, UnwindInfoBuilder};
 use std::env;
+use std::error::Error;
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     let path = env::args().nth(1).expect("no file given");
-    UnwindInfoBuilder::new(&path, compact_printing_callback).process();
+    UnwindInfoBuilder::with_callback(&path, compact_printing_callback)?.process()?;
+    UnwindInfoBuilder::to_vec(&path)?;
+
+    Ok(())
 }
