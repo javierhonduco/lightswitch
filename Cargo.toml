@@ -1,0 +1,10 @@
+[package]
+name = "lightswitch"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gimli = "*"
+object = "*"
+memmap2 = "*"
+lazy_static = "*"
