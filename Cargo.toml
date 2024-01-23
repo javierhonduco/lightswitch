@@ -10,3 +10,13 @@ memmap2 = "*"
 lazy_static = "*"
 anyhow = "*"
 thiserror = "*"
+libbpf-rs = {version = "*", features=["static"]}
+num_cpus = "*"
+perf-event-open-sys = "*"
+libc = "*"
+errno = "*"
+plain = "*"
+
+[build-dependencies]
+bindgen = "*"
+libbpf-cargo = "*"
