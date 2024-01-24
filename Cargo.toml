@@ -17,9 +17,10 @@ libc = "*"
 errno = "*"
 plain = "*"
 procfs = "*"
-elf = "*"
 ring = "*"
 data-encoding = "*"
+page_size = "*"
+clap = { version = "*", features = ["derive"] }
 
 [build-dependencies]
 bindgen = "*"

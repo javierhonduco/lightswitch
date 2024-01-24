@@ -35,7 +35,7 @@ unsafe fn perf_event_open(
 
 /// # Safety
 pub unsafe fn setup_perf_event(cpu: i32, sample_freq: u64) -> Result<c_int> {
-    let mut attrs = perf_event_open_sys::bindings::perf_event_attr {
+    let mut attrs: perf_event_attr = perf_event_open_sys::bindings::perf_event_attr {
         size: std::mem::size_of::<sys::bindings::perf_event_attr>() as u32,
         type_: sys::bindings::PERF_TYPE_SOFTWARE,
         config: sys::bindings::PERF_COUNT_SW_CPU_CLOCK as u64,

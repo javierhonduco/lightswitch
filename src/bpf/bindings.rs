@@ -6,18 +6,20 @@ use plain::Plain;
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
-unsafe impl Plain for AggregatedStackKey {}
+unsafe impl Plain for stack_count_key_t {}
 unsafe impl Plain for native_stack_t {}
 unsafe impl Plain for Event {}
-unsafe impl Plain for KnownProcess {}
+unsafe impl Plain for process_info_t {}
+unsafe impl Plain for unwind_info_chunks_t {}
 
-impl Default for AggregatedStackKey {
+impl Default for stack_count_key_t {
     fn default() -> Self {
         Self {
             task_id: 0,
-            user_stack: 0,
-            kernel_stack: 0,
-            interp_stack: 0,
+            pid: 0,
+            tgid: 0,
+            user_stack_id: 0,
+            kernel_stack_id: 0,
         }
     }
 }
