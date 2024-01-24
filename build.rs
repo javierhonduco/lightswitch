@@ -39,6 +39,7 @@ fn main() {
     let skel = Path::new(PROFILER_SKELETON);
     SkeletonBuilder::new()
         .source(PROFILER_BPF_SOURCE)
+        .clang_args("-Wextra -Wall")
         .build_and_generate(skel)
         .expect("run skeleton builder");
 

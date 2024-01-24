@@ -4,10 +4,10 @@ use std::env;
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let path = env::args().nth(1).expect("no file given");
+    // let path = env::args().nth(1).expect("no file given");
 
-    UnwindInfoBuilder::with_callback(&path, compact_printing_callback)?.process()?;
-    UnwindInfoBuilder::to_vec(&path)?;
+    // UnwindInfoBuilder::with_callback(&path, compact_printing_callback)?.process()?;
+    // UnwindInfoBuilder::to_vec(&path)?;
 
     let mut p = Profiler::new();
     p.run();

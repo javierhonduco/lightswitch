@@ -16,6 +16,10 @@ perf-event-open-sys = "*"
 libc = "*"
 errno = "*"
 plain = "*"
+procfs = "*"
+elf = "*"
+ring = "*"
+data-encoding = "*"
 
 [build-dependencies]
 bindgen = "*"

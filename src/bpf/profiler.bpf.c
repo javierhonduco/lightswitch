@@ -102,7 +102,7 @@ int on_event(struct bpf_perf_event_data *ctx) {
     u64 sp = 0;
     u64 bp = 0;
 
-    if (in_kernel(ctx->regs.ip)) {
+    if (in_kernel(PT_REGS_IP(&ctx->regs))) {
       if (retrieve_task_registers(&ip, &sp, &bp)) {
         // we are in kernelspace, but got the user regs
         profiler_state->ip = ip;
@@ -114,9 +114,9 @@ int on_event(struct bpf_perf_event_data *ctx) {
       }
     } else {
       // in userspace
-      profiler_state->ip = ctx->regs.ip;
-      profiler_state->sp = ctx->regs.sp;
-      profiler_state->bp = ctx->regs.bp;
+      profiler_state->ip = PT_REGS_IP(&ctx->regs);
+      profiler_state->sp = PT_REGS_SP(&ctx->regs);
+      profiler_state->bp = PT_REGS_FP(&ctx->regs);
     }
 
     bpf_tail_call(ctx, &programs, PROGRAM_DWARF_UNWINDER);
