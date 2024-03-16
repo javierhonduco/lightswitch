@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Read, Lines};
+use std::io::{BufRead, BufReader, Lines, Read};
 
 pub const KALLSYM_PATH: &str = "/proc/kallsyms";
 
@@ -12,7 +12,6 @@ pub struct KsymIter<R> {
     file_iter: Lines<BufReader<R>>,
 }
 
-
 impl<R: Read> KsymIter<R> {
     pub fn new(data: R) -> Self {
         let lines: Lines<BufReader<R>> = BufReader::new(data).lines();
@@ -20,8 +19,7 @@ impl<R: Read> KsymIter<R> {
     }
 }
 
-
-impl <R: Read> Iterator for KsymIter<R> {
+impl<R: Read> Iterator for KsymIter<R> {
     type Item = Ksym;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -74,7 +72,7 @@ ffffffffa20002ec T vc_boot_ghcb
 ffffffffa2000360 T __pfx___startup_64",
         );
 
-        let mut iter  = KsymIter::new(file);
+        let mut iter = KsymIter::new(file);
         assert_eq!(
             Ksym {
                 start_addr: 0xffffffffa2000000,

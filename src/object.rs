@@ -2,9 +2,9 @@ use object::elf::FileHeader64;
 use object::read::elf::FileHeader;
 use object::read::elf::ProgramHeader;
 use object::Endianness;
+use object::Object;
 use object::ObjectKind;
 use object::ObjectSection;
-use object::Object;
 
 use ring::digest::{Context, Digest, SHA256};
 use std::fs;
@@ -91,7 +91,10 @@ pub fn is_go(path: &PathBuf) -> bool {
 
     for section in object.sections() {
         if let Ok(section_name) = section.name() {
-            if section_name == ".gosymtab" || section_name == ".gopclntab" || section_name == ".note.go.buildid" {
+            if section_name == ".gosymtab"
+                || section_name == ".gopclntab"
+                || section_name == ".note.go.buildid"
+            {
                 return true;
             }
         }

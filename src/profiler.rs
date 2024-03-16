@@ -1,10 +1,12 @@
+use tracing::{debug, error, info, span, Level};
+
 use crate::bpf::bpf::{ProfilerSkel, ProfilerSkelBuilder};
 use crate::object::{build_id, elf_load, is_dynamic, is_go};
 use crate::perf_events::setup_perf_event;
 use crate::unwind_info::{
     end_of_function_marker, CfaType, CompactUnwindRow, UnwindData, UnwindInfoBuilder,
 };
-use crate::usym::symbolize_native_stack;
+use crate::usym::symbolize_native_stack_blaze;
 use anyhow::anyhow;
 use libbpf_rs::skel::OpenSkel;
 use libbpf_rs::skel::SkelBuilder;
@@ -17,28 +19,39 @@ use std::fs;
 use std::os::fd::AsFd;
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
+
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-
 use crate::bpf::bindings::*;
 
-fn show_profile(
-    profile: RawProfile,
+fn symbolize_profile(
+    profile: &RawAggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<String, ObjectFileInfo>,
-) {
-    for sample in profile {
-        let task_id = sample.0;
-        let Some(ustack) = sample.1 else { return };
-        let _kstack = sample.2;
+) -> SymbolizedAggregatedProfile {
+    let mut r = SymbolizedAggregatedProfile::new();
+    let mut addresses_per_sample = HashMap::new();
 
-        let _ = show_native_stack(procs, objs, task_id, &ustack);
+    let _ = fetch_symbols_for_profile(&mut addresses_per_sample, profile, procs, objs); // best effort
+
+    for sample in profile {
+        let mut symbolized_sample: SymbolizedAggregatedSample =
+            SymbolizedAggregatedSample::default();
+        symbolized_sample.pid = sample.pid;
+        symbolized_sample.count = sample.count;
+
+        if let Some(ustack) = sample.ustack {
+            symbolized_sample.ustack =
+                symbolize_native_stack(&mut addresses_per_sample, procs, objs, sample.pid, &ustack);
+        };
+
+        r.push(symbolized_sample);
     }
+
+    r
 }
 
 fn find_mapping(mappings: &[ExecutableMapping], addr: u64) -> Option<ExecutableMapping> {
@@ -57,57 +70,129 @@ fn find_mapping(mappings: &[ExecutableMapping], addr: u64) -> Option<ExecutableM
     Some(found_mapping.clone())
 }
 
-fn show_native_stack(
+fn fetch_symbols_for_profile(
+    addresses_per_sample: &mut HashMap<PathBuf, HashMap<u64, String>>,
+    profile: &RawAggregatedProfile,
+    procs: &HashMap<i32, ProcessInfo>,
+    objs: &HashMap<String, ObjectFileInfo>,
+) -> anyhow::Result<()> {
+    for sample in profile {
+        let Some(native_stack) = sample.ustack else {
+            continue;
+        };
+        let task_id = sample.pid;
+
+        // We should really continue
+        // Also it would be ideal not to have to query procfs again...
+        let p = procfs::process::Process::new(task_id)?;
+        let status = p.status()?;
+        let tgid = status.tgid;
+
+        let Some(info) = procs.get(&tgid) else {
+            continue;
+        };
+
+        for (i, addr) in native_stack.addresses.into_iter().enumerate() {
+            if native_stack.len <= i.try_into().unwrap() {
+                continue;
+            }
+
+            let Some(mapping) = find_mapping(&info.mappings, addr) else {
+                continue; //return Err(anyhow!("could not find mapping"));
+            };
+
+            match &mapping.build_id {
+                Some(build_id) => {
+                    match objs.get(build_id) {
+                        Some(obj) => {
+                            // We need the normalized address for normal object files
+                            // and might need the absolute addresses for JITs
+                            let normalized_addr = addr - mapping.start_addr + mapping.offset
+                                - obj.elf_load.0
+                                + obj.elf_load.1;
+
+                            let key = obj.path.clone();
+                            let addrs = addresses_per_sample.entry(key).or_default();
+                            addrs.insert(normalized_addr, "".to_string()); // <- default value is a bit janky
+                        }
+                        None => {
+                            println!("\t\t - [no build id found]");
+                        }
+                    }
+                }
+                None => {
+                    println!("\t\t - mapping is not backed by a file, could be a JIT segment");
+                }
+            }
+        }
+    }
+
+    // second pass, symbolize
+    for (path, addr_to_symbol_mapping) in addresses_per_sample.iter_mut() {
+        let addresses = addr_to_symbol_mapping.iter().map(|a| *a.0 - 1).collect();
+        let symbols: Vec<String> = symbolize_native_stack_blaze(addresses, path);
+        for (addr, symbol) in addr_to_symbol_mapping.clone().iter_mut().zip(symbols) {
+            addr_to_symbol_mapping.insert(*addr.0, symbol.to_string());
+        }
+    }
+
+    Ok(())
+}
+
+fn symbolize_native_stack(
+    addresses_per_sample: &mut HashMap<PathBuf, HashMap<u64, String>>,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<String, ObjectFileInfo>,
     task_id: i32,
     native_stack: &native_stack_t,
-) -> anyhow::Result<()> {
-    let p = procfs::process::Process::new(task_id)?;
-    let status = p.status()?;
-
-    let tgid = status.tgid;
-    println!("!! sample -- pid: {}, task_id: {}", tgid, p.pid());
+) -> Vec<String> {
+    let mut r = Vec::new();
 
     for (i, addr) in native_stack.addresses.into_iter().enumerate() {
         if native_stack.len <= i.try_into().unwrap() {
             break;
         }
 
-        let Some(info) = procs.get(&tgid) else {
-            return Err(anyhow!("process not found"));
+        let Some(info) = procs.get(&task_id) else {
+            return r;
+            //return Err(anyhow!("process not found"));
         };
 
         let Some(mapping) = find_mapping(&info.mappings, addr) else {
-            return Err(anyhow!("could not find mapping"));
+            return r;
+            //return Err(anyhow!("could not find mapping"));
         };
 
+        // finally
         match &mapping.build_id {
-            Some(build_id) => {
-                match objs.get(build_id) {
-                    Some(obj) => {
-                        // We need the normalized address for normal object files
-                        // and might need the absolute addresses for JITs
-                        let normalized_addr = addr - mapping.start_addr + mapping.offset
-                            - obj.elf_load.0
-                            + obj.elf_load.1;
+            Some(build_id) => match objs.get(build_id) {
+                Some(obj) => {
+                    let normalized_addr = addr - mapping.start_addr + mapping.offset
+                        - obj.elf_load.0
+                        + obj.elf_load.1;
 
-                        let func_name: Vec<String> =
-                            symbolize_native_stack(vec![normalized_addr], &obj.path);
-                        println!("\t\t - {}", func_name[0]);
-                    }
-                    None => {
-                        println!("\t\t - [no build id found]");
-                    }
+                    let func_name = match addresses_per_sample.get(&obj.path) {
+                        Some(value) => match value.get(&normalized_addr) {
+                            Some(v) => v.to_string(),
+                            None => "<failed to fetch symbol for addr>".to_string(),
+                        },
+                        None => "<failed to symbolize>".to_string(),
+                    };
+                    //println!("\t\t - {:?}", name);
+                    r.push(func_name.to_string());
                 }
-            }
+                None => {
+                    debug!("\t\t - [no build id found]");
+                }
+            },
             None => {
-                println!("\t\t - mapping is not backed by a file, could be a JIT segment");
+                debug!("\t\t - mapping is not backed by a file, could be a JIT segment");
             }
         }
     }
 
-    Ok(())
+    r
+    // Ok(())
 }
 
 // Some temporary data structures to get things going, this could use lots of
@@ -119,6 +204,7 @@ enum MappingType {
     Vdso,
 }
 
+#[derive(Clone)]
 struct ProcessInfo {
     mappings: Vec<ExecutableMapping>,
 }
@@ -194,7 +280,7 @@ fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<stack_unwind_row_t>> 
     builder?.process()?;
 
     if last_function_end_addr.is_none() {
-        println!("no last func end addr");
+        error!("no last func end addr");
         return Err(anyhow!("not sure what's going on"));
     }
 
@@ -212,6 +298,16 @@ fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<stack_unwind_row_t>> 
     Ok(unwind_info)
 }
 
+pub struct NativeUnwindState {
+    dirty: bool,
+    last_persisted: Instant,
+    live_shard: Vec<stack_unwind_row_t>,
+    build_id_to_executable_id: HashMap<String, u32>,
+    shard_index: u64,
+    low_index: u64,
+    high_index: u64,
+}
+
 pub struct Profiler<'bpf> {
     // Prevent the links from being removed
     _links: Vec<Link>,
@@ -219,20 +315,71 @@ pub struct Profiler<'bpf> {
     // Profiler state
     procs: Arc<Mutex<HashMap<i32, ProcessInfo>>>,
     object_files: Arc<Mutex<HashMap<String, ObjectFileInfo>>>,
-    // Channel for bpf events
+    // Channel for bpf events,.
     chan_send: Arc<Mutex<mpsc::Sender<Event>>>,
     chan_receive: Arc<Mutex<mpsc::Receiver<Event>>>,
     // Native unwinding state
-    live_shard: Arc<Mutex<Vec<stack_unwind_row_t>>>,
-    build_id_to_executable_id: Arc<Mutex<HashMap<String, u32>>>,
-    shard_index: Arc<AtomicU64>,
-    low_index: Arc<AtomicU64>,
-    high_index: Arc<AtomicU64>,
+    native_unwind_state: NativeUnwindState,
     // Debug options
     filter_pids: HashMap<i32, bool>,
     // Profile channel
-    profile_send: Arc<Mutex<mpsc::Sender<RawProfile>>>,
-    profile_receive: Arc<Mutex<mpsc::Receiver<RawProfile>>>,
+    profile_send: Arc<Mutex<mpsc::Sender<RawAggregatedProfile>>>,
+    profile_receive: Arc<Mutex<mpsc::Receiver<RawAggregatedProfile>>>,
+}
+
+pub struct Collector {
+    profiles: Vec<RawAggregatedProfile>,
+    procs: HashMap<i32, ProcessInfo>,
+    objs: HashMap<String, ObjectFileInfo>,
+}
+
+type ThreadSafeCollector = Arc<Mutex<Collector>>;
+
+impl Collector {
+    pub fn new() -> ThreadSafeCollector {
+        Arc::new(Mutex::new(Self {
+            profiles: Vec::new(),
+            procs: HashMap::new(),
+            objs: HashMap::new(),
+        }))
+    }
+
+    pub fn collect(
+        &mut self,
+        profile: RawAggregatedProfile,
+        procs: &HashMap<i32, ProcessInfo>,
+        objs: &HashMap<String, ObjectFileInfo>,
+    ) {
+        self.profiles.push(profile);
+
+        for (k, v) in procs {
+            self.procs.insert(*k, v.clone());
+        }
+
+        for (k, v) in objs {
+            self.objs.insert(
+                k.clone(),
+                ObjectFileInfo {
+                    file: std::fs::File::open(v.path.clone()).unwrap(),
+                    path: v.path.clone(),
+                    elf_load: v.elf_load,
+                    is_dyn: v.is_dyn,
+                    main_bin: v.main_bin,
+                },
+            );
+        }
+    }
+
+    pub fn finish(&self) -> Vec<SymbolizedAggregatedProfile> {
+        let span: span::EnteredSpan = span!(Level::DEBUG, "symbolize_profiles").entered();
+
+        debug!("Collector::finish {}", self.profiles.len());
+        let mut r = Vec::new();
+        for profile in &self.profiles {
+            r.push(symbolize_profile(profile, &self.procs, &self.objs));
+        }
+        r
+    }
 }
 
 // Static config
@@ -241,18 +388,34 @@ const MAX_UNWIND_INFO_SHARDS: u64 = 50;
 const SHARD_CAPACITY: usize = MAX_UNWIND_TABLE_SIZE as usize;
 const PERF_BUFFER_PAGES: usize = 512 * 1024;
 
-type RawProfile = Vec<(i32, Option<native_stack_t>, Option<native_stack_t>, u64)>;
+struct RawAggregatedSample {
+    pid: i32,
+    ustack: Option<native_stack_t>,
+    kstack: Option<native_stack_t>,
+    count: u64,
+}
+
+#[derive(Default, Debug)]
+pub struct SymbolizedAggregatedSample {
+    pid: i32,
+    pub ustack: Vec<String>,
+    kstack: Vec<String>,
+    pub count: u64,
+}
+
+pub type RawAggregatedProfile = Vec<RawAggregatedSample>;
+pub type SymbolizedAggregatedProfile = Vec<SymbolizedAggregatedSample>;
 
 impl Default for Profiler<'_> {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl Profiler<'_> {
-    pub fn new() -> Self {
-        let mut skel_builder = ProfilerSkelBuilder::default();
-        skel_builder.obj_builder.debug(true);
+    pub fn new(bpf_debug: bool) -> Self {
+        let mut skel_builder: ProfilerSkelBuilder = ProfilerSkelBuilder::default();
+        skel_builder.obj_builder.debug(bpf_debug);
         let open_skel = skel_builder.open().expect("open skel");
         let bpf = open_skel.load().expect("load skel");
 
@@ -263,11 +426,21 @@ impl Profiler<'_> {
         let chan_send = Arc::new(Mutex::new(sender));
         let chan_receive = Arc::new(Mutex::new(receiver));
 
-        let live_shard = Arc::new(Mutex::new(Vec::with_capacity(SHARD_CAPACITY)));
-        let build_id_to_executable_id = Arc::new(Mutex::new(HashMap::new()));
-        let shard_index = Arc::new(AtomicU64::new(0));
-        let low_index = Arc::new(AtomicU64::new(0));
-        let high_index = Arc::new(AtomicU64::new(0));
+        let live_shard = Vec::with_capacity(SHARD_CAPACITY);
+        let build_id_to_executable_id = HashMap::new();
+        let shard_index = 0;
+        let low_index = 0;
+        let high_index = 0;
+
+        let native_unwind_state = NativeUnwindState {
+            dirty: false,
+            last_persisted: Instant::now() - Duration::from_secs(1_000), // old enough to trigger it the first time
+            live_shard,
+            build_id_to_executable_id,
+            shard_index,
+            low_index,
+            high_index,
+        };
 
         let (sender, receiver) = mpsc::channel();
         let profile_send: Arc<Mutex<mpsc::Sender<_>>> = Arc::new(Mutex::new(sender));
@@ -282,11 +455,7 @@ impl Profiler<'_> {
             object_files,
             chan_send,
             chan_receive,
-            live_shard,
-            build_id_to_executable_id,
-            shard_index,
-            low_index,
-            high_index,
+            native_unwind_state,
             filter_pids,
             profile_send,
             profile_receive,
@@ -299,7 +468,7 @@ impl Profiler<'_> {
         }
     }
 
-    pub fn send_profile(&mut self, profile: RawProfile) {
+    pub fn send_profile(&mut self, profile: RawAggregatedProfile) {
         self.profile_send
             .lock()
             .expect("sender lock")
@@ -307,7 +476,7 @@ impl Profiler<'_> {
             .expect("handle send");
     }
 
-    pub fn run(mut self) {
+    pub fn run(mut self, duration: Duration, collector: Arc<Mutex<Collector>>) {
         self.setup_perf_events();
         self.set_bpf_map_info();
 
@@ -328,56 +497,86 @@ impl Profiler<'_> {
         let profile_receive = self.profile_receive.clone();
         let procs = self.procs.clone();
         let object_files = self.object_files.clone();
+        let collector = collector.clone();
 
         thread::spawn(move || loop {
             match profile_receive.lock().unwrap().recv() {
                 Ok(profile) => {
-                    show_profile(
+                    collector.lock().unwrap().collect(
                         profile,
                         &procs.lock().unwrap(),
                         &object_files.lock().unwrap(),
-                    )
-                },
-                Err(e) => {
-                    println!("failed to receive event {:?}", e);
+                    );
+                }
+                Err(_e) => {
+                    // println!("failed to receive event {:?}", e);
                 }
             }
         });
 
-        let mut start = Instant::now();
+        let mut start_time: Instant = Instant::now();
+        let mut time_since_last_scheduled_collection: Instant = Instant::now();
 
         loop {
-            println!("== elapsed {:?}", start.elapsed());
-            if start.elapsed() >= Duration::from_secs(5) {
+            if start_time.elapsed() >= duration {
+                debug!("done after running for {:?}", start_time.elapsed());
                 let profile = self.collect_profile();
                 self.send_profile(profile);
-                start = Instant::now();
+                break;
+            }
+
+            if time_since_last_scheduled_collection.elapsed() >= Duration::from_secs(5) {
+                debug!("collecting profiles on schedule");
+                let profile = self.collect_profile();
+                self.send_profile(profile);
+                time_since_last_scheduled_collection = Instant::now();
             }
 
             let read = self.chan_receive.lock().expect("receive lock").try_recv();
+
             match read {
                 Ok(event) => {
                     let pid = event.pid;
 
                     if event.type_ == event_type_EVENT_NEW_PROCESS {
+                        // let span = span!(Level::DEBUG, "calling event_new_proc").entered();
                         self.event_new_proc(pid);
+
+                        //let mut pname = "<unknown>".to_string();
+                        /*                         if let Ok(proc) = procfs::process::Process::new(pid) {
+                            if let Ok(name) = proc.cmdline() {
+                                pname = name.join("").to_string();
+                            }
+                        } */
                     } else {
-                        println!("unknow event {}", event.type_);
+                        error!("unknow event {}", event.type_);
                     }
                 }
                 Err(_) => {
                     // todo
                 }
             }
+
+            if self.native_unwind_state.dirty
+                && self.native_unwind_state.last_persisted.elapsed() > Duration::from_millis(100)
+            {
+                self.persist_unwind_info(&self.native_unwind_state.live_shard);
+                self.native_unwind_state.dirty = false;
+                self.native_unwind_state.last_persisted = Instant::now();
+            }
         }
     }
 
-    pub fn collect_profile(&mut self) -> RawProfile {
-        println!("collecting profile");
+    pub fn clear_maps(&mut self) {
+        //   self.maps.aggregated_stacks()
+    }
+
+    pub fn collect_profile(&mut self) -> RawAggregatedProfile {
+        debug!("collecting profile");
 
         self.teardown_perf_events();
 
-        let mut result: RawProfile = Vec::new();
+        let mut result = Vec::new();
         let maps = self.bpf.maps();
         let aggregated_stacks = maps.aggregated_stacks();
         let stacks = maps.stacks();
@@ -391,7 +590,7 @@ impl Profiler<'_> {
 
                     let key: &stack_count_key_t =
                         plain::from_bytes(&aggregated_stack_key_bytes).unwrap();
-                    let value: &u64 = plain::from_bytes(&aggregated_value_bytes).unwrap();
+                    let count: &u64 = plain::from_bytes(&aggregated_value_bytes).unwrap();
 
                     all_stacks_bytes.push(aggregated_stack_key_bytes.clone());
 
@@ -403,8 +602,9 @@ impl Profiler<'_> {
                             Ok(Some(stack_bytes)) => {
                                 result_ustack = Some(*plain::from_bytes(&stack_bytes).unwrap());
                             }
-                            _ => {
-                                eprintln!("\tfailed getting user stack");
+                            Ok(None) => {}
+                            Err(e) => {
+                                error!("\tfailed getting user stack {}", e);
                             }
                         }
                     }
@@ -414,18 +614,25 @@ impl Profiler<'_> {
                                 result_kstack = Some(*plain::from_bytes(&stack_bytes).unwrap());
                             }
                             _ => {
-                                eprintln!("\tfailed getting kernel stack");
+                                error!("\tfailed getting kernel stack");
                             }
                         }
                     }
 
-                    result.push((key.task_id, result_ustack, result_kstack, *value))
+                    let raw_sample = RawAggregatedSample {
+                        pid: key.task_id,
+                        ustack: result_ustack,
+                        kstack: result_kstack,
+                        count: *count,
+                    };
+
+                    result.push(raw_sample);
                 }
                 _ => continue,
             }
         }
 
-        println!("===== got {} unique stacks", all_stacks_bytes.len());
+        debug!("===== got {} unique stacks", all_stacks_bytes.len());
 
         // Now we should delete these entries. We should ensure that this is correct and safe
         // as we are iterating while still profiling
@@ -433,6 +640,7 @@ impl Profiler<'_> {
             let _ = aggregated_stacks.delete(&stacks_bytes);
         }
 
+        self.clear_maps();
         self.setup_perf_events();
         result
     }
@@ -441,15 +649,33 @@ impl Profiler<'_> {
         self.procs.lock().expect("lock").get(&pid).is_some()
     }
 
+    fn persist_unwind_info(&self, live_shard: &Vec<stack_unwind_row_t>) {
+        let span = span!(Level::DEBUG, "persist_unwind_info").entered();
+
+        let key = self.native_unwind_state.shard_index.to_ne_bytes();
+        let val = unsafe {
+            // Probs we need to zero this mem?
+            std::slice::from_raw_parts(
+                live_shard.as_ptr() as *const u8,
+                live_shard.capacity() * ::std::mem::size_of::<stack_unwind_row_t>(),
+            )
+        };
+
+        self.bpf
+            .maps()
+            .unwind_tables()
+            .update(&key, val, MapFlags::ANY)
+            .expect("update"); // error with  value: System(7)', src/main.rs:663:26
+    }
+
     fn add_unwind_info(&mut self, pid: i32) {
         if !self.process_is_known(pid) {
             panic!("add_unwind_info -- expected process to be known");
         }
 
         // Local unwind info state
-        let mut dwarf_mappings = Vec::with_capacity(MAX_MAPPINGS_PER_PROCESS as usize);
+        let mut mappings = Vec::with_capacity(MAX_MAPPINGS_PER_PROCESS as usize);
         let mut num_mappings: u32 = 0;
-        let mut my_live_shard = self.live_shard.lock().unwrap();
 
         // hack for kworkers and such
         let mut got_some_unwind_info: bool = true;
@@ -465,15 +691,15 @@ impl Profiler<'_> {
             .iter()
             .enumerate()
         {
-            if self.shard_index.clone().load(Ordering::SeqCst) > MAX_UNWIND_INFO_SHARDS {
-                println!("No more unwind info shards available");
+            if self.native_unwind_state.shard_index > MAX_UNWIND_INFO_SHARDS {
+                error!("No more unwind info shards available");
                 break;
             }
 
             // Skip vdso / jit mappings
             match mapping.kind {
                 MappingType::Anonymous => {
-                    dwarf_mappings.push(mapping_t {
+                    mappings.push(mapping_t {
                         load_address: 0,
                         begin: mapping.start_addr,
                         end: mapping.end_addr,
@@ -484,7 +710,7 @@ impl Profiler<'_> {
                     continue;
                 }
                 MappingType::Vdso => {
-                    dwarf_mappings.push(mapping_t {
+                    mappings.push(mapping_t {
                         load_address: 0,
                         begin: mapping.start_addr,
                         end: mapping.end_addr,
@@ -523,15 +749,16 @@ impl Profiler<'_> {
             // Avoid deadlock
             std::mem::drop(my_lock);
 
-            let build_id_to_executable_id_clone = self.build_id_to_executable_id.clone();
-            let mut build_id_to_executable_id = build_id_to_executable_id_clone.lock().unwrap();
-
             let build_id = mapping.build_id.clone().unwrap();
-            match build_id_to_executable_id.get(&build_id) {
+            match self
+                .native_unwind_state
+                .build_id_to_executable_id
+                .get(&build_id)
+            {
                 Some(executable_id) => {
                     // println!("==== in cache");
                     // == Add mapping
-                    dwarf_mappings.push(mapping_t {
+                    mappings.push(mapping_t {
                         load_address,
                         begin: mapping.start_addr,
                         end: mapping.end_addr,
@@ -539,21 +766,22 @@ impl Profiler<'_> {
                         type_: 0, // normal i think
                     });
                     num_mappings += 1;
+                    debug!("unwind info CACHED for executable");
                     continue;
                 }
-                None => {}
+                None => {
+                    debug!("unwind info not found for executable");
+                }
             }
 
-            // This will be populated once we start chunking the unwind info
-            // we don't do this yet
             let mut chunks = Vec::with_capacity(MAX_UNWIND_TABLE_CHUNKS as usize);
 
             // == Add mapping
-            dwarf_mappings.push(mapping_t {
+            mappings.push(mapping_t {
                 load_address,
                 begin: mapping.start_addr,
                 end: mapping.end_addr,
-                executable_id: build_id_to_executable_id.len() as u32,
+                executable_id: self.native_unwind_state.build_id_to_executable_id.len() as u32,
                 type_: 0, // normal i think
             });
             num_mappings += 1;
@@ -565,30 +793,38 @@ impl Profiler<'_> {
 
             // == Fetch unwind info, so far, this is in mem
             // todo, pass file handle
+            let span = span!(
+                Level::DEBUG,
+                "calling in_memory_unwind_info",
+                "{}",
+                first_mapping.path.to_string_lossy()
+            )
+            .entered();
+
             let Ok(mut found_unwind_info) =
                 in_memory_unwind_info(&first_mapping.path.to_string_lossy())
             else {
                 continue;
             };
+            span.exit();
 
+            let span: span::EnteredSpan = span!(Level::DEBUG, "unwind info sort").entered();
             found_unwind_info.sort_by(|a, b| {
                 let a_pc = a.pc;
                 let b_pc = b.pc;
                 a_pc.cmp(&b_pc)
             });
-            // validate_unwind_info(&found_unwind_info);
 
-            println!(
-                "\n======== Unwind rows for executable {}: {} with id {}",
+            span.exit();
+
+            debug!(
+                "======== Unwind rows for executable {}: {} with id {}",
                 obj_path.display(),
                 &found_unwind_info.len(),
-                build_id_to_executable_id.len(),
+                self.native_unwind_state.build_id_to_executable_id.len(),
             );
 
-            println!(
-                "~~ shard index: {}",
-                self.shard_index.load(Ordering::SeqCst)
-            );
+            debug!("~~ shard index: {}", self.native_unwind_state.shard_index);
 
             // no unwind info / errors
             if found_unwind_info.is_empty() {
@@ -598,159 +834,122 @@ impl Profiler<'_> {
 
             let first_pc = found_unwind_info[0].pc;
             let last_pc = found_unwind_info[found_unwind_info.len() - 1].pc;
-            println!("~~ PC range {:x}-{:x}", first_pc, last_pc,);
+            debug!("~~ PC range {:x}-{:x}", first_pc, last_pc,);
 
+            let mut current_chunk = &found_unwind_info[..];
             let mut rest_chunk = &found_unwind_info[..];
+
             loop {
                 if rest_chunk.is_empty() {
-                    println!("[info-unwind] done chunkin'");
+                    debug!("[info-unwind] done chunkin'");
                     break;
                 }
 
-                let max_space: usize = SHARD_CAPACITY - my_live_shard.len();
+                let max_space: usize = SHARD_CAPACITY - self.native_unwind_state.live_shard.len();
                 let available_space: usize = std::cmp::min(max_space, rest_chunk.len());
-                println!("-- space used so far in live shard {}", my_live_shard.len());
-                println!(
+                debug!(
+                    "-- space used so far in live shard {}",
+                    self.native_unwind_state.live_shard.len()
+                );
+                debug!(
                     "-- live shard space left {}, rest_chunk size: {}",
                     max_space,
                     rest_chunk.len()
                 );
 
-                if self.shard_index.clone().load(Ordering::SeqCst) > 49 {
-                    println!("[info unwind ]too many shards");
+                if self.native_unwind_state.shard_index > MAX_UNWIND_INFO_SHARDS {
+                    error!("[info unwind] too many shards");
                     break;
                 }
 
                 if available_space == 0 {
-                    println!("!!!! [not fully implemented] no space in live shard");
-                    self.low_index.store(0_u64, Ordering::SeqCst);
-                    self.high_index.store(0_u64, Ordering::SeqCst);
-                    // - persist
-                    {
-                        self.bpf
-                            .maps()
-                            .unwind_tables()
-                            .update(
-                                &self.shard_index.load(Ordering::SeqCst).to_ne_bytes(),
-                                unsafe {
-                                    // Probs we need to zero this mem?
-                                    std::slice::from_raw_parts(
-                                        my_live_shard.as_ptr() as *const u8,
-                                        my_live_shard.capacity()
-                                            * ::std::mem::size_of::<stack_unwind_row_t>(),
-                                    )
-                                },
-                                MapFlags::ANY,
-                            )
-                            .expect("update");
-                    }
-                    // - clear / reset
-                    my_live_shard.truncate(0); // Vec::with_capacity(250_000);
-                                               // - create shard (check if over limit)
-                    self.shard_index.clone().fetch_add(1, Ordering::SeqCst);
+                    debug!("!!!! [not fully implemented] no space in live shard");
+                    self.native_unwind_state.low_index = 0;
+                    self.native_unwind_state.high_index = 0;
+
+                    self.persist_unwind_info(&self.native_unwind_state.live_shard);
+
+                    self.native_unwind_state.live_shard.truncate(0); // Vec::with_capacity(250_000);
+                                                                     // - create shard (check if over limit)
+                    self.native_unwind_state.shard_index = 0;
                     continue;
                 }
-                let candidate_chunk: &[stack_unwind_row_t] = &rest_chunk[..available_space];
+                let candidate_unwind_info: &[stack_unwind_row_t] = &rest_chunk[..available_space];
 
-                let mut real_offset = 0;
-                for (i, row) in candidate_chunk.iter().enumerate().rev() {
-                    // println!("- {} {:?}", i, row.cfa_type);
+                let mut last_marker_index = None;
+                for (i, row) in candidate_unwind_info.iter().enumerate().rev() {
                     if row.cfa_type == CfaType::EndFdeMarker as u8 {
-                        real_offset = i;
+                        last_marker_index = Some(i);
                         break;
                     }
                 }
 
-                if real_offset == 0 {
-                    println!("[dwarf-debug] we need a new shard, could not find marker!");
-                    self.low_index.clone().store(0_u64, Ordering::SeqCst);
-                    self.high_index.clone().store(0_u64, Ordering::SeqCst);
+                match last_marker_index {
+                    Some(last_marker_index) => {
+                        current_chunk = &rest_chunk[..=last_marker_index];
+                        rest_chunk = &rest_chunk[(last_marker_index + 1)..];
+                        debug!(
+                            "-- current_chunk.len {} rest_chunk.len {}",
+                            current_chunk.len(),
+                            rest_chunk.len()
+                        );
 
-                    // - persist
-                    {
-                        self.bpf
-                            .maps()
-                            .unwind_tables()
-                            .update(
-                                &self
-                                    .shard_index
-                                    .clone()
-                                    .load(Ordering::SeqCst)
-                                    .to_ne_bytes(),
-                                unsafe {
-                                    // Probs we need to zero this mem?
-                                    std::slice::from_raw_parts(
-                                        my_live_shard.as_ptr() as *const u8,
-                                        my_live_shard.capacity()
-                                            * ::std::mem::size_of::<stack_unwind_row_t>(),
-                                    )
-                                },
-                                MapFlags::ANY,
-                            )
-                            .expect("update");
+                        if current_chunk[0].cfa_type == CfaType::EndFdeMarker as u8 {
+                            // wrong start of unwind info 4
+                            panic!("wrong start of unwind info {:?}", current_chunk[0].cfa_type);
+                        }
+                        if current_chunk[current_chunk.len() - 1].cfa_type
+                            != CfaType::EndFdeMarker as u8
+                        {
+                            panic!(
+                                "wrong end of unwind info {:?}",
+                                current_chunk[current_chunk.len() - 1].cfa_type
+                            );
+                        }
                     }
-                    // - clear / reset
-                    my_live_shard.truncate(0); //= Vec::with_capacity(250_000);
-                                               // - create shard (check if over limit)
-                    self.shard_index.fetch_add(1, Ordering::SeqCst);
-                    continue;
+
+                    None => {
+                        debug!("[dwarf-debug] could not find marker, allocating a new shard. live shard len: {}", self.native_unwind_state.live_shard.len());
+                        self.native_unwind_state.low_index = 0;
+                        self.native_unwind_state.high_index = 0;
+                        self.native_unwind_state.dirty = true;
+
+                        self.persist_unwind_info(&self.native_unwind_state.live_shard);
+
+                        // - clear / reset
+                        self.native_unwind_state.live_shard.truncate(0);
+                        // - create shard (check if over limit)
+                        self.native_unwind_state.shard_index += 1;
+                        continue;
+                    }
                 }
 
-                let current_chunk = &rest_chunk[..=real_offset];
-                rest_chunk = &rest_chunk[(real_offset + 1)..];
-                println!(
-                    "-- current_chunk.len {} rest_chunk.len {}",
-                    current_chunk.len(),
-                    rest_chunk.len()
-                );
-
-                if current_chunk[0].cfa_type == CfaType::EndFdeMarker as u8 {
-                    panic!("wrong start of unwind info {:?}", current_chunk[0].cfa_type);
-                }
-                if current_chunk[current_chunk.len() - 1].cfa_type != CfaType::EndFdeMarker as u8 {
-                    panic!(
-                        "wrong end of unwind info {:?}",
-                        current_chunk[current_chunk.len() - 1].cfa_type
-                    );
-                }
-
-                let prev_index = my_live_shard.len();
-                self.low_index
-                    .store(my_live_shard.len() as u64, Ordering::SeqCst);
+                self.native_unwind_state.low_index =
+                    self.native_unwind_state.live_shard.len() as u64;
 
                 // Copy unwind info to the live shard
-                my_live_shard.append(&mut current_chunk.to_vec());
+                self.native_unwind_state
+                    .live_shard
+                    .append(&mut current_chunk.to_vec());
+                self.native_unwind_state.high_index =
+                    self.native_unwind_state.live_shard.len() as u64 - 1;
 
-                if my_live_shard[prev_index].cfa_type == CfaType::EndFdeMarker as u8 {
-                    panic!("wrong start of unwind info");
-                }
-                self.high_index
-                    .clone()
-                    .store((my_live_shard.len() - 1) as u64, Ordering::SeqCst);
-
-                if my_live_shard[my_live_shard.len() - 1].cfa_type != CfaType::EndFdeMarker as u8 {
-                    panic!("wrong end of my_live_shard");
-                }
-
-                // == Add chunks
-                // Right now we only fnhave one
+                // == Add chunk
                 chunks.push(chunk_info_t {
                     low_pc: current_chunk[0].pc,
                     high_pc: current_chunk[current_chunk.len() - 1].pc,
-                    shard_index: self.shard_index.clone().load(Ordering::SeqCst),
-                    low_index: self.low_index.clone().load(Ordering::SeqCst),
-                    high_index: self.high_index.clone().load(Ordering::SeqCst),
+                    shard_index: self.native_unwind_state.shard_index,
+                    low_index: self.native_unwind_state.low_index,
+                    high_index: self.native_unwind_state.high_index,
                 });
 
-                println!(
+                debug!(
                     "-- indices ([{}:{}])",
-                    self.low_index.clone().load(Ordering::SeqCst),
-                    self.high_index.clone().load(Ordering::SeqCst)
+                    self.native_unwind_state.low_index, self.native_unwind_state.high_index,
                 );
             }
 
             // == Add chunks
-            // "default"
             chunks.resize(
                 MAX_UNWIND_TABLE_CHUNKS as usize,
                 chunk_info_t {
@@ -761,8 +960,10 @@ impl Profiler<'_> {
                     high_index: 0,
                 },
             );
+
             let all_chunks_boxed: Box<[chunk_info_t; MAX_UNWIND_TABLE_CHUNKS as usize]> =
                 chunks.try_into().expect("try into");
+
             let all_chunks = unwind_info_chunks_t {
                 chunks: *all_chunks_boxed,
             };
@@ -770,41 +971,25 @@ impl Profiler<'_> {
                 .maps()
                 .unwind_info_chunks()
                 .update(
-                    &(build_id_to_executable_id.len() as u32).to_ne_bytes(),
+                    &(self.native_unwind_state.build_id_to_executable_id.len() as u32)
+                        .to_ne_bytes(),
                     unsafe { plain::as_bytes(&all_chunks) },
                     MapFlags::ANY,
                 )
                 .unwrap();
 
-            let executable_id = build_id_to_executable_id.len();
-            build_id_to_executable_id.insert(build_id, executable_id as u32);
+            let executable_id = self.native_unwind_state.build_id_to_executable_id.len();
+            self.native_unwind_state
+                .build_id_to_executable_id
+                .insert(build_id, executable_id as u32);
         } // Added all mappings
 
         if got_some_unwind_info {
-            // == Persist live shard (this could be CPU intensive)
-            self.bpf
-                .maps()
-                .unwind_tables()
-                .update(
-                    &self
-                        .shard_index
-                        .clone()
-                        .load(Ordering::SeqCst)
-                        .to_ne_bytes(),
-                    unsafe {
-                        // Probs we need to zero this mem?
-                        std::slice::from_raw_parts(
-                            my_live_shard.as_ptr() as *const u8,
-                            my_live_shard.capacity() * ::std::mem::size_of::<stack_unwind_row_t>(),
-                        )
-                    },
-                    MapFlags::ANY,
-                )
-                .expect("update"); // error with  value: System(7)', src/main.rs:663:26
+            self.native_unwind_state.dirty = true;
 
             // == Add process info
             // "default"
-            dwarf_mappings.resize(
+            mappings.resize(
                 MAX_MAPPINGS_PER_PROCESS as usize,
                 mapping_t {
                     load_address: 0,
@@ -814,7 +999,7 @@ impl Profiler<'_> {
                     type_: 0,
                 },
             );
-            let boxed_slice = dwarf_mappings.into_boxed_slice();
+            let boxed_slice = mappings.into_boxed_slice();
             let boxed_array: Box<[mapping_t; MAX_MAPPINGS_PER_PROCESS as usize]> =
                 boxed_slice.try_into().expect("try into");
             let proc_info = process_info_t {
@@ -974,7 +1159,7 @@ impl Profiler<'_> {
     }
 
     fn handle_lost_events(cpu: i32, count: u64) {
-        println!("lost {count} events on cpu {cpu}");
+        error!("lost {count} events on cpu {cpu}");
     }
 
     pub fn set_bpf_map_info(&mut self) {

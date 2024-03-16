@@ -21,6 +21,12 @@ ring = "*"
 data-encoding = "*"
 page_size = "*"
 clap = { version = "*", features = ["derive"] }
+blazesym = "0.2.0-alpha.10"
+tracing = "*"
+tracing-subscriber = "*"
+chrono = "*"
+inferno = "*"
+
 
 [build-dependencies]
 bindgen = "*"

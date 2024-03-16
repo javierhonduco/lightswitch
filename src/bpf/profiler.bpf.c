@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright 2022 The Parca Authors
+// Copyright 2024 The Lightswitch Authors
 
 #include "common.h"
 #include "vmlinux.h"
@@ -63,7 +64,7 @@ struct {
 
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __uint(max_entries, 50); // Table size should be updated in userspace.
+  __uint(max_entries, MAX_UNWIND_INFO_SHARDS);
   __type(key, u64);
   __type(value, stack_unwind_table_t);
 } unwind_tables SEC(".maps");

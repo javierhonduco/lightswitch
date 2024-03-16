@@ -1,12 +1,53 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use blazesym::symbolize::Elf;
+use blazesym::symbolize::Input;
+use blazesym::symbolize::Source;
+use blazesym::symbolize::Sym;
+use blazesym::symbolize::Symbolized;
+use blazesym::symbolize::Symbolizer;
+
 const ADDR2LINE_BIN: &str = "/usr/bin/addr2line";
+
+pub fn symbolize_native_stack_blaze(addrs: Vec<u64>, object_path: &PathBuf) -> Vec<String> {
+    let mut res = Vec::new();
+
+    let src = Source::Elf(Elf::new(object_path));
+    let symbolizer = Symbolizer::new();
+    let syms = symbolizer
+        .symbolize(&src, Input::VirtOffset(&addrs))
+        .unwrap(); // <----
+
+    for sym in syms.iter() {
+        match sym {
+            Symbolized::Sym(Sym {
+                name,
+                addr: _,
+                offset: _,
+                code_info: _,
+                inlined: _,
+                ..
+            }) => {
+                res.push(name.to_string());
+
+                //for frame in inlined.iter() {
+                //}
+            }
+            Symbolized::Unknown(r) => {
+                res.push(format!("<unknown {}>", r));
+            }
+        }
+    }
+    res
+}
 
 // addr2line based symbolizer for testing and local dev
 // in the future this should be done in the backend
 
-pub fn symbolize_native_stack(frames: Vec<u64>, object_path: &PathBuf) -> Vec<String> {
+pub fn symbolize_native_stack_addr2line(frames: Vec<u64>, object_path: &PathBuf) -> Vec<String> {
+    // return vec!["heh".to_string()];
+
     let mut cmd = Command::new(ADDR2LINE_BIN);
 
     cmd.arg("-f").arg("-e").arg(object_path);

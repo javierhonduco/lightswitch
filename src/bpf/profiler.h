@@ -1,5 +1,7 @@
 #include "basic_types.h"
 
+#define MAX_UNWIND_INFO_SHARDS 25
+
 // Number of frames to walk per tail call iteration.
 #define MAX_STACK_DEPTH_PER_PROGRAM 7
 // Number of BPF tail calls that will be attempted.
