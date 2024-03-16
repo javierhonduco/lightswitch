@@ -4,7 +4,7 @@ on:
   push:
 
 jobs:
-  tests:
+  ci:
     runs-on: ubuntu-22.04
     permissions:
         id-token: write
@@ -15,3 +15,7 @@ jobs:
     - uses: DeterminateSystems/magic-nix-cache-action@main
     - name: Run `cargo check`
       run: nix develop --command cargo check
+    - name: Run `cargo clippy`
+      run: nix develop --command cargo clippy
+    - name: Run `cargo fmt`
+      run: nix develop --command cargo fmt

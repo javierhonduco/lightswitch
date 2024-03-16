@@ -1,6 +1,6 @@
-use tracing::{debug, error, info, span, Level};
+use tracing::{debug, error, span, Level};
 
-use crate::bpf::bpf::{ProfilerSkel, ProfilerSkelBuilder};
+use crate::bpf::profiler_skel::{ProfilerSkel, ProfilerSkelBuilder};
 use crate::object::{build_id, elf_load, is_dynamic, is_go};
 use crate::perf_events::setup_perf_event;
 use crate::unwind_info::{
@@ -25,7 +25,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::bpf::bindings::*;
+use crate::bpf::profiler_bindings::*;
 
 fn symbolize_profile(
     profile: &RawAggregatedProfile,
@@ -38,8 +38,11 @@ fn symbolize_profile(
     let _ = fetch_symbols_for_profile(&mut addresses_per_sample, profile, procs, objs); // best effort
 
     for sample in profile {
-        let mut symbolized_sample: SymbolizedAggregatedSample =
-            SymbolizedAggregatedSample::default();
+        let mut symbolized_sample: SymbolizedAggregatedSample = SymbolizedAggregatedSample {
+            pid: sample.pid,
+            count: sample.count,
+            ..Default::default()
+        };
         symbolized_sample.pid = sample.pid;
         symbolized_sample.count = sample.count;
 
@@ -205,11 +208,12 @@ enum MappingType {
 }
 
 #[derive(Clone)]
-struct ProcessInfo {
+pub struct ProcessInfo {
     mappings: Vec<ExecutableMapping>,
 }
 
-struct ObjectFileInfo {
+#[allow(dead_code)]
+pub struct ObjectFileInfo {
     file: fs::File,
     path: PathBuf,
     // p_offset, p_vaddr
@@ -226,6 +230,7 @@ enum Unwinder {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct ExecutableMapping {
     // No build id means either JIT or that we could not fetch it. Change this.
     build_id: Option<String>,
@@ -259,7 +264,9 @@ fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<stack_unwind_row_t>> 
                         };
                         unwind_info.push(row)
                     }
-                    None => {}
+                    None => {
+                        // todo: cleanup
+                    }
                 }
                 last_function_end_addr = Some(*end_addr);
             }
@@ -371,7 +378,7 @@ impl Collector {
     }
 
     pub fn finish(&self) -> Vec<SymbolizedAggregatedProfile> {
-        let span: span::EnteredSpan = span!(Level::DEBUG, "symbolize_profiles").entered();
+        let _span: span::EnteredSpan = span!(Level::DEBUG, "symbolize_profiles").entered();
 
         debug!("Collector::finish {}", self.profiles.len());
         let mut r = Vec::new();
@@ -388,7 +395,8 @@ const MAX_UNWIND_INFO_SHARDS: u64 = 50;
 const SHARD_CAPACITY: usize = MAX_UNWIND_TABLE_SIZE as usize;
 const PERF_BUFFER_PAGES: usize = 512 * 1024;
 
-struct RawAggregatedSample {
+#[allow(dead_code)]
+pub struct RawAggregatedSample {
     pid: i32,
     ustack: Option<native_stack_t>,
     kstack: Option<native_stack_t>,
@@ -396,6 +404,7 @@ struct RawAggregatedSample {
 }
 
 #[derive(Default, Debug)]
+#[allow(dead_code)]
 pub struct SymbolizedAggregatedSample {
     pid: i32,
     pub ustack: Vec<String>,
@@ -514,7 +523,7 @@ impl Profiler<'_> {
             }
         });
 
-        let mut start_time: Instant = Instant::now();
+        let start_time: Instant = Instant::now();
         let mut time_since_last_scheduled_collection: Instant = Instant::now();
 
         loop {
@@ -650,7 +659,7 @@ impl Profiler<'_> {
     }
 
     fn persist_unwind_info(&self, live_shard: &Vec<stack_unwind_row_t>) {
-        let span = span!(Level::DEBUG, "persist_unwind_info").entered();
+        let _span = span!(Level::DEBUG, "persist_unwind_info").entered();
 
         let key = self.native_unwind_state.shard_index.to_ne_bytes();
         let val = unsafe {
@@ -681,7 +690,7 @@ impl Profiler<'_> {
         let mut got_some_unwind_info: bool = true;
 
         // Get unwind info
-        for (_i, mapping) in self
+        for mapping in self
             .procs
             .lock()
             .expect("lock")
@@ -689,7 +698,6 @@ impl Profiler<'_> {
             .unwrap()
             .mappings
             .iter()
-            .enumerate()
         {
             if self.native_unwind_state.shard_index > MAX_UNWIND_INFO_SHARDS {
                 error!("No more unwind info shards available");
@@ -836,7 +844,7 @@ impl Profiler<'_> {
             let last_pc = found_unwind_info[found_unwind_info.len() - 1].pc;
             debug!("~~ PC range {:x}-{:x}", first_pc, last_pc,);
 
-            let mut current_chunk = &found_unwind_info[..];
+            let mut current_chunk;
             let mut rest_chunk = &found_unwind_info[..];
 
             loop {
@@ -1082,7 +1090,9 @@ impl Profiler<'_> {
                                 load_address = thing.address.0;
                             }
                         }
-                        _ => {}
+                        _ => {
+                            // todo: cleanup
+                        }
                     }
 
                     mappings.push(ExecutableMapping {
@@ -1138,7 +1148,7 @@ impl Profiler<'_> {
             }
         }
 
-        mappings.sort_by(|a, _b| a.start_addr.cmp(&a.start_addr));
+        mappings.sort_by_key(|k| k.start_addr.cmp(&k.start_addr));
         let proc_info = ProcessInfo { mappings };
         self.procs
             .clone()

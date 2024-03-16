@@ -8,7 +8,7 @@ use std::path::Path;
 
 const PROFILER_BPF_HEADER: &str = "./src/bpf/profiler.h";
 const PROFILER_BPF_SOURCE: &str = "./src/bpf/profiler.bpf.c";
-const PROFILER_SKELETON: &str = "./src/bpf/bpf.rs";
+const PROFILER_SKELETON: &str = "./src/bpf/profiler_skel.rs";
 
 fn main() {
     // This is necessary but not sure why, this should be passed elsewhere
@@ -24,9 +24,8 @@ fn main() {
         .generate()
         .expect("Unable to generate bindings");
 
-    // Write the bindings to the $OUT_DIR/bindings.rs file.
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let bindings_out_file = out_path.join("bindings.rs");
+    let bindings_out_file = out_path.join("profiler_bindings.rs");
     bindings
         .write_to_file(bindings_out_file)
         .expect("Couldn't write bindings!");

@@ -4,7 +4,7 @@
 
 use plain::Plain;
 
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+include!(concat!(env!("OUT_DIR"), "/profiler_bindings.rs"));
 
 unsafe impl Plain for stack_count_key_t {}
 unsafe impl Plain for native_stack_t {}
@@ -12,6 +12,7 @@ unsafe impl Plain for Event {}
 unsafe impl Plain for process_info_t {}
 unsafe impl Plain for unwind_info_chunks_t {}
 
+#[allow(clippy::derivable_impls)]
 impl Default for stack_count_key_t {
     fn default() -> Self {
         Self {

@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use data_encoding::HEXUPPER;
 use memmap2;
 
+#[allow(dead_code)]
 enum BuildId {
     Gnu(String),
     Go(String),

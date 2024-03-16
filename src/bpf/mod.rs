@@ -1,2 +1,2 @@
-pub mod bindings;
-pub mod bpf;
+pub mod profiler_bindings;
+pub mod profiler_skel;

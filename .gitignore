@@ -1,4 +1,3 @@
 /target
 flame.svg
-src/bpf/bpf.rs
-src/bpf/profiler.rs
+src/bpf/*_skel.rs
