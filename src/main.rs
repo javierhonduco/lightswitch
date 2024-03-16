@@ -61,7 +61,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut duration = Duration::MAX;
     if !args.continuous {
-        duration = Duration::from_secs(600);
+        duration = Duration::from_secs(5);
     }
 
     let collector = Collector::new();

@@ -1,2 +1,4 @@
 /target
 flame.svg
+src/bpf/bpf.rs
+src/bpf/profiler.rs

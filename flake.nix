@@ -50,7 +50,7 @@
               git
               ripgrep
               nixpkgs-fmt
-              ocamlPackages.magic-trace
+              # ocamlPackages.magic-trace
             ];
 
             LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_16.libclang ];
