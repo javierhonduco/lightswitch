@@ -11,7 +11,7 @@
     };
   };
   outputs = { self, nixpkgs, flake-utils, rust-overlay }:
-    flake-utils.lib.eachDefaultSystem
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ]
       (system:
         let
           overlays = [ (import rust-overlay) ];
@@ -22,6 +22,8 @@
         in
         with pkgs;
         {
+          formatter = pkgs.nixpkgs-fmt;
+
           devShells.default = mkShell rec {
             # https://discourse.nixos.org/t/how-to-add-pkg-config-file-to-a-nix-package/8264/4
             nativeBuildInputs = with pkgs; [
@@ -47,9 +49,6 @@
               zstd-static
               # Other tools
               cargo-edit
-              git
-              ripgrep
-              nixpkgs-fmt
               # ocamlPackages.magic-trace
             ];
 
