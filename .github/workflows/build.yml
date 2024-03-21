@@ -16,6 +16,6 @@ jobs:
     - name: Run `cargo check`
       run: nix develop --command cargo check
     - name: Run `cargo clippy`
-      run: nix develop --command cargo clippy
+      run: nix develop --command cargo clippy --all-targets -- -D warnings
     - name: Run `cargo fmt`
-      run: nix develop --command cargo fmt
+      run: nix develop --command cargo fmt --check
