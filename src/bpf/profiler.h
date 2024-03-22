@@ -25,6 +25,8 @@ _Static_assert(MAX_TAIL_CALLS *MAX_STACK_DEPTH_PER_PROGRAM >= MAX_STACK_DEPTH,
 _Static_assert(1 << MAX_BINARY_SEARCH_DEPTH >= MAX_UNWIND_TABLE_SIZE,
                "unwind table is big enough");
 
+#define MAX_AGGREGATED_STACKS_ENTRIES 10000
+
 // Unwind tables bigger than can't fit in the remaining space
 // of the current shard are broken up into chunks up to `MAX_UNWIND_TABLE_SIZE`.
 #define MAX_UNWIND_TABLE_CHUNKS 30

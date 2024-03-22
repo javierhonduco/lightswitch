@@ -1,4 +1,4 @@
-use tracing::{debug, error, info, span, Level};
+use tracing::{debug, error, info, span, warn, Level};
 
 use crate::bpf::profiler_skel::{ProfilerSkel, ProfilerSkelBuilder};
 use crate::object::{build_id, elf_load, is_dynamic, is_go};
@@ -384,6 +384,7 @@ pub struct Profiler<'bpf> {
     // Profile channel
     profile_send: Arc<Mutex<mpsc::Sender<RawAggregatedProfile>>>,
     profile_receive: Arc<Mutex<mpsc::Receiver<RawAggregatedProfile>>>,
+    session_duration: Duration,
 }
 
 pub struct Collector {
@@ -442,7 +443,7 @@ impl Collector {
 }
 
 // Static config
-const SAMPLE_PERIOD_HZ: u64 = 200;
+const SAMPLE_PERIOD_HZ: u64 = 97;
 const MAX_UNWIND_INFO_SHARDS: u64 = 50;
 const SHARD_CAPACITY: usize = MAX_UNWIND_TABLE_SIZE as usize;
 const PERF_BUFFER_PAGES: usize = 512 * 1024;
@@ -516,6 +517,7 @@ impl Profiler<'_> {
             filter_pids,
             profile_send,
             profile_receive,
+            session_duration: Duration::from_secs(5),
         }
     }
 
@@ -534,6 +536,12 @@ impl Profiler<'_> {
     }
 
     pub fn run(mut self, duration: Duration, collector: Arc<Mutex<Collector>>) {
+        let max_samples_per_session =
+            SAMPLE_PERIOD_HZ * num_cpus::get() as u64 * self.session_duration.as_secs();
+        if max_samples_per_session >= MAX_AGGREGATED_STACKS_ENTRIES.into() {
+            warn!("samples might be lost due to too many samples in a profile session");
+        }
+
         self.setup_perf_events();
         self.set_bpf_map_info();
 
@@ -582,7 +590,7 @@ impl Profiler<'_> {
                 break;
             }
 
-            if time_since_last_scheduled_collection.elapsed() >= Duration::from_secs(5) {
+            if time_since_last_scheduled_collection.elapsed() >= self.session_duration {
                 debug!("collecting profiles on schedule");
                 let profile = self.collect_profile();
                 self.send_profile(profile);

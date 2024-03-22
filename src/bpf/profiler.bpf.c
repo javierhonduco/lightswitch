@@ -21,7 +21,7 @@ struct {
 
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __uint(max_entries, 10000);
+  __uint(max_entries, MAX_AGGREGATED_STACKS_ENTRIES);
   __type(key, stack_count_key_t);
   __type(value, u64);
 } aggregated_stacks SEC(".maps");
