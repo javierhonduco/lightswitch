@@ -1,11 +1,10 @@
-use tracing::{debug, error, span, Level};
+use tracing::{debug, error, info, span, Level};
 
 use crate::bpf::profiler_skel::{ProfilerSkel, ProfilerSkelBuilder};
 use crate::object::{build_id, elf_load, is_dynamic, is_go};
 use crate::perf_events::setup_perf_event;
-use crate::unwind_info::{
-    end_of_function_marker, CfaType, CompactUnwindRow, UnwindData, UnwindInfoBuilder,
-};
+use crate::unwind_info::CfaType;
+use crate::unwind_info::{end_of_function_marker, CompactUnwindRow, UnwindData, UnwindInfoBuilder};
 use crate::usym::symbolize_native_stack_blaze;
 use anyhow::anyhow;
 use libbpf_rs::skel::OpenSkel;
@@ -243,6 +242,61 @@ struct ExecutableMapping {
     // Add (inode, ctime) and whether the file is in the root namespace
 }
 
+// Must be sorted. Also, not very optimized as of now.
+pub fn remove_unnecesary_markers(info: &Vec<stack_unwind_row_t>) -> Vec<stack_unwind_row_t> {
+    let mut unwind_info = Vec::with_capacity(info.len());
+    let mut last_row: Option<stack_unwind_row_t> = None;
+
+    for row in info {
+        if let Some(last_row_unwrapped) = last_row {
+            let previous_is_redundant_marker = (last_row_unwrapped.cfa_type
+                == CfaType::EndFdeMarker as u8)
+                && last_row_unwrapped.pc == row.pc;
+            if previous_is_redundant_marker {
+                unwind_info.pop();
+            }
+        }
+
+        let mut current_is_redundant_marker = false;
+        if let Some(last_row_unwrapped) = last_row {
+            current_is_redundant_marker =
+                (row.cfa_type == CfaType::EndFdeMarker as u8) && last_row_unwrapped.pc == row.pc;
+        }
+
+        if !current_is_redundant_marker {
+            unwind_info.push(*row);
+        }
+
+        last_row = Some(*row);
+    }
+
+    unwind_info
+}
+
+// Must be sorted. Also, not very optimized as of now.
+pub fn remove_redundant(info: &Vec<stack_unwind_row_t>) -> Vec<stack_unwind_row_t> {
+    let mut unwind_info = Vec::with_capacity(info.len());
+    let mut last_row: Option<stack_unwind_row_t> = None;
+
+    for row in info {
+        let mut redundant = false;
+        if let Some(last_row_unwrapped) = last_row {
+            redundant = row.cfa_type == last_row_unwrapped.cfa_type
+                && row.cfa_offset == last_row_unwrapped.cfa_offset
+                && row.rbp_type == last_row_unwrapped.rbp_type
+                && row.rbp_offset == last_row_unwrapped.rbp_offset;
+        }
+
+        if !redundant {
+            unwind_info.push(*row);
+        }
+
+        last_row = Some(*row);
+    }
+
+    unwind_info
+}
+
 fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<stack_unwind_row_t>> {
     let mut unwind_info = Vec::new();
     let mut last_function_end_addr: Option<u64> = None;
@@ -311,8 +365,6 @@ pub struct NativeUnwindState {
     live_shard: Vec<stack_unwind_row_t>,
     build_id_to_executable_id: HashMap<String, u32>,
     shard_index: u64,
-    low_index: u64,
-    high_index: u64,
 }
 
 pub struct Profiler<'bpf> {
@@ -438,8 +490,6 @@ impl Profiler<'_> {
         let live_shard = Vec::with_capacity(SHARD_CAPACITY);
         let build_id_to_executable_id = HashMap::new();
         let shard_index = 0;
-        let low_index = 0;
-        let high_index = 0;
 
         let native_unwind_state = NativeUnwindState {
             dirty: false,
@@ -447,8 +497,6 @@ impl Profiler<'_> {
             live_shard,
             build_id_to_executable_id,
             shard_index,
-            low_index,
-            high_index,
         };
 
         let (sender, receiver) = mpsc::channel();
@@ -816,13 +864,17 @@ impl Profiler<'_> {
             };
             span.exit();
 
-            let span: span::EnteredSpan = span!(Level::DEBUG, "unwind info sort").entered();
+            let span: span::EnteredSpan = span!(Level::DEBUG, "sort unwind info").entered();
             found_unwind_info.sort_by(|a, b| {
                 let a_pc = a.pc;
                 let b_pc = b.pc;
                 a_pc.cmp(&b_pc)
             });
+            span.exit();
 
+            let span: span::EnteredSpan = span!(Level::DEBUG, "optimize unwind info").entered();
+            let found_unwind_info = remove_unnecesary_markers(&found_unwind_info);
+            let found_unwind_info = remove_redundant(&found_unwind_info);
             span.exit();
 
             debug!(
@@ -832,8 +884,6 @@ impl Profiler<'_> {
                 self.native_unwind_state.build_id_to_executable_id.len(),
             );
 
-            debug!("~~ shard index: {}", self.native_unwind_state.shard_index);
-
             // no unwind info / errors
             if found_unwind_info.is_empty() {
                 got_some_unwind_info = false;
@@ -842,122 +892,94 @@ impl Profiler<'_> {
 
             let first_pc = found_unwind_info[0].pc;
             let last_pc = found_unwind_info[found_unwind_info.len() - 1].pc;
-            debug!("~~ PC range {:x}-{:x}", first_pc, last_pc,);
+            debug!(
+                "-- unwind information covers PCs: [{:x}-{:x}]",
+                first_pc, last_pc,
+            );
 
+            let mut chunk_cumulative_len = 0;
             let mut current_chunk;
             let mut rest_chunk = &found_unwind_info[..];
 
+            let span: span::EnteredSpan = span!(Level::DEBUG, "chunk unwind info").entered();
             loop {
                 if rest_chunk.is_empty() {
-                    debug!("[info-unwind] done chunkin'");
+                    debug!("done chunkin'");
                     break;
                 }
 
-                let max_space: usize = SHARD_CAPACITY - self.native_unwind_state.live_shard.len();
-                let available_space: usize = std::cmp::min(max_space, rest_chunk.len());
+                assert!(
+                    self.native_unwind_state.live_shard.len() <= SHARD_CAPACITY,
+                    "live shard exceeds the maximum capacity"
+                );
+
+                if self.native_unwind_state.shard_index >= MAX_UNWIND_INFO_SHARDS {
+                    error!("used all the shards, samples might be lost");
+                    break;
+                }
+
+                let free_space: usize = SHARD_CAPACITY - self.native_unwind_state.live_shard.len();
+                let available_space: usize = std::cmp::min(free_space, rest_chunk.len());
+
                 debug!(
-                    "-- space used so far in live shard {}",
+                    "-- space used so far in live shard {} {}",
+                    self.native_unwind_state.shard_index,
                     self.native_unwind_state.live_shard.len()
                 );
                 debug!(
-                    "-- live shard space left {}, rest_chunk size: {}",
-                    max_space,
+                    "-- live shard free space: {}, rest_chunk size: {}",
+                    free_space,
                     rest_chunk.len()
                 );
 
-                if self.native_unwind_state.shard_index > MAX_UNWIND_INFO_SHARDS {
-                    error!("[info unwind] too many shards");
-                    break;
-                }
-
                 if available_space == 0 {
-                    debug!("!!!! [not fully implemented] no space in live shard");
-                    self.native_unwind_state.low_index = 0;
-                    self.native_unwind_state.high_index = 0;
+                    info!("no space in live shard, allocating a new one");
 
                     self.persist_unwind_info(&self.native_unwind_state.live_shard);
-
-                    self.native_unwind_state.live_shard.truncate(0); // Vec::with_capacity(250_000);
-                                                                     // - create shard (check if over limit)
-                    self.native_unwind_state.shard_index = 0;
+                    self.native_unwind_state.live_shard.truncate(0);
+                    self.native_unwind_state.shard_index += 1;
                     continue;
                 }
-                let candidate_unwind_info: &[stack_unwind_row_t] = &rest_chunk[..available_space];
 
-                let mut last_marker_index = None;
-                for (i, row) in candidate_unwind_info.iter().enumerate().rev() {
-                    if row.cfa_type == CfaType::EndFdeMarker as u8 {
-                        last_marker_index = Some(i);
-                        break;
-                    }
-                }
+                current_chunk = &rest_chunk[..available_space];
+                rest_chunk = &rest_chunk[available_space..];
+                chunk_cumulative_len += current_chunk.len();
 
-                match last_marker_index {
-                    Some(last_marker_index) => {
-                        current_chunk = &rest_chunk[..=last_marker_index];
-                        rest_chunk = &rest_chunk[(last_marker_index + 1)..];
-                        debug!(
-                            "-- current_chunk.len {} rest_chunk.len {}",
-                            current_chunk.len(),
-                            rest_chunk.len()
-                        );
-
-                        if current_chunk[0].cfa_type == CfaType::EndFdeMarker as u8 {
-                            // wrong start of unwind info 4
-                            panic!("wrong start of unwind info {:?}", current_chunk[0].cfa_type);
-                        }
-                        if current_chunk[current_chunk.len() - 1].cfa_type
-                            != CfaType::EndFdeMarker as u8
-                        {
-                            panic!(
-                                "wrong end of unwind info {:?}",
-                                current_chunk[current_chunk.len() - 1].cfa_type
-                            );
-                        }
-                    }
-
-                    None => {
-                        debug!("[dwarf-debug] could not find marker, allocating a new shard. live shard len: {}", self.native_unwind_state.live_shard.len());
-                        self.native_unwind_state.low_index = 0;
-                        self.native_unwind_state.high_index = 0;
-                        self.native_unwind_state.dirty = true;
-
-                        self.persist_unwind_info(&self.native_unwind_state.live_shard);
-
-                        // - clear / reset
-                        self.native_unwind_state.live_shard.truncate(0);
-                        // - create shard (check if over limit)
-                        self.native_unwind_state.shard_index += 1;
-                        continue;
-                    }
-                }
-
-                self.native_unwind_state.low_index =
-                    self.native_unwind_state.live_shard.len() as u64;
-
+                let low_index = self.native_unwind_state.live_shard.len() as u64;
                 // Copy unwind info to the live shard
                 self.native_unwind_state
                     .live_shard
                     .append(&mut current_chunk.to_vec());
-                self.native_unwind_state.high_index =
-                    self.native_unwind_state.live_shard.len() as u64 - 1;
+                let high_index = self.native_unwind_state.live_shard.len() as u64;
 
-                // == Add chunk
+                let low_pc = current_chunk[0].pc;
+                let high_pc = if rest_chunk.is_empty() {
+                    current_chunk[current_chunk.len() - 1].pc
+                } else {
+                    rest_chunk[0].pc - 1
+                };
+                let shard_index = self.native_unwind_state.shard_index;
+
+                // Add chunk
                 chunks.push(chunk_info_t {
-                    low_pc: current_chunk[0].pc,
-                    high_pc: current_chunk[current_chunk.len() - 1].pc,
-                    shard_index: self.native_unwind_state.shard_index,
-                    low_index: self.native_unwind_state.low_index,
-                    high_index: self.native_unwind_state.high_index,
+                    low_pc,
+                    high_pc,
+                    shard_index,
+                    low_index,
+                    high_index,
                 });
 
+                debug!("-- chunk covers PCs [{:x}:{:x}]", low_pc, high_pc);
                 debug!(
-                    "-- indices ([{}:{}])",
-                    self.native_unwind_state.low_index, self.native_unwind_state.high_index,
+                    "-- chunk is in shard: {} in range [{}:{}]",
+                    shard_index, low_index, high_index
                 );
             }
+            span.exit();
 
-            // == Add chunks
+            assert!(found_unwind_info.len() == chunk_cumulative_len, "total length of chunks should be as big as the size of the whole unwind information");
+
+            // Add chunks
             chunks.resize(
                 MAX_UNWIND_TABLE_CHUNKS as usize,
                 chunk_info_t {
@@ -995,7 +1017,7 @@ impl Profiler<'_> {
         if got_some_unwind_info {
             self.native_unwind_state.dirty = true;
 
-            // == Add process info
+            // Add process info
             // "default"
             mappings.resize(
                 MAX_MAPPINGS_PER_PROCESS as usize,
