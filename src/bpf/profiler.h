@@ -202,7 +202,14 @@ unsigned long long hash_stack(native_stack_t *stack) {
   unsigned long long hash = seed ^ (stack->len * m);
 
   for (int i = 0; i < MAX_STACK_DEPTH; i++) {
-    unsigned long long k = stack->addresses[i];
+    // The stack is not zeroed when we initialise it, we simply
+    // set the length to zero. This is a workaround to produce
+    // the same hash for two stacks that might have garbage values
+    // after their length.
+    unsigned long long k = 0;
+    if (i < stack->len) {
+      k = stack->addresses[i];
+    }
 
     k *= m;
     k ^= k >> r;
