@@ -449,7 +449,9 @@ impl Collector {
 // Static config
 const MAX_UNWIND_INFO_SHARDS: u64 = 50;
 const SHARD_CAPACITY: usize = MAX_UNWIND_TABLE_SIZE as usize;
-const PERF_BUFFER_PAGES: usize = 512 * 1024;
+// Make each perf buffer 512 KB
+// TODO: should make this configurable via a command line argument in future
+const PERF_BUFFER_BYTES: usize = 512 * 1024;
 
 #[allow(dead_code)]
 pub struct RawAggregatedSample {
@@ -552,7 +554,7 @@ impl Profiler<'_> {
 
         let chan_send = self.chan_send.clone();
         let perf_buffer = PerfBufferBuilder::new(self.bpf.maps().events())
-            .pages(PERF_BUFFER_PAGES / page_size::get())
+            .pages(PERF_BUFFER_BYTES / page_size::get())
             .sample_cb(move |cpu: i32, data: &[u8]| {
                 Self::handle_event(&chan_send, cpu, data);
             })
