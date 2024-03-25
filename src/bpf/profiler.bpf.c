@@ -385,7 +385,8 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
     LOG("[error] bpf_map_update_elem with ret: %d", err);
   }
 
-  u32 zero = 0;
+  // Making this u64 avoid upsetting the eBPF verifier
+  u64 zero = 0;
   u64 *scount = bpf_map_lookup_or_try_init(&aggregated_stacks,
                                            &unwind_state->stack_key, &zero);
   if (scount) {
