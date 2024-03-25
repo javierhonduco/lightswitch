@@ -384,6 +384,10 @@ pub struct Profiler<'bpf> {
     // Profile channel
     profile_send: Arc<Mutex<mpsc::Sender<RawAggregatedProfile>>>,
     profile_receive: Arc<Mutex<mpsc::Receiver<RawAggregatedProfile>>>,
+    // Duration of this profile
+    duration: Duration,
+    // Per-CPU Sampling Frequency of this profile in Hz
+    sample_freq: u16,
     session_duration: Duration,
 }
 
@@ -443,7 +447,6 @@ impl Collector {
 }
 
 // Static config
-const SAMPLE_PERIOD_HZ: u64 = 97;
 const MAX_UNWIND_INFO_SHARDS: u64 = 50;
 const SHARD_CAPACITY: usize = MAX_UNWIND_TABLE_SIZE as usize;
 const PERF_BUFFER_PAGES: usize = 512 * 1024;
@@ -470,12 +473,12 @@ pub type SymbolizedAggregatedProfile = Vec<SymbolizedAggregatedSample>;
 
 impl Default for Profiler<'_> {
     fn default() -> Self {
-        Self::new(false)
+        Self::new(false, Duration::MAX, 19)
     }
 }
 
 impl Profiler<'_> {
-    pub fn new(bpf_debug: bool) -> Self {
+    pub fn new(bpf_debug: bool, duration: Duration, sample_freq: u16) -> Self {
         let mut skel_builder: ProfilerSkelBuilder = ProfilerSkelBuilder::default();
         skel_builder.obj_builder.debug(bpf_debug);
         let open_skel = skel_builder.open().expect("open skel");
@@ -517,6 +520,8 @@ impl Profiler<'_> {
             filter_pids,
             profile_send,
             profile_receive,
+            duration,
+            sample_freq,
             session_duration: Duration::from_secs(5),
         }
     }
@@ -535,9 +540,9 @@ impl Profiler<'_> {
             .expect("handle send");
     }
 
-    pub fn run(mut self, duration: Duration, collector: Arc<Mutex<Collector>>) {
+    pub fn run(mut self, collector: Arc<Mutex<Collector>>) {
         let max_samples_per_session =
-            SAMPLE_PERIOD_HZ * num_cpus::get() as u64 * self.session_duration.as_secs();
+            self.sample_freq as u64 * num_cpus::get() as u64 * self.session_duration.as_secs();
         if max_samples_per_session >= MAX_AGGREGATED_STACKS_ENTRIES.into() {
             warn!("samples might be lost due to too many samples in a profile session");
         }
@@ -583,7 +588,7 @@ impl Profiler<'_> {
         let mut time_since_last_scheduled_collection: Instant = Instant::now();
 
         loop {
-            if start_time.elapsed() >= duration {
+            if start_time.elapsed() >= self.duration {
                 debug!("done after running for {:?}", start_time.elapsed());
                 let profile = self.collect_profile();
                 self.send_profile(profile);
@@ -614,7 +619,7 @@ impl Profiler<'_> {
                             }
                         } */
                     } else {
-                        error!("unknow event {}", event.type_);
+                        error!("unknown event {}", event.type_);
                     }
                 }
                 Err(_) => {
@@ -1225,8 +1230,9 @@ impl Profiler<'_> {
     pub fn setup_perf_events(&mut self) {
         let mut prog_fds = Vec::new();
         for i in 0..num_cpus::get() {
-            let perf_fd = unsafe { setup_perf_event(i.try_into().unwrap(), SAMPLE_PERIOD_HZ) }
-                .expect("setup perf event");
+            let perf_fd =
+                unsafe { setup_perf_event(i.try_into().unwrap(), self.sample_freq as u64) }
+                    .expect("setup perf event");
             prog_fds.push(perf_fd);
         }
 
