@@ -121,16 +121,48 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut folded = String::new();
     for profile in profiles {
         for sample in profile {
-            let stack = sample
+            let ustack = sample
                 .ustack
                 .clone()
                 .into_iter()
                 .rev()
                 .collect::<Vec<String>>();
-            let stack = stack.join(";");
+            let ustack = ustack.join(";");
+            let kstack = sample
+                .kstack
+                .clone()
+                .into_iter()
+                .rev()
+                .map(|e| format!("kernel: {}", e))
+                .collect::<Vec<String>>();
+            let kstack = kstack.join(";");
             let count: String = sample.count.to_string();
 
-            writeln!(folded, "{} {}", stack, count).unwrap();
+            let process_name = match procfs::process::Process::new(sample.pid) {
+                Ok(p) => match p.stat() {
+                    Ok(stat) => stat.comm,
+                    Err(_) => "<could not fetch proc stat".to_string(),
+                },
+                Err(_) => "<could not get proc comm>".to_string(),
+            };
+
+            writeln!(
+                folded,
+                "{:?}{}{} {}",
+                process_name,
+                if ustack.trim().is_empty() {
+                    "".to_string()
+                } else {
+                    format!(";{}", ustack)
+                },
+                if kstack.trim().is_empty() {
+                    "".to_string()
+                } else {
+                    format!(";{}", kstack)
+                },
+                count
+            )
+            .unwrap();
         }
     }
 
