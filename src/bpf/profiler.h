@@ -71,7 +71,6 @@ enum stack_walking_method {
 };
 
 struct unwinder_config_t {
-  bool filter_processes;
   bool verbose_logging;
 };
 
@@ -165,7 +164,6 @@ typedef struct {
 typedef struct {
   int task_id;
   int pid;
-  int tgid;
   unsigned long long user_stack_id;
   unsigned long long kernel_stack_id;
 } stack_count_key_t;

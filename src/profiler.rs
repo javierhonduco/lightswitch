@@ -1,6 +1,7 @@
 use tracing::{debug, error, info, span, warn, Level};
 
 use crate::bpf::profiler_skel::{ProfilerSkel, ProfilerSkelBuilder};
+use crate::ksym::KsymIter;
 use crate::object::{build_id, elf_load, is_dynamic, is_go};
 use crate::perf_events::setup_perf_event;
 use crate::unwind_info::CfaType;
@@ -36,6 +37,8 @@ fn symbolize_profile(
 
     let _ = fetch_symbols_for_profile(&mut addresses_per_sample, profile, procs, objs); // best effort
 
+    let ksyms: Vec<crate::ksym::Ksym> = KsymIter::from_kallsyms().collect();
+
     for sample in profile {
         let mut symbolized_sample: SymbolizedAggregatedSample = SymbolizedAggregatedSample {
             pid: sample.pid,
@@ -48,6 +51,32 @@ fn symbolize_profile(
         if let Some(ustack) = sample.ustack {
             symbolized_sample.ustack =
                 symbolize_native_stack(&mut addresses_per_sample, procs, objs, sample.pid, &ustack);
+        };
+
+        if let Some(kstack) = sample.kstack {
+            // symbolized_sample.kstack =
+            //println!(".. {} -- {:?}", kstack.len, kstack.addresses);
+
+            for (i, addr) in kstack.addresses.into_iter().enumerate() {
+                if i >= kstack.len as usize {
+                    continue;
+                }
+                let le_symbol = match ksyms.binary_search_by(|el| el.start_addr.cmp(&addr)) {
+                    Ok(idx) => ksyms[idx].clone(),
+                    Err(idx) => {
+                        if idx > 0 {
+                            ksyms[idx - 1].clone()
+                        } else {
+                            crate::ksym::Ksym {
+                                start_addr: idx as u64,
+                                symbol_name: format!("<not found {}>", addr),
+                            }
+                            .clone()
+                        }
+                    }
+                };
+                symbolized_sample.kstack.push(le_symbol.symbol_name);
+            }
         };
 
         r.push(symbolized_sample);
@@ -458,9 +487,9 @@ pub struct RawAggregatedSample {
 #[derive(Default, Debug)]
 #[allow(dead_code)]
 pub struct SymbolizedAggregatedSample {
-    pid: i32,
+    pub pid: i32,
     pub ustack: Vec<String>,
-    kstack: Vec<String>,
+    pub kstack: Vec<String>,
     pub count: u64,
 }
 

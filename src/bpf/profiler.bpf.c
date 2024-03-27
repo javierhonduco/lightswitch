@@ -372,20 +372,38 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
   int per_thread_id = pid_tgid;
 
   stack_key->pid = per_process_id;
-  stack_key->tgid = per_thread_id;
-  stack_key->task_id = per_thread_id; // redundant!
+  stack_key->task_id = per_thread_id;
 
   // Hash and add user stack.
-  u64 user_stack_id = hash_stack(&unwind_state->stack);
-  stack_key->user_stack_id = user_stack_id;
+  if (unwind_state->stack.len >= 1) {
+    u64 user_stack_id = hash_stack(&unwind_state->stack);
+    stack_key->user_stack_id = user_stack_id;
 
-  int err = bpf_map_update_elem(&stacks, &user_stack_id, &unwind_state->stack,
-                                BPF_ANY);
-  if (err != 0) {
-    LOG("[error] bpf_map_update_elem with ret: %d", err);
+    int err = bpf_map_update_elem(&stacks, &user_stack_id, &unwind_state->stack,
+                                  BPF_ANY);
+    if (err != 0) {
+      LOG("[error] failed to insert user stack: %d", err);
+    }
   }
 
-  // Making this u64 avoid upsetting the eBPF verifier
+  // Walk, hash and add kernel stack.
+  int ret = bpf_get_stack(ctx, unwind_state->stack.addresses, MAX_STACK_DEPTH * sizeof(u64), 0);
+  if (ret >= 0) {
+    unwind_state->stack.len = ret / sizeof(u64);
+  }
+
+  if (unwind_state->stack.len >= 1) {
+    u64 kernel_stack_id = hash_stack(&unwind_state->stack);
+    stack_key->kernel_stack_id = kernel_stack_id;
+
+    int err = bpf_map_update_elem(&stacks, &kernel_stack_id, &unwind_state->stack,
+                                  BPF_ANY);
+    if (err != 0) {
+      LOG("[error] failed to insert kernel stack: %d", err);
+    }
+  }
+
+  // Insert aggregated stack.
   u64 zero = 0;
   u64 *scount = bpf_map_lookup_or_try_init(&aggregated_stacks,
                                            &unwind_state->stack_key, &zero);
@@ -735,9 +753,8 @@ int on_event(struct bpf_perf_event_data *ctx) {
   profiler_state->stack.len = 0;
   profiler_state->tail_calls = 0;
 
-  profiler_state->stack_key.task_id = 0;
   profiler_state->stack_key.pid = 0;
-  profiler_state->stack_key.tgid = 0;
+  profiler_state->stack_key.task_id = 0;
   profiler_state->stack_key.user_stack_id = 0;
   profiler_state->stack_key.kernel_stack_id = 0;
 

@@ -18,7 +18,6 @@ impl Default for stack_count_key_t {
         Self {
             task_id: 0,
             pid: 0,
-            tgid: 0,
             user_stack_id: 0,
             kernel_stack_id: 0,
         }
