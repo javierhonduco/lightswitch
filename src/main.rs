@@ -58,7 +58,7 @@ struct Cli {
     )]
     show_unwind_info: Option<String>,
     /// Show build ID for given binary
-    #[arg(long, value_name = "PATH_TO_BINARY", 
+    #[arg(long, value_name = "PATH_TO_BINARY",
         conflicts_with_all = ["pids", "tids", "duration", "filter_logs",
             "sample_freq", "flamegraph_file"]
     )]
@@ -163,7 +163,7 @@ mod tests {
 
         cmd.arg("--help");
         let expected = expect![[r#"
-            "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n  -D, --duration <DURATION>\n          How long this agent will run in seconds [default: 18446744073709551615]\n      --filter-logs\n          \n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz [default: 19]\n      --flamegraph-file <FLAMEGRAPH_FILE>\n          Output file for Flame Graph in SVG format [default: flame.svg]\n  -h, --help\n          Print help\n"
+            "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n  -D, --duration <DURATION>\n          How long this agent will run in seconds [default: 18446744073709551615]\n      --filter-logs\n          Enable TRACE (max) level logging - defaults to INFO level otherwise\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz [default: 19]\n      --flamegraph-file <FLAMEGRAPH_FILE>\n          Output file for Flame Graph in SVG format [default: flame.svg]\n  -h, --help\n          Print help\n"
         "#]];
         cmd.assert().success();
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
