@@ -18,7 +18,9 @@
           pkgs = import nixpkgs {
             inherit system overlays;
           };
-          zstd-static = (pkgs.zstd.override { static = true; });
+          elfutils-without-zstd = pkgs.elfutils.overrideAttrs (attrs: {
+            configureFlags = attrs.configureFlags ++ [ "--without-zstd" ];
+          });
         in
         with pkgs;
         {
@@ -42,18 +44,17 @@
               # Native deps
               glibc
               glibc.static
-              elfutils
+              elfutils-without-zstd
               zlib.static
               zlib.dev
               openssl
-              zstd-static
               # Other tools
               cargo-edit
               # ocamlPackages.magic-trace
             ];
 
             LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_16.libclang ];
-            LD_LIBRARY_PATH = lib.makeLibraryPath [ zstd-static zlib.static elfutils ];
+            LD_LIBRARY_PATH = lib.makeLibraryPath [ zlib.static elfutils-without-zstd ];
           };
         }
       );

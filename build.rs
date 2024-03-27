@@ -11,11 +11,7 @@ const PROFILER_BPF_SOURCE: &str = "./src/bpf/profiler.bpf.c";
 const PROFILER_SKELETON: &str = "./src/bpf/profiler_skel.rs";
 
 fn main() {
-    // This is necessary but not sure why, this should be passed elsewhere
-    println!("cargo:rustc-link-lib=zstd");
-
     // Inform cargo of when to re build
-    println!("cargo:rerun-if-changed={PROFILER_BPF_HEADER}");
     println!("cargo:rerun-if-changed={PROFILER_BPF_HEADER}");
     println!("cargo:rerun-if-changed={PROFILER_BPF_SOURCE}");
 
