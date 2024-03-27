@@ -1,21 +1,30 @@
+use std::fs::File;
 use std::io::{BufRead, BufReader, Lines, Read};
 
 pub const KALLSYM_PATH: &str = "/proc/kallsyms";
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Ksym {
     pub start_addr: u64,
     pub symbol_name: String,
 }
 
 pub struct KsymIter<R> {
-    file_iter: Lines<BufReader<R>>,
+    iter: Lines<BufReader<R>>,
 }
 
 impl<R: Read> KsymIter<R> {
-    pub fn new(data: R) -> Self {
-        let lines: Lines<BufReader<R>> = BufReader::new(data).lines();
-        Self { file_iter: lines }
+    pub fn new(reader: R) -> Self {
+        Self {
+            iter: BufReader::new(reader).lines(),
+        }
+    }
+}
+
+impl KsymIter<File> {
+    pub fn from_kallsyms() -> Self {
+        let file = File::open(KALLSYM_PATH).expect("/proc/kallsyms could not be opened");
+        Self::new(file)
     }
 }
 
@@ -24,7 +33,7 @@ impl<R: Read> Iterator for KsymIter<R> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            match self.file_iter.next() {
+            match self.iter.next() {
                 Some(Ok(line)) => {
                     let v: Vec<&str> = line.split(' ').collect();
                     // This list is probably not complete
@@ -57,7 +66,14 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
-    fn it_works() {
+    fn hosts_symbols_can_be_parsed() {
+        // This test assumes that procfs is mounted. Just checking that we can
+        // read _some_ symbols.
+        assert!(KsymIter::from_kallsyms().collect::<Vec<_>>().len() >= 10);
+    }
+
+    #[test]
+    fn parsing_works() {
         let file = Cursor::new(
             b"0000000000000000 A fixed_percpu_data
 ffffffffa2000000 T startup_64
