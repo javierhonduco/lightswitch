@@ -8,8 +8,8 @@ use crate::unwind_info::CfaType;
 use crate::unwind_info::{end_of_function_marker, CompactUnwindRow, UnwindData, UnwindInfoBuilder};
 use crate::usym::symbolize_native_stack_blaze;
 use anyhow::anyhow;
-use libbpf_rs::skel::OpenSkel;
 use libbpf_rs::skel::SkelBuilder;
+use libbpf_rs::skel::{OpenSkel, Skel};
 use libbpf_rs::Link;
 use libbpf_rs::MapFlags;
 use libbpf_rs::PerfBufferBuilder;
@@ -662,8 +662,36 @@ impl Profiler<'_> {
         }
     }
 
+    /// Clears a BPF map in a iterator-stable way.
+    pub fn clear_map(&mut self, name: &str) {
+        let map = self.bpf.object().map(name).expect("map exists");
+        let mut total_entries = 0;
+        let mut failures = 0;
+        let mut previous_key: Option<Vec<u8>> = None;
+
+        for key in map.keys() {
+            if let Some(previous_key) = previous_key {
+                if map.delete(&previous_key).is_err() {
+                    failures += 1;
+                }
+            }
+            total_entries += 1;
+            previous_key = Some(key);
+        }
+
+        debug!(
+            "clearing map {} found {} entries, failed to delete {} entries",
+            name, total_entries, failures
+        );
+    }
+
+    /// Clear the `percpu_stats` and `stacks` maps one entry at a time.
+    /// The `aggregated_stacks` map is cleared near the callsite.
     pub fn clear_maps(&mut self) {
-        //   self.maps.aggregated_stacks()
+        let _span = span!(Level::DEBUG, "clear_maps").entered();
+
+        self.clear_map("percpu_stats");
+        self.clear_map("stacks");
     }
 
     pub fn collect_profile(&mut self) -> RawAggregatedProfile {
