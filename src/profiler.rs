@@ -685,6 +685,30 @@ impl Profiler<'_> {
         );
     }
 
+    /// Collect the BPF unwinder statistics and aggregate the per CPU values.
+    pub fn collect_unwinder_stats(&self) {
+        for key in self.bpf.maps().percpu_stats().keys() {
+            let per_cpu_value = self
+                .bpf
+                .maps()
+                .percpu_stats()
+                .lookup_percpu(&key, MapFlags::ANY)
+                .expect("failed to lookup stats value")
+                .expect("empty stats");
+
+            let total_value = per_cpu_value
+                .iter()
+                .map(|value| {
+                    let stats: unwinder_stats_t =
+                        *plain::from_bytes(value).expect("failed serde of bpf stats");
+                    stats
+                })
+                .fold(unwinder_stats_t::default(), |a, b| a + b);
+
+            info!("unwinder stats: {:?}", total_value);
+        }
+    }
+
     /// Clear the `percpu_stats` and `stacks` maps one entry at a time.
     /// The `aggregated_stacks` map is cleared near the callsite.
     pub fn clear_maps(&mut self) {
@@ -763,6 +787,7 @@ impl Profiler<'_> {
             let _ = aggregated_stacks.delete(&stacks_bytes);
         }
 
+        self.collect_unwinder_stats();
         self.clear_maps();
         self.setup_perf_events();
         result
