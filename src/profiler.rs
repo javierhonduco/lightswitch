@@ -54,9 +54,6 @@ fn symbolize_profile(
         };
 
         if let Some(kstack) = sample.kstack {
-            // symbolized_sample.kstack =
-            //println!(".. {} -- {:?}", kstack.len, kstack.addresses);
-
             for (i, addr) in kstack.addresses.into_iter().enumerate() {
                 if i >= kstack.len as usize {
                     continue;
