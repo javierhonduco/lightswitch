@@ -57,19 +57,13 @@ fn symbolize_profile(
 }
 
 fn find_mapping(mappings: &[ExecutableMapping], addr: u64) -> Option<ExecutableMapping> {
-    let mapping = mappings.binary_search_by(|p: &ExecutableMapping| p.start_addr.cmp(&addr));
-
-    let insertion_idx = match mapping {
-        Ok(idx) => idx,
-        Err(insertion_idx) => insertion_idx,
-    };
-
-    let found_mapping = &mappings[insertion_idx - 1];
-    if addr > found_mapping.end_addr || addr < found_mapping.start_addr {
-        return None;
+    for mapping in mappings {
+        if mapping.start_addr <= addr && addr <= mapping.end_addr {
+            return Some(mapping.clone());
+        }
     }
 
-    Some(found_mapping.clone())
+    None
 }
 
 fn fetch_symbols_for_profile(
