@@ -1,0 +1,35 @@
+name: upload
+on:
+    pull_request:
+    push:
+
+jobs:
+  upload:
+    runs-on: ubuntu-22.04
+    permissions:
+        id-token: write
+        contents: read
+
+    steps:
+    - uses: actions/checkout@main
+    - uses: DeterminateSystems/nix-installer-action@main
+    - uses: DeterminateSystems/magic-nix-cache-action@main
+
+    - name: Set up nix dev env
+      run: nix develop --command echo 0
+
+    - name: Build `lightswitch` statically linked with glibc
+      run: nix develop --command bash -c 'RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target x86_64-unknown-linux-gnu'
+
+    - name: Show size
+      run: ls -lah target/x86_64-unknown-linux-gnu/release/lightswitch
+
+    - name: Run `ldd`
+      run: ldd target/x86_64-unknown-linux-gnu/release/lightswitch
+
+    - name: Upload binary
+      if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      uses: actions/upload-artifact@main
+      with:
+        name: lightswitch-x86_64
+        path: target/x86_64-unknown-linux-gnu/release/lightswitch
