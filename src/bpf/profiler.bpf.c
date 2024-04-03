@@ -679,7 +679,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     LOG("Continuing walking the stack in a tail call, current tail %d",
         unwind_state->tail_calls);
     unwind_state->tail_calls++;
-    bpf_tail_call(ctx, &programs, 0);
+    bpf_tail_call(ctx, &programs, PROGRAM_NATIVE_UNWINDER);
   }
 
   // We couldn't get the whole stacktrace.
