@@ -180,7 +180,6 @@ mod tests {
     use super::Cli;
     use assert_cmd::Command;
     use clap::Parser;
-    use expect_test::expect;
     use rstest::rstest;
 
     #[test]
@@ -194,13 +193,12 @@ mod tests {
         let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
 
         cmd.arg("--help");
-        let expected = expect![[r#"
-            "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n  -D, --duration <DURATION>\n          How long this agent will run in seconds [default: 18446744073709551615]\n      --filter-logs\n          Enable TRACE (max) level logging - defaults to INFO level otherwise\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz [default: 19]\n      --flamegraph-file <FLAMEGRAPH_FILE>\n          Output file for Flame Graph in SVG format [default: flame.svg]\n  -h, --help\n          Print help\n"
-        "#]];
         cmd.assert().success();
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
-        expected.assert_debug_eq(&actual);
-        // cmd.assert().stdout(predicate::str::contains("junk"));
+        insta::assert_yaml_snapshot!(actual, @r###"
+        ---
+        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n  -D, --duration <DURATION>\n          How long this agent will run in seconds [default: 18446744073709551615]\n      --filter-logs\n          Enable TRACE (max) level logging - defaults to INFO level otherwise\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz [default: 19]\n      --flamegraph-file <FLAMEGRAPH_FILE>\n          Output file for Flame Graph in SVG format [default: flame.svg]\n  -h, --help\n          Print help\n"
+        "###);
     }
 
     #[rstest]
