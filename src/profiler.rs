@@ -467,7 +467,7 @@ impl Collector {
 }
 
 // Static config
-const MAX_UNWIND_INFO_SHARDS: u64 = 50;
+const MAX_SHARDS: u64 = MAX_UNWIND_INFO_SHARDS as u64;
 const SHARD_CAPACITY: usize = MAX_UNWIND_TABLE_SIZE as usize;
 // Make each perf buffer 512 KB
 // TODO: should make this configurable via a command line argument in future
@@ -835,7 +835,7 @@ impl Profiler<'_> {
             .mappings
             .iter()
         {
-            if self.native_unwind_state.shard_index > MAX_UNWIND_INFO_SHARDS {
+            if self.native_unwind_state.shard_index > MAX_SHARDS {
                 error!("No more unwind info shards available");
                 break;
             }
@@ -1001,9 +1001,17 @@ impl Profiler<'_> {
                     "live shard exceeds the maximum capacity"
                 );
 
-                if self.native_unwind_state.shard_index >= MAX_UNWIND_INFO_SHARDS {
-                    error!("used all the shards, samples might be lost");
-                    break;
+                if self.native_unwind_state.shard_index >= MAX_SHARDS {
+                    warn!("used all the shards, wiping state");
+
+                    self.native_unwind_state.live_shard.truncate(0);
+                    self.native_unwind_state.shard_index = 0;
+
+                    // TODO: clear BPF maps but ensure this doesn't happen too often.
+                    self.native_unwind_state.build_id_to_executable_id = HashMap::new();
+
+                    // The next call to this method will continue populating the needed data.
+                    return;
                 }
 
                 let free_space: usize = SHARD_CAPACITY - self.native_unwind_state.live_shard.len();
