@@ -32,7 +32,6 @@ primal = "0.3.2"
 assert_cmd = { version = "2.0.14" }
 insta = { version = "1.38.0", features = ["yaml"] }
 rstest = "0.18.2"
-# cargo-insta = "1.38.0"
 
 [build-dependencies]
 bindgen = "0.69.4"
