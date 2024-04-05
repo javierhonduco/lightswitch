@@ -16,12 +16,12 @@ jobs:
     - name: Set up nix dev env
       run: nix develop --command echo 0
     - name: Run `cargo build`
-      run: nix develop --command cargo build
+      run: nix develop --ignore-environment --command cargo build
     - name: Run `cargo clippy`
-      run: nix develop --command cargo clippy --all-targets -- -D warnings
+      run: nix develop --ignore-environment --command cargo clippy --all-targets -- -D warnings
     - name: Run `cargo test`
       run: nix develop --command cargo test
     - name: Run `cargo fmt`
-      run: nix develop --command cargo fmt --check
+      run: nix develop --ignore-environment --command cargo fmt --check
     - name: Run `nix fmt`
       run: nix fmt -- --check .

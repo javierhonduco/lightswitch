@@ -8,6 +8,7 @@ use crate::unwind_info::CfaType;
 use crate::unwind_info::{end_of_function_marker, CompactUnwindRow, UnwindData, UnwindInfoBuilder};
 use crate::usym::symbolize_native_stack_blaze;
 use anyhow::anyhow;
+use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
 use libbpf_rs::skel::{OpenSkel, Skel};
 use libbpf_rs::Link;
@@ -563,8 +564,9 @@ impl Profiler<'_> {
     }
 
     pub fn run(mut self, collector: Arc<Mutex<Collector>>) {
+        let num_cpus = num_possible_cpus().expect("get possible CPUs") as u64;
         let max_samples_per_session =
-            self.sample_freq as u64 * num_cpus::get() as u64 * self.session_duration.as_secs();
+            self.sample_freq as u64 * num_cpus * self.session_duration.as_secs();
         if max_samples_per_session >= MAX_AGGREGATED_STACKS_ENTRIES.into() {
             warn!("samples might be lost due to too many samples in a profile session");
         }
@@ -666,15 +668,22 @@ impl Profiler<'_> {
         let mut failures = 0;
         let mut previous_key: Option<Vec<u8>> = None;
 
-        for key in map.keys() {
+        let mut delete_entry = |previous_key: Option<Vec<u8>>| {
             if let Some(previous_key) = previous_key {
                 if map.delete(&previous_key).is_err() {
                     failures += 1;
                 }
             }
+        };
+
+        for key in map.keys() {
+            delete_entry(previous_key);
             total_entries += 1;
             previous_key = Some(key);
         }
+
+        // Delete last entry.
+        delete_entry(previous_key);
 
         debug!(
             "clearing map {} found {} entries, failed to delete {} entries",
@@ -706,13 +715,31 @@ impl Profiler<'_> {
         }
     }
 
-    /// Clear the `percpu_stats` and `stacks` maps one entry at a time.
-    /// The `aggregated_stacks` map is cleared near the callsite.
+    pub fn clear_stats_map(&mut self) {
+        let key = 0_u32.to_le_bytes();
+        let default = unwinder_stats_t::default();
+        let value = unsafe { plain::as_bytes(&default) };
+
+        let mut values: Vec<Vec<u8>> = Vec::new();
+        let num_cpus = num_possible_cpus().expect("get possible CPUs") as u64;
+        for _ in 0..num_cpus {
+            values.push(value.to_vec());
+        }
+
+        self.bpf
+            .maps()
+            .percpu_stats()
+            .update_percpu(&key, &values, MapFlags::ANY)
+            .expect("zero percpu_stats");
+    }
+
+    /// Clear the `percpu_stats`, `stacks`, and `aggregated_stacks` maps one entry at a time.
     pub fn clear_maps(&mut self) {
         let _span = span!(Level::DEBUG, "clear_maps").entered();
 
-        self.clear_map("percpu_stats");
+        self.clear_stats_map();
         self.clear_map("stacks");
+        self.clear_map("aggregated_stacks");
     }
 
     pub fn collect_profile(&mut self) -> RawAggregatedProfile {
@@ -777,12 +804,6 @@ impl Profiler<'_> {
         }
 
         debug!("===== got {} unique stacks", all_stacks_bytes.len());
-
-        // Now we should delete these entries. We should ensure that this is correct and safe
-        // as we are iterating while still profiling
-        for stacks_bytes in all_stacks_bytes {
-            let _ = aggregated_stacks.delete(&stacks_bytes);
-        }
 
         self.collect_unwinder_stats();
         self.clear_maps();
@@ -1312,7 +1333,7 @@ impl Profiler<'_> {
 
     pub fn setup_perf_events(&mut self) {
         let mut prog_fds = Vec::new();
-        for i in 0..num_cpus::get() {
+        for i in 0..num_possible_cpus().expect("get possible CPUs") {
             let perf_fd =
                 unsafe { setup_perf_event(i.try_into().unwrap(), self.sample_freq as u64) }
                     .expect("setup perf event");
@@ -1325,6 +1346,7 @@ impl Profiler<'_> {
             self._links.push(link.expect("bpf link is present"));
         }
     }
+
     pub fn teardown_perf_events(&mut self) {
         self._links = vec![];
     }

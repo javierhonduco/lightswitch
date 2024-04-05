@@ -5,7 +5,7 @@ use errno::errno;
 use libc::{self, pid_t};
 
 use perf_event_open_sys as sys;
-use perf_event_open_sys::bindings::{perf_event_attr, PERF_FLAG_FD_CLOEXEC};
+use perf_event_open_sys::bindings::perf_event_attr;
 
 // This crate bindings have been generated in a x86 machine, including
 // the syscall number. Turns out different architectures have different
@@ -43,13 +43,12 @@ pub unsafe fn setup_perf_event(cpu: i32, sample_freq: u64) -> Result<c_int> {
     };
     attrs.__bindgen_anon_1.sample_freq = sample_freq;
     attrs.set_disabled(1);
+    attrs.set_freq(1);
 
     let fd = perf_event_open(
-        &mut attrs,
-        -1,                          /* pid */
-        cpu,                         /* cpu */
-        -1,                          /* group_fd */
-        PERF_FLAG_FD_CLOEXEC as u64, /* flags */
+        &mut attrs, -1, /* pid */
+        cpu, -1, /* group_fd */
+        0,  /* flags */
     );
 
     if fd < 0 {

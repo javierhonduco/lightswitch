@@ -852,7 +852,6 @@ dependencies = [
  "libbpf-rs",
  "libc",
  "memmap2 0.9.4",
- "num_cpus",
  "object",
  "page_size",
  "perf-event-open-sys",
