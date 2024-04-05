@@ -1346,6 +1346,7 @@ impl Profiler<'_> {
             self._links.push(link.expect("bpf link is present"));
         }
     }
+
     pub fn teardown_perf_events(&mut self) {
         self._links = vec![];
     }
