@@ -50,6 +50,8 @@
               openssl
               # Other tools
               cargo-edit
+              # snapshot testing plugin binary
+              cargo-insta
               # ocamlPackages.magic-trace
             ];
 
