@@ -8,6 +8,7 @@ use crate::unwind_info::CfaType;
 use crate::unwind_info::{end_of_function_marker, CompactUnwindRow, UnwindData, UnwindInfoBuilder};
 use crate::usym::symbolize_native_stack_blaze;
 use anyhow::anyhow;
+use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
 use libbpf_rs::skel::{OpenSkel, Skel};
 use libbpf_rs::Link;
@@ -563,8 +564,9 @@ impl Profiler<'_> {
     }
 
     pub fn run(mut self, collector: Arc<Mutex<Collector>>) {
+        let num_cpus = num_possible_cpus().expect("get possible CPUs") as u64;
         let max_samples_per_session =
-            self.sample_freq as u64 * num_cpus::get() as u64 * self.session_duration.as_secs();
+            self.sample_freq as u64 * num_cpus * self.session_duration.as_secs();
         if max_samples_per_session >= MAX_AGGREGATED_STACKS_ENTRIES.into() {
             warn!("samples might be lost due to too many samples in a profile session");
         }
@@ -719,7 +721,8 @@ impl Profiler<'_> {
         let value = unsafe { plain::as_bytes(&default) };
 
         let mut values: Vec<Vec<u8>> = Vec::new();
-        for _ in 0..num_cpus::get() {
+        let num_cpus = num_possible_cpus().expect("get possible CPUs") as u64;
+        for _ in 0..num_cpus {
             values.push(value.to_vec());
         }
 
@@ -1330,7 +1333,7 @@ impl Profiler<'_> {
 
     pub fn setup_perf_events(&mut self) {
         let mut prog_fds = Vec::new();
-        for i in 0..num_cpus::get() {
+        for i in 0..num_possible_cpus().expect("get possible CPUs") {
             let perf_fd =
                 unsafe { setup_perf_event(i.try_into().unwrap(), self.sample_freq as u64) }
                     .expect("setup perf event");
