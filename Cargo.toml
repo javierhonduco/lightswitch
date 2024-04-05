@@ -29,9 +29,13 @@ primal = "0.3.2"
 
 [dev-dependencies]
 assert_cmd = { version = "2.0.14" }
-expect-test = { version = "1.4.1" }
+insta = { version = "1.38.0", features = ["yaml"] }
 rstest = "0.18.2"
 
 [build-dependencies]
 bindgen = "0.69.4"
 libbpf-cargo = "0.22.1"
+
+[profile.dev.package]
+insta.opt-level = 3
+similar.opt-level = 3
