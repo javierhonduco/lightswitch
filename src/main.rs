@@ -38,7 +38,7 @@ fn sample_freq_in_range(s: &str) -> Result<u16, String> {
         ));
     }
     if !is_prime(sample_freq.try_into().unwrap()) {
-        let ba_result = primes_before_after(sample_freq.try_into().unwrap());
+        let ba_result = primes_before_after(sample_freq);
         match ba_result {
             Ok((prime_before, prime_after)) => {
                 return Err(format!(
