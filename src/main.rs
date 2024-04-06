@@ -42,10 +42,14 @@ fn sample_freq_in_range(s: &str) -> Result<u16, String> {
         let ba_result = primes_before_after(sample_freq.try_into().unwrap());
         match ba_result {
             Ok((prime_before, prime_after)) => {
-                println!(
-                    "Should use a prime number for sample frequency: {} < {} < {}",
-                    prime_before, sample_freq, prime_after
-                );
+                return Err(format!(
+                    "Sample frequency {} is not prime - use {} (before) or {} (after) instead",
+                    sample_freq, prime_before, prime_after
+                ));
+                // println!(
+                //     "Should use a prime number for sample frequency: {} < {} < {}",
+                //     prime_before, sample_freq, prime_after
+                // );
             }
             Err(_) => println!("primes_before_after should not have failed"),
         }
@@ -60,13 +64,9 @@ fn primes_before_after(non_prime: usize) -> Result<(usize, usize), String> {
     if is_prime(non_prime.try_into().unwrap()) {
         return Err(format!("{} IS prime", non_prime));
     }
-    // Find all primes up to the one past our non_prime number
-    // First, use an iterator, which should be slower (benchmark this)
-    // let primes1 = primal::Primes::all().take_while(|p| *p < non_prime * 2);
-    // Now, use a primal sieve, which should be faster
-    // let primes2 = primal::StreamingSieve::take_while(|p| *p < non_prime * 2);
-    // What is the count (not value) of the prime just before non_prime?
+    // What is the count (not value) of the prime just before our non_prime?
     let n_before: usize = primal::StreamingSieve::prime_pi(non_prime);
+    // And the count of the prime just after our non_prime?
     let n_after: usize = n_before + 1;
     let before = primal::StreamingSieve::nth_prime(n_before);
     let after = primal::StreamingSieve::nth_prime(n_after);
@@ -240,9 +240,15 @@ mod tests {
     #[should_panic]
     #[case::neg101("-101", "sample frequency not in allowed range")]
     #[case::prime_19("19", "")]
-    #[case::non_prime_20("20", "sample frequency is not prime")]
+    #[case::non_prime_20(
+        "20",
+        "Sample frequency 20 is not prime - use 19 (before) or 23 (after) instead"
+    )]
     #[case::prime_47("47", "")]
-    #[case::non_prime_49("49", "sample frequency is not prime")]
+    #[case::non_prime_49(
+        "49",
+        "Sample frequency 49 is not prime - use 47 (before) or 53 (after) instead"
+    )]
     #[case::prime_101("101", "")]
     #[case::prime_1009("1009", "")]
     #[case::non_prime_out_of_range1010("1010", "sample frequency not in allowed range")]
@@ -266,7 +272,6 @@ mod tests {
                 assert!(actual_message.contains(expected_msg.as_str()));
             }
         }
-        // Expected output/results for various inputs
     }
 
     #[rstest]
