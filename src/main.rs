@@ -38,7 +38,6 @@ fn sample_freq_in_range(s: &str) -> Result<u16, String> {
         ));
     }
     if !is_prime(sample_freq.try_into().unwrap()) {
-        // return Err("sample frequency is not prime".to_string());
         let ba_result = primes_before_after(sample_freq.try_into().unwrap());
         match ba_result {
             Ok((prime_before, prime_after)) => {
@@ -46,10 +45,6 @@ fn sample_freq_in_range(s: &str) -> Result<u16, String> {
                     "Sample frequency {} is not prime - use {} (before) or {} (after) instead",
                     sample_freq, prime_before, prime_after
                 ));
-                // println!(
-                //     "Should use a prime number for sample frequency: {} < {} < {}",
-                //     prime_before, sample_freq, prime_after
-                // );
             }
             Err(_) => println!("primes_before_after should not have failed"),
         }
@@ -207,9 +202,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::primes_before_after;
-
-    use super::Cli;
+    use super::*;
     use assert_cmd::Command;
     use clap::Parser;
     use rstest::rstest;
@@ -253,6 +246,7 @@ mod tests {
     #[case::prime_1009("1009", "")]
     #[case::non_prime_out_of_range1010("1010", "sample frequency not in allowed range")]
     #[case::prime_out_of_range_1013("1013", "sample frequency not in allowed range")]
+    #[trace]
     fn sample_freq_successes(#[case] desired_freq: String, #[case] expected_msg: String) {
         let execname = env!("CARGO_PKG_NAME");
         let argname = "--sample-freq";
