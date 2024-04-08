@@ -1212,10 +1212,13 @@ impl Profiler<'_> {
 
                     let file = fs::File::open(path)?;
 
-                    let mut unwinder = Unwinder::NativeDwarf;
-                    let use_fp = is_go(&abs_path); // todo: deal with CGO and friends
-                    if use_fp {
-                        unwinder = Unwinder::NativeFramePointers;
+                    let unwinder = Unwinder::NativeDwarf;
+
+                    // Disable profiling Go applications as they are not properly supported yet.
+                    // Among other things, blazesym doesn't support symbolizing Go binaries.
+                    if is_go(&abs_path) {
+                        // todo: deal with CGO and friends
+                        return Ok(());
                     }
 
                     let Ok(build_id) = build_id(path) else {
