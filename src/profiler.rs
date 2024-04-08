@@ -1,32 +1,26 @@
+use std::thread;
+use std::collections::HashMap;
+use std::fs;
+use std::os::fd::{AsFd, AsRawFd};
+use std::time::{Duration, Instant};
+use std::sync::{mpsc, Arc, Mutex};
+use std::path::PathBuf;
+
+use libbpf_rs::num_possible_cpus;
+use libbpf_rs::skel::SkelBuilder;
+use libbpf_rs::skel::{OpenSkel, Skel};
+use libbpf_rs::{Link, MapFlags, PerfBufferBuilder};
+use anyhow::anyhow;
+use procfs;
 use tracing::{debug, error, info, span, warn, Level};
 
 use crate::bpf::profiler_skel::{ProfilerSkel, ProfilerSkelBuilder};
 use crate::ksym::KsymIter;
 use crate::object::{build_id, elf_load, is_dynamic, is_go};
 use crate::perf_events::setup_perf_event;
-use crate::unwind_info::CfaType;
 use crate::collector::*;
-use crate::unwind_info::{end_of_function_marker, CompactUnwindRow, UnwindData, UnwindInfoBuilder};
 use crate::usym::symbolize_native_stack_blaze;
-use anyhow::anyhow;
-use libbpf_rs::num_possible_cpus;
-use libbpf_rs::skel::SkelBuilder;
-use libbpf_rs::skel::{OpenSkel, Skel};
-use libbpf_rs::Link;
-use libbpf_rs::MapFlags;
-use libbpf_rs::PerfBufferBuilder;
-use procfs;
-use std::collections::HashMap;
-use std::fs;
-use std::os::fd::AsFd;
-use std::os::fd::AsRawFd;
-use std::path::PathBuf;
-
-use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
-use std::time::Duration;
-use std::time::Instant;
-
+use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
 use crate::bpf::profiler_bindings::*;
 
 pub fn symbolize_profile(
@@ -263,124 +257,6 @@ struct ExecutableMapping {
     unwinder: Unwinder,
     // Add (inode, ctime) and whether the file is in the root namespace
 }
-
-// Must be sorted. Also, not very optimized as of now.
-pub fn remove_unnecesary_markers(info: &Vec<stack_unwind_row_t>) -> Vec<stack_unwind_row_t> {
-    let mut unwind_info = Vec::with_capacity(info.len());
-    let mut last_row: Option<stack_unwind_row_t> = None;
-
-    for row in info {
-        if let Some(last_row_unwrapped) = last_row {
-            let previous_is_redundant_marker = (last_row_unwrapped.cfa_type
-                == CfaType::EndFdeMarker as u8)
-                && last_row_unwrapped.pc == row.pc;
-            if previous_is_redundant_marker {
-                unwind_info.pop();
-            }
-        }
-
-        let mut current_is_redundant_marker = false;
-        if let Some(last_row_unwrapped) = last_row {
-            current_is_redundant_marker =
-                (row.cfa_type == CfaType::EndFdeMarker as u8) && last_row_unwrapped.pc == row.pc;
-        }
-
-        if !current_is_redundant_marker {
-            unwind_info.push(*row);
-        }
-
-        last_row = Some(*row);
-    }
-
-    unwind_info
-}
-
-// Must be sorted. Also, not very optimized as of now.
-pub fn remove_redundant(info: &Vec<stack_unwind_row_t>) -> Vec<stack_unwind_row_t> {
-    let mut unwind_info = Vec::with_capacity(info.len());
-    let mut last_row: Option<stack_unwind_row_t> = None;
-
-    for row in info {
-        let mut redundant = false;
-        if let Some(last_row_unwrapped) = last_row {
-            redundant = row.cfa_type == last_row_unwrapped.cfa_type
-                && row.cfa_offset == last_row_unwrapped.cfa_offset
-                && row.rbp_type == last_row_unwrapped.rbp_type
-                && row.rbp_offset == last_row_unwrapped.rbp_offset;
-        }
-
-        if !redundant {
-            unwind_info.push(*row);
-        }
-
-        last_row = Some(*row);
-    }
-
-    unwind_info
-}
-
-fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<stack_unwind_row_t>> {
-    let mut unwind_info = Vec::new();
-    let mut last_function_end_addr: Option<u64> = None;
-    let mut last_row = None;
-    let builder = UnwindInfoBuilder::with_callback(path, |unwind_data| {
-        match unwind_data {
-            UnwindData::Function(_, end_addr) => {
-                // Add the end addr when we hit a new func
-                match last_function_end_addr {
-                    Some(addr) => {
-                        let marker = end_of_function_marker(addr);
-
-                        let row: stack_unwind_row_t = stack_unwind_row_t {
-                            pc: marker.pc,
-                            cfa_offset: marker.cfa_offset,
-                            cfa_type: marker.cfa_type,
-                            rbp_type: marker.rbp_type,
-                            rbp_offset: marker.rbp_offset,
-                        };
-                        unwind_info.push(row)
-                    }
-                    None => {
-                        // todo: cleanup
-                    }
-                }
-                last_function_end_addr = Some(*end_addr);
-            }
-            UnwindData::Instruction(compact_row) => {
-                let row = stack_unwind_row_t {
-                    pc: compact_row.pc,
-                    cfa_offset: compact_row.cfa_offset,
-                    cfa_type: compact_row.cfa_type,
-                    rbp_type: compact_row.rbp_type,
-                    rbp_offset: compact_row.rbp_offset,
-                };
-                unwind_info.push(row);
-                last_row = Some(*compact_row)
-            }
-        }
-    });
-
-    builder?.process()?;
-
-    if last_function_end_addr.is_none() {
-        error!("no last func end addr");
-        return Err(anyhow!("not sure what's going on"));
-    }
-
-    // Add the last marker
-    let marker: CompactUnwindRow = end_of_function_marker(last_function_end_addr.unwrap());
-    let row = stack_unwind_row_t {
-        pc: marker.pc,
-        cfa_offset: marker.cfa_offset,
-        cfa_type: marker.cfa_type,
-        rbp_type: marker.rbp_type,
-        rbp_offset: marker.rbp_offset,
-    };
-    unwind_info.push(row);
-
-    Ok(unwind_info)
-}
-
 pub struct NativeUnwindState {
     dirty: bool,
     last_persisted: Instant,
