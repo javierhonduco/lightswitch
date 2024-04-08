@@ -9,8 +9,8 @@ use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
-use lightswitch::object::build_id;
 use lightswitch::collector::Collector;
+use lightswitch::object::build_id;
 use lightswitch::profiler::Profiler;
 use lightswitch::unwind_info::{compact_printing_callback, UnwindInfoBuilder};
 use primal::is_prime;

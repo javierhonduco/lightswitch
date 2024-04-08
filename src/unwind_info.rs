@@ -332,7 +332,6 @@ impl<'a> UnwindInfoBuilder<'a> {
     }
 }
 
-
 // Must be sorted. Also, not very optimized as of now.
 pub fn remove_unnecesary_markers(info: &Vec<stack_unwind_row_t>) -> Vec<stack_unwind_row_t> {
     let mut unwind_info = Vec::with_capacity(info.len());
@@ -449,4 +448,3 @@ pub fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<stack_unwind_row_
 
     Ok(unwind_info)
 }
-
