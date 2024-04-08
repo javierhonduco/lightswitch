@@ -6,6 +6,10 @@ use object::{Object, ObjectSection};
 use std::fs::File;
 use thiserror::Error;
 
+use crate::bpf::profiler_bindings::stack_unwind_row_t;
+use anyhow::anyhow;
+use tracing::error;
+
 #[repr(u8)]
 pub enum CfaType {
     // Unknown = 0,
@@ -327,3 +331,122 @@ impl<'a> UnwindInfoBuilder<'a> {
         Ok(())
     }
 }
+
+
+// Must be sorted. Also, not very optimized as of now.
+pub fn remove_unnecesary_markers(info: &Vec<stack_unwind_row_t>) -> Vec<stack_unwind_row_t> {
+    let mut unwind_info = Vec::with_capacity(info.len());
+    let mut last_row: Option<stack_unwind_row_t> = None;
+
+    for row in info {
+        if let Some(last_row_unwrapped) = last_row {
+            let previous_is_redundant_marker = (last_row_unwrapped.cfa_type
+                == CfaType::EndFdeMarker as u8)
+                && last_row_unwrapped.pc == row.pc;
+            if previous_is_redundant_marker {
+                unwind_info.pop();
+            }
+        }
+
+        let mut current_is_redundant_marker = false;
+        if let Some(last_row_unwrapped) = last_row {
+            current_is_redundant_marker =
+                (row.cfa_type == CfaType::EndFdeMarker as u8) && last_row_unwrapped.pc == row.pc;
+        }
+
+        if !current_is_redundant_marker {
+            unwind_info.push(*row);
+        }
+
+        last_row = Some(*row);
+    }
+
+    unwind_info
+}
+
+// Must be sorted. Also, not very optimized as of now.
+pub fn remove_redundant(info: &Vec<stack_unwind_row_t>) -> Vec<stack_unwind_row_t> {
+    let mut unwind_info = Vec::with_capacity(info.len());
+    let mut last_row: Option<stack_unwind_row_t> = None;
+
+    for row in info {
+        let mut redundant = false;
+        if let Some(last_row_unwrapped) = last_row {
+            redundant = row.cfa_type == last_row_unwrapped.cfa_type
+                && row.cfa_offset == last_row_unwrapped.cfa_offset
+                && row.rbp_type == last_row_unwrapped.rbp_type
+                && row.rbp_offset == last_row_unwrapped.rbp_offset;
+        }
+
+        if !redundant {
+            unwind_info.push(*row);
+        }
+
+        last_row = Some(*row);
+    }
+
+    unwind_info
+}
+
+pub fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<stack_unwind_row_t>> {
+    let mut unwind_info = Vec::new();
+    let mut last_function_end_addr: Option<u64> = None;
+    let mut last_row = None;
+    let builder = UnwindInfoBuilder::with_callback(path, |unwind_data| {
+        match unwind_data {
+            UnwindData::Function(_, end_addr) => {
+                // Add the end addr when we hit a new func
+                match last_function_end_addr {
+                    Some(addr) => {
+                        let marker = end_of_function_marker(addr);
+
+                        let row: stack_unwind_row_t = stack_unwind_row_t {
+                            pc: marker.pc,
+                            cfa_offset: marker.cfa_offset,
+                            cfa_type: marker.cfa_type,
+                            rbp_type: marker.rbp_type,
+                            rbp_offset: marker.rbp_offset,
+                        };
+                        unwind_info.push(row)
+                    }
+                    None => {
+                        // todo: cleanup
+                    }
+                }
+                last_function_end_addr = Some(*end_addr);
+            }
+            UnwindData::Instruction(compact_row) => {
+                let row = stack_unwind_row_t {
+                    pc: compact_row.pc,
+                    cfa_offset: compact_row.cfa_offset,
+                    cfa_type: compact_row.cfa_type,
+                    rbp_type: compact_row.rbp_type,
+                    rbp_offset: compact_row.rbp_offset,
+                };
+                unwind_info.push(row);
+                last_row = Some(*compact_row)
+            }
+        }
+    });
+
+    builder?.process()?;
+
+    if last_function_end_addr.is_none() {
+        error!("no last func end addr");
+        return Err(anyhow!("not sure what's going on"));
+    }
+
+    // Add the last marker
+    let marker: CompactUnwindRow = end_of_function_marker(last_function_end_addr.unwrap());
+    let row = stack_unwind_row_t {
+        pc: marker.pc,
+        cfa_offset: marker.cfa_offset,
+        cfa_type: marker.cfa_type,
+        rbp_type: marker.rbp_type,
+        rbp_offset: marker.rbp_offset,
+    };
+    unwind_info.push(row);
+
+    Ok(unwind_info)
+}
+
