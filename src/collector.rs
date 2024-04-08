@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, span, Level};
 
-use crate::profiler::symbolize_profile;
+use crate::profile::symbolize_profile;
 use crate::profiler::ObjectFileInfo;
 use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
