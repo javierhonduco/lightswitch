@@ -1,27 +1,27 @@
-use std::thread;
 use std::collections::HashMap;
 use std::fs;
 use std::os::fd::{AsFd, AsRawFd};
-use std::time::{Duration, Instant};
-use std::sync::{mpsc, Arc, Mutex};
 use std::path::PathBuf;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
+use anyhow::anyhow;
 use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
 use libbpf_rs::skel::{OpenSkel, Skel};
 use libbpf_rs::{Link, MapFlags, PerfBufferBuilder};
-use anyhow::anyhow;
 use procfs;
 use tracing::{debug, error, info, span, warn, Level};
 
+use crate::bpf::profiler_bindings::*;
 use crate::bpf::profiler_skel::{ProfilerSkel, ProfilerSkelBuilder};
+use crate::collector::*;
 use crate::ksym::KsymIter;
 use crate::object::{build_id, elf_load, is_dynamic, is_go};
 use crate::perf_events::setup_perf_event;
-use crate::collector::*;
-use crate::usym::symbolize_native_stack_blaze;
 use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
-use crate::bpf::profiler_bindings::*;
+use crate::usym::symbolize_native_stack_blaze;
 
 pub fn symbolize_profile(
     profile: &RawAggregatedProfile,
@@ -126,8 +126,8 @@ fn fetch_symbols_for_profile(
                             // We need the normalized address for normal object files
                             // and might need the absolute addresses for JITs
                             let normalized_addr = addr - mapping.start_addr + mapping.offset
-                                - obj.elf_load.0
-                                + obj.elf_load.1;
+                                - obj.load_offset
+                                + obj.load_vaddr;
 
                             let key = obj.path.clone();
                             let addrs = addresses_per_sample.entry(key).or_default();
@@ -186,8 +186,8 @@ fn symbolize_native_stack(
             Some(build_id) => match objs.get(build_id) {
                 Some(obj) => {
                     let normalized_addr = addr - mapping.start_addr + mapping.offset
-                        - obj.elf_load.0
-                        + obj.elf_load.1;
+                        - obj.load_offset
+                        + obj.load_vaddr;
 
                     let func_name = match addresses_per_sample.get(&obj.path) {
                         Some(value) => match value.get(&normalized_addr) {
@@ -231,8 +231,8 @@ pub struct ProcessInfo {
 pub struct ObjectFileInfo {
     pub file: fs::File,
     pub path: PathBuf,
-    // p_offset, p_vaddr
-    pub elf_load: (u64, u64),
+    pub load_offset: u64,
+    pub load_vaddr: u64,
     pub is_dyn: bool,
     pub main_bin: bool,
 }
@@ -1072,12 +1072,15 @@ impl Profiler<'_> {
                     let mut my_lock: std::sync::MutexGuard<'_, HashMap<String, ObjectFileInfo>> =
                         object_files_clone.lock().expect("lock");
 
+                    let elf_load = elf_load(path);
+
                     my_lock.insert(
                         build_id,
                         ObjectFileInfo {
                             path: abs_path,
                             file,
-                            elf_load: elf_load(path),
+                            load_offset: elf_load.offset,
+                            load_vaddr: elf_load.vaddr,
                             is_dyn: is_dynamic(path),
                             main_bin: i < 3,
                         },

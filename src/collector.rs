@@ -1,13 +1,12 @@
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tracing::{span, debug, Level};
+use tracing::{debug, span, Level};
 
-use crate::profiler::ProcessInfo;
-use crate::profiler::ObjectFileInfo;
-use crate::profiler::SymbolizedAggregatedProfile;
 use crate::profiler::symbolize_profile;
+use crate::profiler::ObjectFileInfo;
+use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
+use crate::profiler::SymbolizedAggregatedProfile;
 
 pub struct Collector {
     profiles: Vec<RawAggregatedProfile>,
@@ -44,7 +43,8 @@ impl Collector {
                 ObjectFileInfo {
                     file: std::fs::File::open(v.path.clone()).unwrap(),
                     path: v.path.clone(),
-                    elf_load: v.elf_load,
+                    load_offset: v.load_offset,
+                    load_vaddr: v.load_vaddr,
                     is_dyn: v.is_dyn,
                     main_bin: v.main_bin,
                 },

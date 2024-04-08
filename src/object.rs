@@ -103,7 +103,12 @@ pub fn is_go(path: &PathBuf) -> bool {
     false
 }
 
-pub fn elf_load(path: &PathBuf) -> (u64, u64) {
+pub struct ElfLoad {
+    pub offset: u64,
+    pub vaddr: u64,
+}
+
+pub fn elf_load(path: &PathBuf) -> ElfLoad {
     let file = fs::File::open(path).unwrap();
     let mmap = unsafe { memmap2::Mmap::map(&file) }.unwrap();
     object::File::parse(&*mmap).unwrap();
@@ -112,5 +117,8 @@ pub fn elf_load(path: &PathBuf) -> (u64, u64) {
     let segments = header.program_headers(endian, &*mmap).unwrap();
     let s = segments.iter().next().unwrap();
 
-    (s.p_offset(endian), s.p_vaddr(endian))
+    ElfLoad {
+        offset: s.p_offset(endian),
+        vaddr: s.p_vaddr(endian),
+    }
 }
