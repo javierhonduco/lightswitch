@@ -5,6 +5,7 @@ use crate::ksym::KsymIter;
 use crate::object::{build_id, elf_load, is_dynamic, is_go};
 use crate::perf_events::setup_perf_event;
 use crate::unwind_info::CfaType;
+use crate::collector::*;
 use crate::unwind_info::{end_of_function_marker, CompactUnwindRow, UnwindData, UnwindInfoBuilder};
 use crate::usym::symbolize_native_stack_blaze;
 use anyhow::anyhow;
@@ -28,7 +29,7 @@ use std::time::Instant;
 
 use crate::bpf::profiler_bindings::*;
 
-fn symbolize_profile(
+pub fn symbolize_profile(
     profile: &RawAggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<String, ObjectFileInfo>,
@@ -234,12 +235,12 @@ pub struct ProcessInfo {
 
 #[allow(dead_code)]
 pub struct ObjectFileInfo {
-    file: fs::File,
-    path: PathBuf,
+    pub file: fs::File,
+    pub path: PathBuf,
     // p_offset, p_vaddr
-    elf_load: (u64, u64),
-    is_dyn: bool,
-    main_bin: bool,
+    pub elf_load: (u64, u64),
+    pub is_dyn: bool,
+    pub main_bin: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -410,61 +411,6 @@ pub struct Profiler<'bpf> {
     // Per-CPU Sampling Frequency of this profile in Hz
     sample_freq: u16,
     session_duration: Duration,
-}
-
-pub struct Collector {
-    profiles: Vec<RawAggregatedProfile>,
-    procs: HashMap<i32, ProcessInfo>,
-    objs: HashMap<String, ObjectFileInfo>,
-}
-
-type ThreadSafeCollector = Arc<Mutex<Collector>>;
-
-impl Collector {
-    pub fn new() -> ThreadSafeCollector {
-        Arc::new(Mutex::new(Self {
-            profiles: Vec::new(),
-            procs: HashMap::new(),
-            objs: HashMap::new(),
-        }))
-    }
-
-    pub fn collect(
-        &mut self,
-        profile: RawAggregatedProfile,
-        procs: &HashMap<i32, ProcessInfo>,
-        objs: &HashMap<String, ObjectFileInfo>,
-    ) {
-        self.profiles.push(profile);
-
-        for (k, v) in procs {
-            self.procs.insert(*k, v.clone());
-        }
-
-        for (k, v) in objs {
-            self.objs.insert(
-                k.clone(),
-                ObjectFileInfo {
-                    file: std::fs::File::open(v.path.clone()).unwrap(),
-                    path: v.path.clone(),
-                    elf_load: v.elf_load,
-                    is_dyn: v.is_dyn,
-                    main_bin: v.main_bin,
-                },
-            );
-        }
-    }
-
-    pub fn finish(&self) -> Vec<SymbolizedAggregatedProfile> {
-        let _span: span::EnteredSpan = span!(Level::DEBUG, "symbolize_profiles").entered();
-
-        debug!("Collector::finish {}", self.profiles.len());
-        let mut r = Vec::new();
-        for profile in &self.profiles {
-            r.push(symbolize_profile(profile, &self.procs, &self.objs));
-        }
-        r
-    }
 }
 
 // Static config
