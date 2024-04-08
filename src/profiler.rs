@@ -17,7 +17,7 @@ use tracing::{debug, error, info, span, warn, Level};
 use crate::bpf::profiler_bindings::*;
 use crate::bpf::profiler_skel::{ProfilerSkel, ProfilerSkelBuilder};
 use crate::collector::*;
-use crate::object::{build_id, elf_load, is_dynamic, is_go};
+use crate::object::{build_id, elf_load, is_dynamic, is_go, BuildId};
 use crate::perf_events::setup_perf_event;
 use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
 
@@ -56,7 +56,7 @@ pub enum Unwinder {
 #[allow(dead_code)]
 pub struct ExecutableMapping {
     // No build id means either JIT or that we could not fetch it. Change this.
-    pub build_id: Option<String>,
+    pub build_id: Option<BuildId>,
     pub kind: MappingType,
     pub start_addr: u64,
     pub end_addr: u64,
@@ -69,7 +69,7 @@ pub struct NativeUnwindState {
     dirty: bool,
     last_persisted: Instant,
     live_shard: Vec<stack_unwind_row_t>,
-    build_id_to_executable_id: HashMap<String, u32>,
+    build_id_to_executable_id: HashMap<BuildId, u32>,
     shard_index: u64,
 }
 
@@ -79,7 +79,7 @@ pub struct Profiler<'bpf> {
     bpf: ProfilerSkel<'bpf>,
     // Profiler state
     procs: Arc<Mutex<HashMap<i32, ProcessInfo>>>,
-    object_files: Arc<Mutex<HashMap<String, ObjectFileInfo>>>,
+    object_files: Arc<Mutex<HashMap<BuildId, ObjectFileInfo>>>,
     // Channel for bpf events,.
     chan_send: Arc<Mutex<mpsc::Sender<Event>>>,
     chan_receive: Arc<Mutex<mpsc::Receiver<Event>>>,
@@ -524,8 +524,7 @@ impl Profiler<'_> {
                 panic!("build id should not be none for file backed mappings");
             }
 
-            let my_lock: std::sync::MutexGuard<'_, HashMap<String, ObjectFileInfo>> =
-                self.object_files.lock().unwrap();
+            let my_lock = self.object_files.lock().unwrap();
 
             let object_file_info = my_lock.get(&mapping.build_id.clone().unwrap()).unwrap();
             let obj_path = object_file_info.path.clone();
@@ -877,8 +876,7 @@ impl Profiler<'_> {
                         unwinder,
                     });
 
-                    let mut my_lock: std::sync::MutexGuard<'_, HashMap<String, ObjectFileInfo>> =
-                        object_files_clone.lock().expect("lock");
+                    let mut my_lock = object_files_clone.lock().expect("lock");
 
                     let elf_load = elf_load(path);
 

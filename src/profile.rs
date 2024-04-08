@@ -2,20 +2,21 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::debug;
 
+use crate::bpf::profiler_bindings::native_stack_t;
+use crate::ksym::KsymIter;
+use crate::object::BuildId;
+use crate::profiler::ExecutableMapping;
 use crate::profiler::ObjectFileInfo;
 use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
-use crate::profiler::ExecutableMapping;
-use crate::profiler::SymbolizedAggregatedSample;
 use crate::profiler::SymbolizedAggregatedProfile;
-use crate::bpf::profiler_bindings::native_stack_t;
+use crate::profiler::SymbolizedAggregatedSample;
 use crate::usym::symbolize_native_stack_blaze;
-use crate::ksym::KsymIter;
 
 pub fn symbolize_profile(
     profile: &RawAggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
-    objs: &HashMap<String, ObjectFileInfo>,
+    objs: &HashMap<BuildId, ObjectFileInfo>,
 ) -> SymbolizedAggregatedProfile {
     let mut r = SymbolizedAggregatedProfile::new();
     let mut addresses_per_sample = HashMap::new();
@@ -81,7 +82,7 @@ fn fetch_symbols_for_profile(
     addresses_per_sample: &mut HashMap<PathBuf, HashMap<u64, String>>,
     profile: &RawAggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
-    objs: &HashMap<String, ObjectFileInfo>,
+    objs: &HashMap<BuildId, ObjectFileInfo>,
 ) -> anyhow::Result<()> {
     for sample in profile {
         let Some(native_stack) = sample.ustack else {
@@ -149,7 +150,7 @@ fn fetch_symbols_for_profile(
 fn symbolize_native_stack(
     addresses_per_sample: &mut HashMap<PathBuf, HashMap<u64, String>>,
     procs: &HashMap<i32, ProcessInfo>,
-    objs: &HashMap<String, ObjectFileInfo>,
+    objs: &HashMap<BuildId, ObjectFileInfo>,
     task_id: i32,
     native_stack: &native_stack_t,
 ) -> Vec<String> {

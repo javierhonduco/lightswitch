@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, span, Level};
 
+use crate::object::BuildId;
 use crate::profile::symbolize_profile;
 use crate::profiler::ObjectFileInfo;
 use crate::profiler::ProcessInfo;
@@ -11,7 +12,7 @@ use crate::profiler::SymbolizedAggregatedProfile;
 pub struct Collector {
     profiles: Vec<RawAggregatedProfile>,
     procs: HashMap<i32, ProcessInfo>,
-    objs: HashMap<String, ObjectFileInfo>,
+    objs: HashMap<BuildId, ObjectFileInfo>,
 }
 
 type ThreadSafeCollector = Arc<Mutex<Collector>>;
@@ -29,7 +30,7 @@ impl Collector {
         &mut self,
         profile: RawAggregatedProfile,
         procs: &HashMap<i32, ProcessInfo>,
-        objs: &HashMap<String, ObjectFileInfo>,
+        objs: &HashMap<BuildId, ObjectFileInfo>,
     ) {
         self.profiles.push(profile);
 
