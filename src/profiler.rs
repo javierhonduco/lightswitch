@@ -1218,7 +1218,7 @@ impl Profiler<'_> {
                     // Among other things, blazesym doesn't support symbolizing Go binaries.
                     if is_go(&abs_path) {
                         // todo: deal with CGO and friends
-                        return Ok(());
+                        return Err(anyhow!("Go applications are not supported yet"));
                     }
 
                     let Ok(build_id) = build_id(path) else {
