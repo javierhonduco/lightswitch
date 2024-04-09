@@ -16,7 +16,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
 use lightswitch::collector::Collector;
-use lightswitch::object::build_id;
+use lightswitch::object::ObjectFile;
 use lightswitch::profiler::Profiler;
 use lightswitch::unwind_info::{compact_printing_callback, UnwindInfoBuilder};
 use primal::is_prime;
@@ -141,7 +141,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if let Some(path) = args.show_info {
-        println!("build id {:?}", build_id(&PathBuf::from(path.clone())));
+        let objet_file = ObjectFile::new(&PathBuf::from(path.clone())).unwrap();
+        println!("build id {:?}", objet_file.build_id());
         let unwind_info: Result<UnwindInfoBuilder<'_>, anyhow::Error> =
             UnwindInfoBuilder::with_callback(&path, |_| {});
         println!("unwind info {:?}", unwind_info.unwrap().process());

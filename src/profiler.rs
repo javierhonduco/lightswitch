@@ -17,7 +17,7 @@ use tracing::{debug, error, info, span, warn, Level};
 use crate::bpf::profiler_bindings::*;
 use crate::bpf::profiler_skel::{ProfilerSkel, ProfilerSkelBuilder};
 use crate::collector::*;
-use crate::object::{build_id, elf_load, is_dynamic, is_go, BuildId};
+use crate::object::{BuildId, ObjectFile};
 use crate::perf_events::setup_perf_event;
 use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
 use crate::util::summarize_address_range;
@@ -839,17 +839,22 @@ impl Profiler<'_> {
                     abs_path.push(path);
 
                     let file = fs::File::open(path)?;
-
+                    let object_file = ObjectFile::new(path);
+                    if object_file.is_err() {
+                        warn!("object_file failed with {:?}", object_file);
+                        continue;
+                    }
+                    let object_file = object_file.unwrap();
                     let unwinder = Unwinder::NativeDwarf;
 
                     // Disable profiling Go applications as they are not properly supported yet.
                     // Among other things, blazesym doesn't support symbolizing Go binaries.
-                    if is_go(&abs_path) {
+                    if object_file.is_go() {
                         // todo: deal with CGO and friends
                         return Err(anyhow!("Go applications are not supported yet"));
                     }
 
-                    let Ok(build_id) = build_id(path) else {
+                    let Ok(build_id) = object_file.build_id() else {
                         continue;
                     };
 
@@ -877,19 +882,24 @@ impl Profiler<'_> {
 
                     let mut my_lock = object_files_clone.lock().expect("lock");
 
-                    let elf_load = elf_load(path);
-
-                    my_lock.insert(
-                        build_id,
-                        ObjectFileInfo {
-                            path: abs_path,
-                            file,
-                            load_offset: elf_load.offset,
-                            load_vaddr: elf_load.vaddr,
-                            is_dyn: is_dynamic(path),
-                            main_bin: i < 3,
-                        },
-                    );
+                    match object_file.elf_load() {
+                        Ok(elf_load) => {
+                            my_lock.insert(
+                                build_id,
+                                ObjectFileInfo {
+                                    path: abs_path,
+                                    file,
+                                    load_offset: elf_load.offset,
+                                    load_vaddr: elf_load.vaddr,
+                                    is_dyn: object_file.is_dynamic(),
+                                    main_bin: i < 3,
+                                },
+                            );
+                        }
+                        Err(e) => {
+                            warn!("elf_load() failed with {:?}", e);
+                        }
+                    }
                 }
                 procfs::process::MMapPath::Anonymous => {
                     mappings.push(ExecutableMapping {
