@@ -1,10 +1,14 @@
-name: upload
+name: static build and upload
 on:
     pull_request:
     push:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  upload:
+  static-build:
     runs-on: ubuntu-22.04
     permissions:
         id-token: write
