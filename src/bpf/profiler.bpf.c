@@ -54,13 +54,6 @@ struct {
   __uint(max_entries, 0);
 } events SEC(".maps");
 
-struct {
-  __uint(type, BPF_MAP_TYPE_HASH);
-  __uint(max_entries, MAX_PROCESSES);
-  __type(key, int);
-  __type(value, process_info_t);
-} process_info SEC(".maps");
-
 // Mapping of executable ID to unwind info chunks.
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
@@ -269,6 +262,15 @@ find_unwind_table(chunk_info_t **chunk_info, pid_t per_process_id, u64 pc, u64 *
 
   LOG("[error] could not find chunk");
   return FIND_UNWIND_CHUNK_NOT_FOUND;
+}
+
+static __always_inline bool process_is_known(int per_process_id) {
+  struct exec_mappings_key key = {};
+  key.prefix_len = PREFIX_LEN;
+  key.pid = __builtin_bswap32((u32) per_process_id);
+  key.data = 0;
+
+  return bpf_map_lookup_elem(&exec_mappings, &key) != NULL;
 }
 
 // Kernel addresses have the top bits set.
@@ -577,22 +579,14 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
         bpf_probe_read_user(&previous_rip, 8, (void *)(previous_rip_addr));
 
     if (previous_rip == 0) {
-      process_info_t *proc_info = bpf_map_lookup_elem(&process_info, &per_process_id);
-      if (proc_info == NULL) {
-        LOG("[error] should never happen");
-        return 1;
+      if (err == 0) {
+        LOG("[warn] previous_rip=0, maybe this is a JIT segment?");
+      } else {
+        LOG("[error] previous_rip should not be zero. This can mean that the "
+            "read failed, ret=%d while reading @ %llx.",
+            err, previous_rip_addr);
+        bump_unwind_error_catchall();
       }
-
-      if (proc_info->is_jit_compiler) {
-        LOG("[info] rip=0, Section not added, yet");
-        bump_unwind_error_jit();
-        return 1;
-      }
-
-      LOG("[error] previous_rip should not be zero. This can mean that the "
-          "read failed, ret=%d while reading @ %llx.",
-          err, previous_rip_addr);
-      bump_unwind_error_catchall();
       return 1;
     }
 
@@ -644,20 +638,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       add_stack(ctx, pid_tgid, unwind_state);
       bump_unwind_success_dwarf();
     } else {
-      process_info_t *proc_info =
-          bpf_map_lookup_elem(&process_info, &per_process_id);
-      if (proc_info == NULL) {
-        LOG("[error] should never happen 610");
-        return 1;
-      }
-
-      if (proc_info->is_jit_compiler) {
-        LOG("[info] Section not added, yet");
-        bump_unwind_error_jit();
-        return 1;
-      }
-
-      LOG("[error] Could not find unwind table and rbp != 0 (%llx). New "
+      LOG("[error] Could not find unwind table and rbp != 0 (%llx). Unknown "
           "mapping?",
           unwind_state->bp);
       // request_refresh_process_info(ctx, user_pid);
@@ -748,9 +729,7 @@ int on_event(struct bpf_perf_event_data *ctx) {
   profiler_state->stack_key.user_stack_id = 0;
   profiler_state->stack_key.kernel_stack_id = 0;
 
-  process_info_t *proc_info =
-      bpf_map_lookup_elem(&process_info, &per_process_id);
-  if (proc_info) {
+  if (process_is_known(per_process_id)) {
     bpf_printk("== unwinding with per_process_id: %d", per_process_id);
     bump_samples();
 
