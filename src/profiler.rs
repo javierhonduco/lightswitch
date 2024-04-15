@@ -20,6 +20,7 @@ use crate::collector::*;
 use crate::object::{build_id, elf_load, is_dynamic, is_go, BuildId};
 use crate::perf_events::setup_perf_event;
 use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
+use crate::util::summarize_address_range;
 
 // Some temporary data structures to get things going, this could use lots of
 // improvements
@@ -471,7 +472,6 @@ impl Profiler<'_> {
 
         // Local unwind info state
         let mut mappings = Vec::with_capacity(MAX_MAPPINGS_PER_PROCESS as usize);
-        let mut num_mappings: u32 = 0;
 
         // hack for kworkers and such
         let mut got_some_unwind_info: bool = true;
@@ -501,7 +501,6 @@ impl Profiler<'_> {
                         executable_id: 0,
                         type_: 1, // jitted
                     });
-                    num_mappings += 1;
                     continue;
                 }
                 MappingType::Vdso => {
@@ -512,7 +511,6 @@ impl Profiler<'_> {
                         executable_id: 0,
                         type_: 2, // vdso
                     });
-                    num_mappings += 1;
                     continue;
                 }
                 MappingType::FileBacked => {
@@ -559,7 +557,6 @@ impl Profiler<'_> {
                         executable_id: *executable_id,
                         type_: 0, // normal i think
                     });
-                    num_mappings += 1;
                     debug!("unwind info CACHED for executable");
                     continue;
                 }
@@ -578,7 +575,6 @@ impl Profiler<'_> {
                 executable_id: self.native_unwind_state.build_id_to_executable_id.len() as u32,
                 type_: 0, // normal i think
             });
-            num_mappings += 1;
 
             let build_id = mapping.build_id.clone().unwrap();
             // This is not released (see note "deadlock")
@@ -764,25 +760,28 @@ impl Profiler<'_> {
             self.native_unwind_state.dirty = true;
 
             // Add process info
-            // "default"
-            mappings.resize(
-                MAX_MAPPINGS_PER_PROCESS as usize,
-                mapping_t {
-                    load_address: 0,
-                    begin: 0,
-                    end: 0,
-                    executable_id: 0,
-                    type_: 0,
-                },
-            );
-            let boxed_slice = mappings.into_boxed_slice();
-            let boxed_array: Box<[mapping_t; MAX_MAPPINGS_PER_PROCESS as usize]> =
-                boxed_slice.try_into().expect("try into");
-            let proc_info = process_info_t {
-                is_jit_compiler: 0,
-                len: num_mappings,
-                mappings: *boxed_array, // check this doesn't go into the stack!!
-            };
+            for mapping in mappings {
+                for address_range in summarize_address_range(mapping.begin, mapping.end - 1) {
+                    let key = exec_mappings_key::new(
+                        pid.try_into().unwrap(),
+                        address_range.addr,
+                        address_range.range,
+                    );
+                    let value = mapping;
+
+                    self.bpf
+                        .maps()
+                        .exec_mappings()
+                        .update(
+                            unsafe { plain::as_bytes(&key) },
+                            unsafe { plain::as_bytes(&value) },
+                            MapFlags::ANY,
+                        )
+                        .unwrap();
+                }
+            }
+
+            let proc_info = process_info_t { is_jit_compiler: 0 };
             self.bpf
                 .maps()
                 .process_info()

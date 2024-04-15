@@ -112,7 +112,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let collector = Collector::new();
 
-    let mut p: Profiler<'_> = Profiler::new(false, args.duration, args.sample_freq);
+    let mut p: Profiler<'_> = Profiler::new(true, args.duration, args.sample_freq);
     p.profile_pids(args.pids);
     p.run(collector.clone());
 

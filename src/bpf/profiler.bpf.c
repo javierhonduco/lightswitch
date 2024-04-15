@@ -11,6 +11,13 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
+struct {
+  __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+  __type(key, struct exec_mappings_key);
+  __type(value, mapping_t);
+  __uint(map_flags, BPF_F_NO_PREALLOC);
+  __uint(max_entries, MAX_PROCESSES * 200);
+} exec_mappings SEC(".maps");
 
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
@@ -140,7 +147,7 @@ static void bump_samples() {
 
 // Binary search the unwind table to find the row index containing the unwind
 // information for a given program counter (pc).
-static u64 find_offset_for_pc(stack_unwind_table_t *table, u64 pc, u64 left,
+static __always_inline u64 find_offset_for_pc(stack_unwind_table_t *table, u64 pc, u64 left,
                               u64 right) {
   u64 found = BINARY_SEARCH_DEFAULT;
 
@@ -181,11 +188,8 @@ static u64 find_offset_for_pc(stack_unwind_table_t *table, u64 pc, u64 left,
 
 enum find_unwind_table_return {
   FIND_UNWIND_SUCCESS = 1,
-
-  FIND_UNWIND_MAPPING_SHOULD_NEVER_HAPPEN = 2,
-  FIND_UNWIND_MAPPING_EXHAUSTED_SEARCH = 3,
-  FIND_UNWIND_MAPPING_NOT_FOUND = 4,
-  FIND_UNWIND_CHUNK_NOT_FOUND = 5,
+  FIND_UNWIND_MAPPING_NOT_FOUND = 2,
+  FIND_UNWIND_CHUNK_NOT_FOUND = 3,
 
   FIND_UNWIND_JITTED = 100,
   FIND_UNWIND_SPECIAL = 200,
@@ -196,60 +200,42 @@ enum find_unwind_table_return {
 // address.
 static __always_inline enum find_unwind_table_return
 find_unwind_table(chunk_info_t **chunk_info, pid_t per_process_id, u64 pc, u64 *offset) {
-  process_info_t *proc_info = bpf_map_lookup_elem(&process_info, &per_process_id);
-  // Appease the verifier.
-  if (proc_info == NULL) {
-    LOG("[error] should never happen proc_info");
-    return FIND_UNWIND_MAPPING_SHOULD_NEVER_HAPPEN;
-  }
-
-  bool found = false;
   u32 executable_id = 0;
   u32 type = 0;
   u64 load_address = 0;
 
-  // Find the mapping.
-  for (u32 i = 0; i < MAX_MAPPINGS_PER_PROCESS; i++) {
-    if (i > proc_info->len) {
-      LOG("[info] mapping not found, i (%d) > proc_info->len (%d) pc: %llx", i,
-          proc_info->len, pc);
-      return FIND_UNWIND_MAPPING_EXHAUSTED_SEARCH;
-    }
+  struct exec_mappings_key key = {};
+  key.prefix_len = PREFIX_LEN;
+  key.pid = __builtin_bswap32((u32) per_process_id);
+  key.data = __builtin_bswap64(pc);
 
-    // Appease the verifier.
-    if (i < 0 || i > MAX_MAPPINGS_PER_PROCESS) {
-      LOG("[error] should never happen, verifier");
-      return FIND_UNWIND_MAPPING_SHOULD_NEVER_HAPPEN;
-    }
+  mapping_t *mapping = bpf_map_lookup_elem(&exec_mappings, &key);
 
-    if (proc_info->mappings[i].begin <= pc &&
-        pc <= proc_info->mappings[i].end) {
-      found = true;
-      executable_id = proc_info->mappings[i].executable_id;
-      load_address = proc_info->mappings[i].load_address;
-      bpf_printk("==== found load address %llx", load_address);
-
-      type = proc_info->mappings[i].type;
-      break;
-    }
+  if (mapping == NULL) {
+    LOG("[error] :((( no mapping for ip=%llx", pc);
+    return FIND_UNWIND_MAPPING_NOT_FOUND;
+  }
+  if (pc < mapping->begin || pc >= mapping->end) {
+    bpf_printk("[error] mapping not found %llx %llx %llx %d %d", mapping->begin, pc, mapping->end, pc >= mapping->begin, pc < mapping->end);
+    return FIND_UNWIND_MAPPING_NOT_FOUND;
   }
 
-  if (found) {
-    if (offset != NULL) {
-      *offset = load_address;
-    }
+  executable_id = mapping->executable_id;
+  load_address = mapping->load_address;
+  bpf_printk("==== found load address %llx", load_address);
+  type = mapping->type;
 
-    // "type" here is set in userspace in our `proc_info` map to indicate JITed
-    // and special sections, It is not something we get from procfs.
-    if (type == 1) {
-      return FIND_UNWIND_JITTED;
-    }
-    if (type == 2) {
-      return FIND_UNWIND_SPECIAL;
-    }
-  } else {
-    LOG("[warn] :((( no mapping for ip=%llx", pc);
-    return FIND_UNWIND_MAPPING_NOT_FOUND;
+  if (offset != NULL) {
+    *offset = load_address;
+  }
+
+  // "type" here is set in userspace in our `proc_info` map to indicate JITed
+  // and special sections, It is not something we get from procfs.
+  if (type == 1) {
+    return FIND_UNWIND_JITTED;
+  }
+  if (type == 2) {
+    return FIND_UNWIND_SPECIAL;
   }
 
   LOG("~about to check chunks, executable_id=%d", executable_id);
@@ -502,6 +488,10 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
           unwind_state->ip);
       reached_bottom_of_stack = true;
       break;
+    }
+
+    if (found_cfa_type == CFA_TYPE_OFFSET_DID_NOT_FIT) {
+      return 1;
     }
 
     if (found_rbp_type == RBP_TYPE_UNDEFINED_RETURN_ADDRESS) {
@@ -761,7 +751,7 @@ int on_event(struct bpf_perf_event_data *ctx) {
   process_info_t *proc_info =
       bpf_map_lookup_elem(&process_info, &per_process_id);
   if (proc_info) {
-    bpf_printk("== unwindin with per_process_id: %d", per_process_id);
+    bpf_printk("== unwinding with per_process_id: %d", per_process_id);
     bump_samples();
 
     u64 ip = 0;
