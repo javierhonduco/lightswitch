@@ -44,6 +44,7 @@ _Static_assert(1 << MAX_BINARY_SEARCH_DEPTH >= MAX_UNWIND_TABLE_SIZE,
 #define CFA_TYPE_EXPRESSION 3
 // Special values.
 #define CFA_TYPE_END_OF_FDE_MARKER 4
+#define CFA_TYPE_OFFSET_DID_NOT_FIT 5
 
 // Values for the unwind table's frame pointer type.
 #define RBP_TYPE_UNCHANGED 0
@@ -132,11 +133,22 @@ typedef struct {
   u64 end;
 } mapping_t;
 
+// Key for the longest prefix matching. This is defined
+// in the kernel in struct bpf_lpm_trie_key.
+struct exec_mappings_key {
+  u32 prefix_len;
+  u32 pid;
+  u64 data;
+};
+
+// Prefix size in bits, excluding the prefix length.
+#define PREFIX_LEN (sizeof(struct exec_mappings_key) - sizeof(u32)) * 8;
+
 // Executable mappings for a process.
 typedef struct {
   u32 is_jit_compiler;
-  u32 len;
-  mapping_t mappings[MAX_MAPPINGS_PER_PROCESS];
+  //u32 len;
+  // mapping_t mappings[MAX_MAPPINGS_PER_PROCESS];
 } process_info_t;
 
 // A row in the stack unwinding table for x86_64.

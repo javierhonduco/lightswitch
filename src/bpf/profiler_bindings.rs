@@ -13,6 +13,18 @@ unsafe impl Plain for Event {}
 unsafe impl Plain for process_info_t {}
 unsafe impl Plain for unwind_info_chunks_t {}
 unsafe impl Plain for unwinder_stats_t {}
+unsafe impl Plain for exec_mappings_key {}
+unsafe impl Plain for mapping_t {}
+
+impl exec_mappings_key {
+    pub fn new(pid: u32, address: u64, prefix: u32) -> Self {
+        Self {
+            prefix_len: 32 + prefix,
+            pid: pid.to_be(),
+            data: address.to_be(),
+        }
+    }
+}
 
 impl Add for unwinder_stats_t {
     type Output = Self;

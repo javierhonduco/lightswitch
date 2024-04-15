@@ -7,3 +7,4 @@ pub mod profile;
 pub mod profiler;
 pub mod unwind_info;
 pub mod usym;
+pub mod util;
