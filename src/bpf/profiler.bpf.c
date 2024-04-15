@@ -76,6 +76,14 @@ struct {
   __type(value, struct unwinder_stats_t);
 } percpu_stats SEC(".maps");
 
+
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, MAX_PROCESSES);
+  __type(key, Event);
+  __type(value, bool);
+} rate_limits SEC(".maps");
+
 /*=========================== HELPER FUNCTIONS ==============================*/
 
 #define DEFINE_COUNTER(__func__name)                                           \
@@ -206,6 +214,26 @@ static __always_inline bool process_is_known(int per_process_id) {
   key.data = 0;
 
   return bpf_map_lookup_elem(&exec_mappings, &key) != NULL;
+}
+
+static __always_inline void event_new_process(struct bpf_perf_event_data *ctx, int per_process_id) {
+  Event event = {
+      .type = EVENT_NEW_PROCESS,
+      .pid = per_process_id,
+  };
+
+  bool *is_rate_limited = bpf_map_lookup_elem(&rate_limits, &event);
+  if (is_rate_limited != NULL && *is_rate_limited) {
+    LOG("event_new_process was rate limited");
+    return;
+  }
+
+  if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &event, sizeof(Event)) < 0) {
+    bump_unwind_error_sending_new_process_event();
+  }
+
+  bool rate_limited = true;
+  bpf_map_update_elem(&rate_limits, &event, &rate_limited, BPF_ANY);
 }
 
 // Kernel addresses have the top bits set.
@@ -689,14 +717,7 @@ int on_event(struct bpf_perf_event_data *ctx) {
     return 0;
   }
 
-  Event event = {
-      .type = EVENT_NEW_PROCESS,
-      .pid = per_process_id,
-  };
-  if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &event, sizeof(Event)) < 0) {
-    bump_unwind_error_sending_new_process_event();
-  }
-
+  event_new_process(ctx, per_process_id);
   return 0;
 }
 
