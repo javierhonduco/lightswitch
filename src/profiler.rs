@@ -465,6 +465,18 @@ impl Profiler<'_> {
             .expect("update"); // error with  value: System(7)', src/main.rs:663:26
     }
 
+    fn add_bpf_mapping(
+        &mut self,
+        key: &exec_mappings_key,
+        value: &mapping_t,
+    ) -> Result<(), libbpf_rs::Error> {
+        self.bpf.maps().exec_mappings().update(
+            unsafe { plain::as_bytes(key) },
+            unsafe { plain::as_bytes(value) },
+            MapFlags::ANY,
+        )
+    }
+
     fn add_unwind_info(&mut self, pid: i32) {
         if !self.process_is_known(pid) {
             panic!("add_unwind_info -- expected process to be known");
@@ -759,6 +771,14 @@ impl Profiler<'_> {
         if got_some_unwind_info {
             self.native_unwind_state.dirty = true;
 
+            // Add entry just with the pid to signal processes that we already know about.
+            let key = exec_mappings_key::new(
+                pid.try_into().unwrap(),
+                0x0,
+                32, // pid bits
+            );
+            self.add_bpf_mapping(&key, &mapping_t::default()).unwrap();
+
             // Add process info
             for mapping in mappings {
                 for address_range in summarize_address_range(mapping.begin, mapping.end - 1) {
@@ -767,30 +787,10 @@ impl Profiler<'_> {
                         address_range.addr,
                         address_range.range,
                     );
-                    let value = mapping;
 
-                    self.bpf
-                        .maps()
-                        .exec_mappings()
-                        .update(
-                            unsafe { plain::as_bytes(&key) },
-                            unsafe { plain::as_bytes(&value) },
-                            MapFlags::ANY,
-                        )
-                        .unwrap();
+                    self.add_bpf_mapping(&key, &mapping).unwrap();
                 }
             }
-
-            let proc_info = process_info_t { is_jit_compiler: 0 };
-            self.bpf
-                .maps()
-                .process_info()
-                .update(
-                    &pid.to_ne_bytes(),
-                    unsafe { plain::as_bytes(&proc_info) },
-                    MapFlags::ANY,
-                )
-                .unwrap();
         }
     }
 

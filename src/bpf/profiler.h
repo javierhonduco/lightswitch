@@ -144,13 +144,6 @@ struct exec_mappings_key {
 // Prefix size in bits, excluding the prefix length.
 #define PREFIX_LEN (sizeof(struct exec_mappings_key) - sizeof(u32)) * 8;
 
-// Executable mappings for a process.
-typedef struct {
-  u32 is_jit_compiler;
-  //u32 len;
-  // mapping_t mappings[MAX_MAPPINGS_PER_PROCESS];
-} process_info_t;
-
 // A row in the stack unwinding table for x86_64.
 typedef struct __attribute__((packed)) {
   u64 pc;
