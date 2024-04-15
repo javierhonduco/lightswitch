@@ -43,7 +43,16 @@ impl Add for unwinder_stats_t {
             error_should_never_happen: self.error_should_never_happen
                 + other.error_should_never_happen,
             error_pc_not_covered: self.error_pc_not_covered + other.error_pc_not_covered,
-            error_jit: self.error_jit + other.error_jit,
+            error_binary_search_exausted_iterations: self.error_binary_search_exausted_iterations
+                + other.error_binary_search_exausted_iterations,
+            error_chunk_not_found: self.error_chunk_not_found + other.error_chunk_not_found,
+            error_mapping_does_not_contain_pc: self.error_mapping_does_not_contain_pc
+                + other.error_mapping_does_not_contain_pc,
+            error_mapping_not_found: self.error_mapping_not_found + other.error_mapping_not_found,
+            error_sending_new_process_event: self.error_sending_new_process_event
+                + other.error_sending_new_process_event,
+            error_cfa_offset_did_not_fit: self.error_cfa_offset_did_not_fit
+                + other.error_cfa_offset_did_not_fit,
         }
     }
 }
