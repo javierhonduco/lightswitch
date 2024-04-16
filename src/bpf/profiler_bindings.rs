@@ -10,9 +10,20 @@ include!(concat!(env!("OUT_DIR"), "/profiler_bindings.rs"));
 unsafe impl Plain for stack_count_key_t {}
 unsafe impl Plain for native_stack_t {}
 unsafe impl Plain for Event {}
-unsafe impl Plain for process_info_t {}
 unsafe impl Plain for unwind_info_chunks_t {}
 unsafe impl Plain for unwinder_stats_t {}
+unsafe impl Plain for exec_mappings_key {}
+unsafe impl Plain for mapping_t {}
+
+impl exec_mappings_key {
+    pub fn new(pid: u32, address: u64, prefix: u32) -> Self {
+        Self {
+            prefix_len: 32 + prefix,
+            pid: pid.to_be(),
+            data: address.to_be(),
+        }
+    }
+}
 
 impl Add for unwinder_stats_t {
     type Output = Self;
@@ -32,37 +43,16 @@ impl Add for unwinder_stats_t {
             error_should_never_happen: self.error_should_never_happen
                 + other.error_should_never_happen,
             error_pc_not_covered: self.error_pc_not_covered + other.error_pc_not_covered,
-            error_jit: self.error_jit + other.error_jit,
-        }
-    }
-}
-
-#[allow(clippy::derivable_impls)]
-impl Default for unwinder_stats_t {
-    fn default() -> Self {
-        Self {
-            total: 0,
-            success_dwarf: 0,
-            error_truncated: 0,
-            error_unsupported_expression: 0,
-            error_unsupported_frame_pointer_action: 0,
-            error_unsupported_cfa_register: 0,
-            error_catchall: 0,
-            error_should_never_happen: 0,
-            error_pc_not_covered: 0,
-            error_jit: 0,
-        }
-    }
-}
-
-#[allow(clippy::derivable_impls)]
-impl Default for stack_count_key_t {
-    fn default() -> Self {
-        Self {
-            task_id: 0,
-            pid: 0,
-            user_stack_id: 0,
-            kernel_stack_id: 0,
+            error_binary_search_exausted_iterations: self.error_binary_search_exausted_iterations
+                + other.error_binary_search_exausted_iterations,
+            error_chunk_not_found: self.error_chunk_not_found + other.error_chunk_not_found,
+            error_mapping_does_not_contain_pc: self.error_mapping_does_not_contain_pc
+                + other.error_mapping_does_not_contain_pc,
+            error_mapping_not_found: self.error_mapping_not_found + other.error_mapping_not_found,
+            error_sending_new_process_event: self.error_sending_new_process_event
+                + other.error_sending_new_process_event,
+            error_cfa_offset_did_not_fit: self.error_cfa_offset_did_not_fit
+                + other.error_cfa_offset_did_not_fit,
         }
     }
 }

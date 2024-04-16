@@ -1,3 +1,11 @@
+use std::fs;
+use std::io::Read;
+use std::path::PathBuf;
+
+use data_encoding::HEXUPPER;
+use memmap2;
+use ring::digest::{Context, Digest, SHA256};
+
 use object::elf::FileHeader64;
 use object::read::elf::FileHeader;
 use object::read::elf::ProgramHeader;
@@ -6,17 +14,8 @@ use object::Object;
 use object::ObjectKind;
 use object::ObjectSection;
 
-use ring::digest::{Context, Digest, SHA256};
-use std::fs;
-
-use std::io::Read;
-use std::path::PathBuf;
-
-use data_encoding::HEXUPPER;
-use memmap2;
-
-#[allow(dead_code)]
-enum BuildId {
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+pub enum BuildId {
     Gnu(String),
     Go(String),
     Sha256(String),
@@ -37,7 +36,7 @@ fn sha256_digest<R: Read>(mut reader: R) -> Digest {
     context.finish()
 }
 
-pub fn build_id(path: &PathBuf) -> anyhow::Result<String> {
+pub fn build_id(path: &PathBuf) -> anyhow::Result<BuildId> {
     let file = fs::File::open(path).unwrap();
     let mmap = unsafe { memmap2::Mmap::map(&file) }.unwrap();
     let object = object::File::parse(&*mmap).unwrap();
@@ -45,23 +44,27 @@ pub fn build_id(path: &PathBuf) -> anyhow::Result<String> {
     let build_id = object.build_id()?;
 
     if let Some(bytes) = build_id {
-        return Ok(bytes
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<Vec<_>>()
-            .join(""));
-    }
-
-    // Golang.
-    for section in object.sections() {
-        if section.name().unwrap() == ".note.go.buildid" {
-            return Ok(section
-                .data()
-                .unwrap()
+        return Ok(BuildId::Gnu(
+            bytes
                 .iter()
                 .map(|b| format!("{:02x}", b))
                 .collect::<Vec<_>>()
-                .join(""));
+                .join(""),
+        ));
+    }
+
+    // Golang (the Go toolchain does not interpret these bytes as we do).
+    for section in object.sections() {
+        if section.name().unwrap() == ".note.go.buildid" {
+            return Ok(BuildId::Go(
+                section
+                    .data()
+                    .unwrap()
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<Vec<_>>()
+                    .join(""),
+            ));
         }
     }
 
@@ -69,12 +72,14 @@ pub fn build_id(path: &PathBuf) -> anyhow::Result<String> {
     for section in object.sections() {
         if section.name().unwrap() == ".text" {
             if let Ok(section) = section.data() {
-                return Ok(HEXUPPER.encode(sha256_digest(section).as_ref()));
+                return Ok(BuildId::Sha256(
+                    HEXUPPER.encode(sha256_digest(section).as_ref()),
+                ));
             }
         }
     }
 
-    panic!("err: default (maybe go?) {:?}", path);
+    unreachable!("A build id should always be returned");
 }
 
 pub fn is_dynamic(path: &PathBuf) -> bool {
@@ -103,7 +108,12 @@ pub fn is_go(path: &PathBuf) -> bool {
     false
 }
 
-pub fn elf_load(path: &PathBuf) -> (u64, u64) {
+pub struct ElfLoad {
+    pub offset: u64,
+    pub vaddr: u64,
+}
+
+pub fn elf_load(path: &PathBuf) -> ElfLoad {
     let file = fs::File::open(path).unwrap();
     let mmap = unsafe { memmap2::Mmap::map(&file) }.unwrap();
     object::File::parse(&*mmap).unwrap();
@@ -112,5 +122,8 @@ pub fn elf_load(path: &PathBuf) -> (u64, u64) {
     let segments = header.program_headers(endian, &*mmap).unwrap();
     let s = segments.iter().next().unwrap();
 
-    (s.p_offset(endian), s.p_vaddr(endian))
+    ElfLoad {
+        offset: s.p_offset(endian),
+        vaddr: s.p_vaddr(endian),
+    }
 }

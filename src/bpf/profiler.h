@@ -44,6 +44,7 @@ _Static_assert(1 << MAX_BINARY_SEARCH_DEPTH >= MAX_UNWIND_TABLE_SIZE,
 #define CFA_TYPE_EXPRESSION 3
 // Special values.
 #define CFA_TYPE_END_OF_FDE_MARKER 4
+#define CFA_TYPE_OFFSET_DID_NOT_FIT 5
 
 // Values for the unwind table's frame pointer type.
 #define RBP_TYPE_UNCHANGED 0
@@ -64,13 +65,7 @@ _Static_assert(1 << MAX_BINARY_SEARCH_DEPTH >= MAX_UNWIND_TABLE_SIZE,
 
 #define ENABLE_STATS_PRINTING false
 
-// Stack walking methods.
-enum stack_walking_method {
-  STACK_WALKING_METHOD_FP = 0,
-  STACK_WALKING_METHOD_DWARF = 1,
-};
-
-struct unwinder_config_t {
+struct lightswitch_config_t {
   bool verbose_logging;
 };
 
@@ -84,10 +79,15 @@ struct unwinder_stats_t {
   u64 error_catchall;
   u64 error_should_never_happen;
   u64 error_pc_not_covered;
-  u64 error_jit;
+  u64 error_mapping_not_found;
+  u64 error_mapping_does_not_contain_pc;
+  u64 error_chunk_not_found;
+  u64 error_binary_search_exausted_iterations;
+  u64 error_sending_new_process_event;
+  u64 error_cfa_offset_did_not_fit;
 };
 
-const volatile struct unwinder_config_t unwinder_config = {.verbose_logging =
+const volatile struct lightswitch_config_t lightswitch_config = {.verbose_logging =
                                                                true};
 
 // A different stack produced the same hash.
@@ -97,7 +97,7 @@ const volatile struct unwinder_config_t unwinder_config = {.verbose_logging =
 
 #define LOG(fmt, ...)                                                          \
   ({                                                                           \
-    if (unwinder_config.verbose_logging) {                                     \
+    if (lightswitch_config.verbose_logging) {                                     \
       bpf_printk(fmt, ##__VA_ARGS__);                                          \
     }                                                                          \
   })
@@ -132,12 +132,16 @@ typedef struct {
   u64 end;
 } mapping_t;
 
-// Executable mappings for a process.
-typedef struct {
-  u32 is_jit_compiler;
-  u32 len;
-  mapping_t mappings[MAX_MAPPINGS_PER_PROCESS];
-} process_info_t;
+// Key for the longest prefix matching. This is defined
+// in the kernel in struct bpf_lpm_trie_key.
+struct exec_mappings_key {
+  u32 prefix_len;
+  u32 pid;
+  u64 data;
+};
+
+// Prefix size in bits, excluding the prefix length.
+#define PREFIX_LEN (sizeof(struct exec_mappings_key) - sizeof(u32)) * 8;
 
 // A row in the stack unwinding table for x86_64.
 typedef struct __attribute__((packed)) {

@@ -1,227 +1,31 @@
-use tracing::{debug, error, info, span, warn, Level};
+use std::collections::HashMap;
+use std::fs;
+use std::os::fd::{AsFd, AsRawFd};
+use std::path::PathBuf;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
-use crate::bpf::profiler_skel::{ProfilerSkel, ProfilerSkelBuilder};
-use crate::ksym::KsymIter;
-use crate::object::{build_id, elf_load, is_dynamic, is_go};
-use crate::perf_events::setup_perf_event;
-use crate::unwind_info::CfaType;
-use crate::unwind_info::{end_of_function_marker, CompactUnwindRow, UnwindData, UnwindInfoBuilder};
-use crate::usym::symbolize_native_stack_blaze;
 use anyhow::anyhow;
 use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
 use libbpf_rs::skel::{OpenSkel, Skel};
-use libbpf_rs::Link;
-use libbpf_rs::MapFlags;
-use libbpf_rs::PerfBufferBuilder;
+use libbpf_rs::{Link, MapFlags, PerfBufferBuilder};
 use procfs;
-use std::collections::HashMap;
-use std::fs;
-use std::os::fd::AsFd;
-use std::os::fd::AsRawFd;
-use std::path::PathBuf;
-
-use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
-use std::time::Duration;
-use std::time::Instant;
+use tracing::{debug, error, info, span, warn, Level};
 
 use crate::bpf::profiler_bindings::*;
-
-fn symbolize_profile(
-    profile: &RawAggregatedProfile,
-    procs: &HashMap<i32, ProcessInfo>,
-    objs: &HashMap<String, ObjectFileInfo>,
-) -> SymbolizedAggregatedProfile {
-    let mut r = SymbolizedAggregatedProfile::new();
-    let mut addresses_per_sample = HashMap::new();
-
-    let _ = fetch_symbols_for_profile(&mut addresses_per_sample, profile, procs, objs); // best effort
-
-    let ksyms: Vec<crate::ksym::Ksym> = KsymIter::from_kallsyms().collect();
-
-    for sample in profile {
-        let mut symbolized_sample: SymbolizedAggregatedSample = SymbolizedAggregatedSample {
-            pid: sample.pid,
-            count: sample.count,
-            ..Default::default()
-        };
-        symbolized_sample.pid = sample.pid;
-        symbolized_sample.count = sample.count;
-
-        if let Some(ustack) = sample.ustack {
-            symbolized_sample.ustack =
-                symbolize_native_stack(&mut addresses_per_sample, procs, objs, sample.pid, &ustack);
-        };
-
-        if let Some(kstack) = sample.kstack {
-            for (i, addr) in kstack.addresses.into_iter().enumerate() {
-                if i >= kstack.len as usize {
-                    continue;
-                }
-                let le_symbol = match ksyms.binary_search_by(|el| el.start_addr.cmp(&addr)) {
-                    Ok(idx) => ksyms[idx].clone(),
-                    Err(idx) => {
-                        if idx > 0 {
-                            ksyms[idx - 1].clone()
-                        } else {
-                            crate::ksym::Ksym {
-                                start_addr: idx as u64,
-                                symbol_name: format!("<not found {}>", addr),
-                            }
-                            .clone()
-                        }
-                    }
-                };
-                symbolized_sample.kstack.push(le_symbol.symbol_name);
-            }
-        };
-
-        r.push(symbolized_sample);
-    }
-
-    r
-}
-
-fn find_mapping(mappings: &[ExecutableMapping], addr: u64) -> Option<ExecutableMapping> {
-    for mapping in mappings {
-        if mapping.start_addr <= addr && addr <= mapping.end_addr {
-            return Some(mapping.clone());
-        }
-    }
-
-    None
-}
-
-fn fetch_symbols_for_profile(
-    addresses_per_sample: &mut HashMap<PathBuf, HashMap<u64, String>>,
-    profile: &RawAggregatedProfile,
-    procs: &HashMap<i32, ProcessInfo>,
-    objs: &HashMap<String, ObjectFileInfo>,
-) -> anyhow::Result<()> {
-    for sample in profile {
-        let Some(native_stack) = sample.ustack else {
-            continue;
-        };
-        let task_id = sample.pid;
-
-        // We should really continue
-        // Also it would be ideal not to have to query procfs again...
-        let p = procfs::process::Process::new(task_id)?;
-        let status = p.status()?;
-        let tgid = status.tgid;
-
-        let Some(info) = procs.get(&tgid) else {
-            continue;
-        };
-
-        for (i, addr) in native_stack.addresses.into_iter().enumerate() {
-            if native_stack.len <= i.try_into().unwrap() {
-                continue;
-            }
-
-            let Some(mapping) = find_mapping(&info.mappings, addr) else {
-                continue; //return Err(anyhow!("could not find mapping"));
-            };
-
-            match &mapping.build_id {
-                Some(build_id) => {
-                    match objs.get(build_id) {
-                        Some(obj) => {
-                            // We need the normalized address for normal object files
-                            // and might need the absolute addresses for JITs
-                            let normalized_addr = addr - mapping.start_addr + mapping.offset
-                                - obj.elf_load.0
-                                + obj.elf_load.1;
-
-                            let key = obj.path.clone();
-                            let addrs = addresses_per_sample.entry(key).or_default();
-                            addrs.insert(normalized_addr, "".to_string()); // <- default value is a bit janky
-                        }
-                        None => {
-                            println!("\t\t - [no build id found]");
-                        }
-                    }
-                }
-                None => {
-                    println!("\t\t - mapping is not backed by a file, could be a JIT segment");
-                }
-            }
-        }
-    }
-
-    // second pass, symbolize
-    for (path, addr_to_symbol_mapping) in addresses_per_sample.iter_mut() {
-        let addresses = addr_to_symbol_mapping.iter().map(|a| *a.0 - 1).collect();
-        let symbols: Vec<String> = symbolize_native_stack_blaze(addresses, path);
-        for (addr, symbol) in addr_to_symbol_mapping.clone().iter_mut().zip(symbols) {
-            addr_to_symbol_mapping.insert(*addr.0, symbol.to_string());
-        }
-    }
-
-    Ok(())
-}
-
-fn symbolize_native_stack(
-    addresses_per_sample: &mut HashMap<PathBuf, HashMap<u64, String>>,
-    procs: &HashMap<i32, ProcessInfo>,
-    objs: &HashMap<String, ObjectFileInfo>,
-    task_id: i32,
-    native_stack: &native_stack_t,
-) -> Vec<String> {
-    let mut r = Vec::new();
-
-    for (i, addr) in native_stack.addresses.into_iter().enumerate() {
-        if native_stack.len <= i.try_into().unwrap() {
-            break;
-        }
-
-        let Some(info) = procs.get(&task_id) else {
-            return r;
-            //return Err(anyhow!("process not found"));
-        };
-
-        let Some(mapping) = find_mapping(&info.mappings, addr) else {
-            return r;
-            //return Err(anyhow!("could not find mapping"));
-        };
-
-        // finally
-        match &mapping.build_id {
-            Some(build_id) => match objs.get(build_id) {
-                Some(obj) => {
-                    let normalized_addr = addr - mapping.start_addr + mapping.offset
-                        - obj.elf_load.0
-                        + obj.elf_load.1;
-
-                    let func_name = match addresses_per_sample.get(&obj.path) {
-                        Some(value) => match value.get(&normalized_addr) {
-                            Some(v) => v.to_string(),
-                            None => "<failed to fetch symbol for addr>".to_string(),
-                        },
-                        None => "<failed to symbolize>".to_string(),
-                    };
-                    //println!("\t\t - {:?}", name);
-                    r.push(func_name.to_string());
-                }
-                None => {
-                    debug!("\t\t - [no build id found]");
-                }
-            },
-            None => {
-                debug!("\t\t - mapping is not backed by a file, could be a JIT segment");
-            }
-        }
-    }
-
-    r
-    // Ok(())
-}
+use crate::bpf::profiler_skel::{ProfilerSkel, ProfilerSkelBuilder};
+use crate::collector::*;
+use crate::object::{build_id, elf_load, is_dynamic, is_go, BuildId};
+use crate::perf_events::setup_perf_event;
+use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
+use crate::util::summarize_address_range;
 
 // Some temporary data structures to get things going, this could use lots of
 // improvements
 #[derive(Debug, Clone)]
-enum MappingType {
+pub enum MappingType {
     FileBacked,
     Anonymous,
     Vdso,
@@ -229,21 +33,21 @@ enum MappingType {
 
 #[derive(Clone)]
 pub struct ProcessInfo {
-    mappings: Vec<ExecutableMapping>,
+    pub mappings: Vec<ExecutableMapping>,
 }
 
 #[allow(dead_code)]
 pub struct ObjectFileInfo {
-    file: fs::File,
-    path: PathBuf,
-    // p_offset, p_vaddr
-    elf_load: (u64, u64),
-    is_dyn: bool,
-    main_bin: bool,
+    pub file: fs::File,
+    pub path: PathBuf,
+    pub load_offset: u64,
+    pub load_vaddr: u64,
+    pub is_dyn: bool,
+    pub main_bin: bool,
 }
 
 #[derive(Debug, Clone)]
-enum Unwinder {
+pub enum Unwinder {
     Unknown,
     NativeFramePointers,
     NativeDwarf,
@@ -251,140 +55,22 @@ enum Unwinder {
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-struct ExecutableMapping {
+pub struct ExecutableMapping {
     // No build id means either JIT or that we could not fetch it. Change this.
-    build_id: Option<String>,
-    kind: MappingType,
-    start_addr: u64,
-    end_addr: u64,
-    offset: u64,
-    load_address: u64,
-    unwinder: Unwinder,
+    pub build_id: Option<BuildId>,
+    pub kind: MappingType,
+    pub start_addr: u64,
+    pub end_addr: u64,
+    pub offset: u64,
+    pub load_address: u64,
+    pub unwinder: Unwinder,
     // Add (inode, ctime) and whether the file is in the root namespace
 }
-
-// Must be sorted. Also, not very optimized as of now.
-pub fn remove_unnecesary_markers(info: &Vec<stack_unwind_row_t>) -> Vec<stack_unwind_row_t> {
-    let mut unwind_info = Vec::with_capacity(info.len());
-    let mut last_row: Option<stack_unwind_row_t> = None;
-
-    for row in info {
-        if let Some(last_row_unwrapped) = last_row {
-            let previous_is_redundant_marker = (last_row_unwrapped.cfa_type
-                == CfaType::EndFdeMarker as u8)
-                && last_row_unwrapped.pc == row.pc;
-            if previous_is_redundant_marker {
-                unwind_info.pop();
-            }
-        }
-
-        let mut current_is_redundant_marker = false;
-        if let Some(last_row_unwrapped) = last_row {
-            current_is_redundant_marker =
-                (row.cfa_type == CfaType::EndFdeMarker as u8) && last_row_unwrapped.pc == row.pc;
-        }
-
-        if !current_is_redundant_marker {
-            unwind_info.push(*row);
-        }
-
-        last_row = Some(*row);
-    }
-
-    unwind_info
-}
-
-// Must be sorted. Also, not very optimized as of now.
-pub fn remove_redundant(info: &Vec<stack_unwind_row_t>) -> Vec<stack_unwind_row_t> {
-    let mut unwind_info = Vec::with_capacity(info.len());
-    let mut last_row: Option<stack_unwind_row_t> = None;
-
-    for row in info {
-        let mut redundant = false;
-        if let Some(last_row_unwrapped) = last_row {
-            redundant = row.cfa_type == last_row_unwrapped.cfa_type
-                && row.cfa_offset == last_row_unwrapped.cfa_offset
-                && row.rbp_type == last_row_unwrapped.rbp_type
-                && row.rbp_offset == last_row_unwrapped.rbp_offset;
-        }
-
-        if !redundant {
-            unwind_info.push(*row);
-        }
-
-        last_row = Some(*row);
-    }
-
-    unwind_info
-}
-
-fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<stack_unwind_row_t>> {
-    let mut unwind_info = Vec::new();
-    let mut last_function_end_addr: Option<u64> = None;
-    let mut last_row = None;
-    let builder = UnwindInfoBuilder::with_callback(path, |unwind_data| {
-        match unwind_data {
-            UnwindData::Function(_, end_addr) => {
-                // Add the end addr when we hit a new func
-                match last_function_end_addr {
-                    Some(addr) => {
-                        let marker = end_of_function_marker(addr);
-
-                        let row: stack_unwind_row_t = stack_unwind_row_t {
-                            pc: marker.pc,
-                            cfa_offset: marker.cfa_offset,
-                            cfa_type: marker.cfa_type,
-                            rbp_type: marker.rbp_type,
-                            rbp_offset: marker.rbp_offset,
-                        };
-                        unwind_info.push(row)
-                    }
-                    None => {
-                        // todo: cleanup
-                    }
-                }
-                last_function_end_addr = Some(*end_addr);
-            }
-            UnwindData::Instruction(compact_row) => {
-                let row = stack_unwind_row_t {
-                    pc: compact_row.pc,
-                    cfa_offset: compact_row.cfa_offset,
-                    cfa_type: compact_row.cfa_type,
-                    rbp_type: compact_row.rbp_type,
-                    rbp_offset: compact_row.rbp_offset,
-                };
-                unwind_info.push(row);
-                last_row = Some(*compact_row)
-            }
-        }
-    });
-
-    builder?.process()?;
-
-    if last_function_end_addr.is_none() {
-        error!("no last func end addr");
-        return Err(anyhow!("not sure what's going on"));
-    }
-
-    // Add the last marker
-    let marker: CompactUnwindRow = end_of_function_marker(last_function_end_addr.unwrap());
-    let row = stack_unwind_row_t {
-        pc: marker.pc,
-        cfa_offset: marker.cfa_offset,
-        cfa_type: marker.cfa_type,
-        rbp_type: marker.rbp_type,
-        rbp_offset: marker.rbp_offset,
-    };
-    unwind_info.push(row);
-
-    Ok(unwind_info)
-}
-
 pub struct NativeUnwindState {
     dirty: bool,
     last_persisted: Instant,
     live_shard: Vec<stack_unwind_row_t>,
-    build_id_to_executable_id: HashMap<String, u32>,
+    build_id_to_executable_id: HashMap<BuildId, u32>,
     shard_index: u64,
 }
 
@@ -394,7 +80,7 @@ pub struct Profiler<'bpf> {
     bpf: ProfilerSkel<'bpf>,
     // Profiler state
     procs: Arc<Mutex<HashMap<i32, ProcessInfo>>>,
-    object_files: Arc<Mutex<HashMap<String, ObjectFileInfo>>>,
+    object_files: Arc<Mutex<HashMap<BuildId, ObjectFileInfo>>>,
     // Channel for bpf events,.
     chan_send: Arc<Mutex<mpsc::Sender<Event>>>,
     chan_receive: Arc<Mutex<mpsc::Receiver<Event>>>,
@@ -412,61 +98,6 @@ pub struct Profiler<'bpf> {
     session_duration: Duration,
 }
 
-pub struct Collector {
-    profiles: Vec<RawAggregatedProfile>,
-    procs: HashMap<i32, ProcessInfo>,
-    objs: HashMap<String, ObjectFileInfo>,
-}
-
-type ThreadSafeCollector = Arc<Mutex<Collector>>;
-
-impl Collector {
-    pub fn new() -> ThreadSafeCollector {
-        Arc::new(Mutex::new(Self {
-            profiles: Vec::new(),
-            procs: HashMap::new(),
-            objs: HashMap::new(),
-        }))
-    }
-
-    pub fn collect(
-        &mut self,
-        profile: RawAggregatedProfile,
-        procs: &HashMap<i32, ProcessInfo>,
-        objs: &HashMap<String, ObjectFileInfo>,
-    ) {
-        self.profiles.push(profile);
-
-        for (k, v) in procs {
-            self.procs.insert(*k, v.clone());
-        }
-
-        for (k, v) in objs {
-            self.objs.insert(
-                k.clone(),
-                ObjectFileInfo {
-                    file: std::fs::File::open(v.path.clone()).unwrap(),
-                    path: v.path.clone(),
-                    elf_load: v.elf_load,
-                    is_dyn: v.is_dyn,
-                    main_bin: v.main_bin,
-                },
-            );
-        }
-    }
-
-    pub fn finish(&self) -> Vec<SymbolizedAggregatedProfile> {
-        let _span: span::EnteredSpan = span!(Level::DEBUG, "symbolize_profiles").entered();
-
-        debug!("Collector::finish {}", self.profiles.len());
-        let mut r = Vec::new();
-        for profile in &self.profiles {
-            r.push(symbolize_profile(profile, &self.procs, &self.objs));
-        }
-        r
-    }
-}
-
 // Static config
 const MAX_SHARDS: u64 = MAX_UNWIND_INFO_SHARDS as u64;
 const SHARD_CAPACITY: usize = MAX_UNWIND_TABLE_SIZE as usize;
@@ -476,10 +107,10 @@ const PERF_BUFFER_BYTES: usize = 512 * 1024;
 
 #[allow(dead_code)]
 pub struct RawAggregatedSample {
-    pid: i32,
-    ustack: Option<native_stack_t>,
-    kstack: Option<native_stack_t>,
-    count: u64,
+    pub pid: i32,
+    pub ustack: Option<native_stack_t>,
+    pub kstack: Option<native_stack_t>,
+    pub count: u64,
 }
 
 #[derive(Default, Debug)]
@@ -834,6 +465,18 @@ impl Profiler<'_> {
             .expect("update"); // error with  value: System(7)', src/main.rs:663:26
     }
 
+    fn add_bpf_mapping(
+        &mut self,
+        key: &exec_mappings_key,
+        value: &mapping_t,
+    ) -> Result<(), libbpf_rs::Error> {
+        self.bpf.maps().exec_mappings().update(
+            unsafe { plain::as_bytes(key) },
+            unsafe { plain::as_bytes(value) },
+            MapFlags::ANY,
+        )
+    }
+
     fn add_unwind_info(&mut self, pid: i32) {
         if !self.process_is_known(pid) {
             panic!("add_unwind_info -- expected process to be known");
@@ -841,7 +484,6 @@ impl Profiler<'_> {
 
         // Local unwind info state
         let mut mappings = Vec::with_capacity(MAX_MAPPINGS_PER_PROCESS as usize);
-        let mut num_mappings: u32 = 0;
 
         // hack for kworkers and such
         let mut got_some_unwind_info: bool = true;
@@ -871,7 +513,6 @@ impl Profiler<'_> {
                         executable_id: 0,
                         type_: 1, // jitted
                     });
-                    num_mappings += 1;
                     continue;
                 }
                 MappingType::Vdso => {
@@ -882,7 +523,6 @@ impl Profiler<'_> {
                         executable_id: 0,
                         type_: 2, // vdso
                     });
-                    num_mappings += 1;
                     continue;
                 }
                 MappingType::FileBacked => {
@@ -894,8 +534,7 @@ impl Profiler<'_> {
                 panic!("build id should not be none for file backed mappings");
             }
 
-            let my_lock: std::sync::MutexGuard<'_, HashMap<String, ObjectFileInfo>> =
-                self.object_files.lock().unwrap();
+            let my_lock = self.object_files.lock().unwrap();
 
             let object_file_info = my_lock.get(&mapping.build_id.clone().unwrap()).unwrap();
             let obj_path = object_file_info.path.clone();
@@ -930,7 +569,6 @@ impl Profiler<'_> {
                         executable_id: *executable_id,
                         type_: 0, // normal i think
                     });
-                    num_mappings += 1;
                     debug!("unwind info CACHED for executable");
                     continue;
                 }
@@ -949,7 +587,6 @@ impl Profiler<'_> {
                 executable_id: self.native_unwind_state.build_id_to_executable_id.len() as u32,
                 type_: 0, // normal i think
             });
-            num_mappings += 1;
 
             let build_id = mapping.build_id.clone().unwrap();
             // This is not released (see note "deadlock")
@@ -1134,35 +771,26 @@ impl Profiler<'_> {
         if got_some_unwind_info {
             self.native_unwind_state.dirty = true;
 
-            // Add process info
-            // "default"
-            mappings.resize(
-                MAX_MAPPINGS_PER_PROCESS as usize,
-                mapping_t {
-                    load_address: 0,
-                    begin: 0,
-                    end: 0,
-                    executable_id: 0,
-                    type_: 0,
-                },
+            // Add entry just with the pid to signal processes that we already know about.
+            let key = exec_mappings_key::new(
+                pid.try_into().unwrap(),
+                0x0,
+                32, // pid bits
             );
-            let boxed_slice = mappings.into_boxed_slice();
-            let boxed_array: Box<[mapping_t; MAX_MAPPINGS_PER_PROCESS as usize]> =
-                boxed_slice.try_into().expect("try into");
-            let proc_info = process_info_t {
-                is_jit_compiler: 0,
-                len: num_mappings,
-                mappings: *boxed_array, // check this doesn't go into the stack!!
-            };
-            self.bpf
-                .maps()
-                .process_info()
-                .update(
-                    &pid.to_ne_bytes(),
-                    unsafe { plain::as_bytes(&proc_info) },
-                    MapFlags::ANY,
-                )
-                .unwrap();
+            self.add_bpf_mapping(&key, &mapping_t::default()).unwrap();
+
+            // Add process info
+            for mapping in mappings {
+                for address_range in summarize_address_range(mapping.begin, mapping.end - 1) {
+                    let key = exec_mappings_key::new(
+                        pid.try_into().unwrap(),
+                        address_range.addr,
+                        address_range.range,
+                    );
+
+                    self.add_bpf_mapping(&key, &mapping).unwrap();
+                }
+            }
         }
     }
 
@@ -1212,10 +840,13 @@ impl Profiler<'_> {
 
                     let file = fs::File::open(path)?;
 
-                    let mut unwinder = Unwinder::NativeDwarf;
-                    let use_fp = is_go(&abs_path); // todo: deal with CGO and friends
-                    if use_fp {
-                        unwinder = Unwinder::NativeFramePointers;
+                    let unwinder = Unwinder::NativeDwarf;
+
+                    // Disable profiling Go applications as they are not properly supported yet.
+                    // Among other things, blazesym doesn't support symbolizing Go binaries.
+                    if is_go(&abs_path) {
+                        // todo: deal with CGO and friends
+                        return Err(anyhow!("Go applications are not supported yet"));
                     }
 
                     let Ok(build_id) = build_id(path) else {
@@ -1244,15 +875,17 @@ impl Profiler<'_> {
                         unwinder,
                     });
 
-                    let mut my_lock: std::sync::MutexGuard<'_, HashMap<String, ObjectFileInfo>> =
-                        object_files_clone.lock().expect("lock");
+                    let mut my_lock = object_files_clone.lock().expect("lock");
+
+                    let elf_load = elf_load(path);
 
                     my_lock.insert(
                         build_id,
                         ObjectFileInfo {
                             path: abs_path,
                             file,
-                            elf_load: elf_load(path),
+                            load_offset: elf_load.offset,
+                            load_vaddr: elf_load.vaddr,
                             is_dyn: is_dynamic(path),
                             main_bin: i < 3,
                         },

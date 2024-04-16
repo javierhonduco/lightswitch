@@ -16,6 +16,7 @@ fn main() {
     println!("cargo:rerun-if-changed={PROFILER_BPF_SOURCE}");
 
     let bindings = bindgen::Builder::default()
+        .derive_default(true)
         .header(PROFILER_BPF_HEADER)
         .generate()
         .expect("Unable to generate bindings");

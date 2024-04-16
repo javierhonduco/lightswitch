@@ -26,13 +26,14 @@ pub fn symbolize_native_stack_blaze(addrs: Vec<u64>, object_path: &PathBuf) -> V
                 addr: _,
                 offset: _,
                 code_info: _,
-                inlined: _,
+                inlined,
                 ..
             }) => {
                 res.push(name.to_string());
 
-                //for frame in inlined.iter() {
-                //}
+                for frame in inlined.iter() {
+                    res.push(format!("{} (inlined)", frame.name));
+                }
             }
             Symbolized::Unknown(r) => {
                 res.push(format!("<unknown {}>", r));

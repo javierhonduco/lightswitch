@@ -11,6 +11,13 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
+struct {
+  __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+  __type(key, struct exec_mappings_key);
+  __type(value, mapping_t);
+  __uint(map_flags, BPF_F_NO_PREALLOC);
+  __uint(max_entries, MAX_PROCESSES * 200);
+} exec_mappings SEC(".maps");
 
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
@@ -47,13 +54,6 @@ struct {
   __uint(max_entries, 0);
 } events SEC(".maps");
 
-struct {
-  __uint(type, BPF_MAP_TYPE_HASH);
-  __uint(max_entries, MAX_PROCESSES);
-  __type(key, int);
-  __type(value, process_info_t);
-} process_info SEC(".maps");
-
 // Mapping of executable ID to unwind info chunks.
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
@@ -76,6 +76,14 @@ struct {
   __type(value, struct unwinder_stats_t);
 } percpu_stats SEC(".maps");
 
+
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, MAX_PROCESSES);
+  __type(key, Event);
+  __type(value, bool);
+} rate_limits SEC(".maps");
+
 /*=========================== HELPER FUNCTIONS ==============================*/
 
 #define DEFINE_COUNTER(__func__name)                                           \
@@ -97,50 +105,16 @@ DEFINE_COUNTER(error_unsupported_cfa_register);
 DEFINE_COUNTER(error_catchall);
 DEFINE_COUNTER(error_should_never_happen);
 DEFINE_COUNTER(error_pc_not_covered);
-DEFINE_COUNTER(error_jit);
-
-static void unwind_print_stats() {
-  // Do not use the LOG macro, always print the stats.
-  u32 zero = 0;
-  struct unwinder_stats_t *unwinder_stats =
-      bpf_map_lookup_elem(&percpu_stats, &zero);
-  if (unwinder_stats == NULL) {
-    return;
-  }
-
-  bpf_printk("[[ stats for cpu %d ]]", (int)bpf_get_smp_processor_id());
-  bpf_printk("\tdwarf_success=%lu", unwinder_stats->success_dwarf);
-  bpf_printk("\tunsup_expression=%lu",
-             unwinder_stats->error_unsupported_expression);
-  bpf_printk("\tunsup_frame=%lu",
-             unwinder_stats->error_unsupported_frame_pointer_action);
-  bpf_printk("\ttruncated=%lu", unwinder_stats->error_truncated);
-  bpf_printk("\tunsup_cfa_reg=%lu",
-             unwinder_stats->error_unsupported_cfa_register);
-  bpf_printk("\tcatchall=%lu", unwinder_stats->error_catchall);
-  bpf_printk("\tnever=%lu", unwinder_stats->error_should_never_happen);
-  bpf_printk("\tunsup_jit=%lu", unwinder_stats->error_jit);
-  bpf_printk("\ttotal_counter=%lu", unwinder_stats->total);
-  bpf_printk("\t(not_covered=%lu)", unwinder_stats->error_pc_not_covered);
-  bpf_printk("");
-}
-
-static void bump_samples() {
-  u32 zero = 0;
-  struct unwinder_stats_t *unwinder_stats =
-      bpf_map_lookup_elem(&percpu_stats, &zero);
-  if (unwinder_stats == NULL) {
-    return;
-  }
-  if (ENABLE_STATS_PRINTING && unwinder_stats->total % 50 == 0) {
-    unwind_print_stats();
-  }
-  bump_unwind_total();
-}
+DEFINE_COUNTER(error_mapping_not_found);
+DEFINE_COUNTER(error_mapping_does_not_contain_pc);
+DEFINE_COUNTER(error_chunk_not_found);
+DEFINE_COUNTER(error_binary_search_exausted_iterations);
+DEFINE_COUNTER(error_sending_new_process_event);
+DEFINE_COUNTER(error_cfa_offset_did_not_fit);
 
 // Binary search the unwind table to find the row index containing the unwind
-// information for a given program counter (pc).
-static u64 find_offset_for_pc(stack_unwind_table_t *table, u64 pc, u64 left,
+// information for a given program counter (pc) relative to the object file.
+static __always_inline u64 find_offset_for_pc(stack_unwind_table_t *table, u64 pc, u64 left,
                               u64 right) {
   u64 found = BINARY_SEARCH_DEFAULT;
 
@@ -162,127 +136,104 @@ static u64 find_offset_for_pc(stack_unwind_table_t *table, u64 pc, u64 left,
       return BINARY_SEARCH_SHOULD_NEVER_HAPPEN;
     }
 
-    // Debug logs.
-    // LOG("\t-> fetched PC %llx, target PC %llx", table->rows[mid].pc, pc);
     if (table->rows[mid].pc <= pc) {
       found = mid;
       left = mid + 1;
     } else {
       right = mid;
     }
-
-    // Debug logs.
-    // LOG("\t<- fetched PC %llx, target PC %llx (iteration %d/%d, mid:
-    // --, left:%d, right:%d)", ctx->table->rows[mid].pc, ctx->pc, index,
-    // MAX_BINARY_SEARCH_DEPTH, ctx->left, ctx->right);
   }
   return BINARY_SEARCH_EXHAUSTED_ITERATIONS;
 }
 
-enum find_unwind_table_return {
-  FIND_UNWIND_SUCCESS = 1,
+static __always_inline mapping_t* find_mapping(int per_process_id, u64 pc) {
+  struct exec_mappings_key key = {};
+  key.prefix_len = PREFIX_LEN;
+  key.pid = __builtin_bswap32((u32) per_process_id);
+  key.data = __builtin_bswap64(pc);
 
-  FIND_UNWIND_MAPPING_SHOULD_NEVER_HAPPEN = 2,
-  FIND_UNWIND_MAPPING_EXHAUSTED_SEARCH = 3,
-  FIND_UNWIND_MAPPING_NOT_FOUND = 4,
-  FIND_UNWIND_CHUNK_NOT_FOUND = 5,
+  mapping_t *mapping = bpf_map_lookup_elem(&exec_mappings, &key);
 
-  FIND_UNWIND_JITTED = 100,
-  FIND_UNWIND_SPECIAL = 200,
-};
+  if (mapping == NULL) {
+    LOG("[error] no mapping found for pc %llx", pc);
+    bump_unwind_error_mapping_not_found();
+    return NULL;
+  }
+
+  if (pc < mapping->begin || pc >= mapping->end) {
+    LOG("[error] pc %llx not contained within begin: %llx end: %llx", pc, mapping->begin, mapping->end);
+    bump_unwind_error_mapping_does_not_contain_pc();
+    return NULL;
+  }
+
+  return mapping;
+}
 
 // Finds the shard information for a given pid and program counter. Optionally,
 // and offset can be passed that will be filled in with the mapping's load
 // address.
-static __always_inline enum find_unwind_table_return
-find_unwind_table(chunk_info_t **chunk_info, pid_t per_process_id, u64 pc, u64 *offset) {
-  process_info_t *proc_info = bpf_map_lookup_elem(&process_info, &per_process_id);
-  // Appease the verifier.
-  if (proc_info == NULL) {
-    LOG("[error] should never happen proc_info");
-    return FIND_UNWIND_MAPPING_SHOULD_NEVER_HAPPEN;
-  }
-
-  bool found = false;
-  u32 executable_id = 0;
-  u32 type = 0;
-  u64 load_address = 0;
-
-  // Find the mapping.
-  for (u32 i = 0; i < MAX_MAPPINGS_PER_PROCESS; i++) {
-    if (i > proc_info->len) {
-      LOG("[info] mapping not found, i (%d) > proc_info->len (%d) pc: %llx", i,
-          proc_info->len, pc);
-      return FIND_UNWIND_MAPPING_EXHAUSTED_SEARCH;
-    }
-
-    // Appease the verifier.
-    if (i < 0 || i > MAX_MAPPINGS_PER_PROCESS) {
-      LOG("[error] should never happen, verifier");
-      return FIND_UNWIND_MAPPING_SHOULD_NEVER_HAPPEN;
-    }
-
-    if (proc_info->mappings[i].begin <= pc &&
-        pc <= proc_info->mappings[i].end) {
-      found = true;
-      executable_id = proc_info->mappings[i].executable_id;
-      load_address = proc_info->mappings[i].load_address;
-      bpf_printk("==== found load address %llx", load_address);
-
-      type = proc_info->mappings[i].type;
-      break;
-    }
-  }
-
-  if (found) {
-    if (offset != NULL) {
-      *offset = load_address;
-    }
-
-    // "type" here is set in userspace in our `proc_info` map to indicate JITed
-    // and special sections, It is not something we get from procfs.
-    if (type == 1) {
-      return FIND_UNWIND_JITTED;
-    }
-    if (type == 2) {
-      return FIND_UNWIND_SPECIAL;
-    }
-  } else {
-    LOG("[warn] :((( no mapping for ip=%llx", pc);
-    return FIND_UNWIND_MAPPING_NOT_FOUND;
-  }
+static __always_inline chunk_info_t*
+find_chunk(mapping_t *mapping, u64 object_relative_pc) {
+  u32 executable_id = mapping->executable_id;
 
   LOG("~about to check chunks, executable_id=%d", executable_id);
-
   // Find the chunk where this unwind table lives.
   // Each chunk maps to exactly one shard.
   unwind_info_chunks_t *chunks =
       bpf_map_lookup_elem(&unwind_info_chunks, &executable_id);
   if (chunks == NULL) {
-    LOG("[info] chunks is null for executable %llu", executable_id);
-    return FIND_UNWIND_CHUNK_NOT_FOUND;
+    LOG("[error] chunks is null for executable %llu", executable_id);
+    return NULL;
   }
 
-  u64 adjusted_pc = pc - load_address;
   for (int i = 0; i < MAX_UNWIND_TABLE_CHUNKS; i++) {
-    // Reached last chunk.
     if (chunks->chunks[i].low_pc == 0) {
-      LOG("[======] reached last chunk");
+      LOG("[info] reached last chunk");
       break;
     }
-    bpf_printk("[======] checking chunk low %llx adj pc %llx high %llx",
-               chunks->chunks[i].low_pc, adjusted_pc,
+
+    LOG("[debug] checking chunk low %llx adj pc %llx high %llx",
+               chunks->chunks[i].low_pc, object_relative_pc,
                chunks->chunks[i].high_pc);
-    if (chunks->chunks[i].low_pc <= adjusted_pc &&
-        adjusted_pc <= chunks->chunks[i].high_pc) {
-      LOG("[info] found chunk");
-      *chunk_info = &chunks->chunks[i];
-      return FIND_UNWIND_SUCCESS;
+    if (chunks->chunks[i].low_pc <= object_relative_pc &&
+        object_relative_pc <= chunks->chunks[i].high_pc) {
+      LOG("[debug] found chunk");
+      return &chunks->chunks[i];
     }
   }
 
   LOG("[error] could not find chunk");
-  return FIND_UNWIND_CHUNK_NOT_FOUND;
+  bump_unwind_error_chunk_not_found();
+  return NULL;
+}
+
+static __always_inline bool process_is_known(int per_process_id) {
+  struct exec_mappings_key key = {};
+  key.prefix_len = PREFIX_LEN;
+  key.pid = __builtin_bswap32((u32) per_process_id);
+  key.data = 0;
+
+  return bpf_map_lookup_elem(&exec_mappings, &key) != NULL;
+}
+
+static __always_inline void event_new_process(struct bpf_perf_event_data *ctx, int per_process_id) {
+  Event event = {
+      .type = EVENT_NEW_PROCESS,
+      .pid = per_process_id,
+  };
+
+  bool *is_rate_limited = bpf_map_lookup_elem(&rate_limits, &event);
+  if (is_rate_limited != NULL && *is_rate_limited) {
+    LOG("event_new_process was rate limited");
+    return;
+  }
+
+  if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &event, sizeof(Event)) < 0) {
+    bump_unwind_error_sending_new_process_event();
+  }
+
+  bool rate_limited = true;
+  bpf_map_update_elem(&rate_limits, &event, &rate_limited, BPF_ANY);
 }
 
 // Kernel addresses have the top bits set.
@@ -355,7 +306,7 @@ bpf_map_lookup_or_try_init(void *map, const void *key, const void *init) {
 
   err = bpf_map_update_elem(map, key, init, BPF_NOEXIST);
   if (err && !STACK_COLLISION(err)) {
-    bpf_printk("[error] bpf_map_lookup_or_try_init with ret: %d", err);
+    LOG("[error] bpf_map_lookup_or_try_init with ret: %d", err);
     return 0;
   }
 
@@ -405,10 +356,10 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
 
   // Insert aggregated stack.
   u64 zero = 0;
-  u64 *scount = bpf_map_lookup_or_try_init(&aggregated_stacks,
+  u64 *count = bpf_map_lookup_or_try_init(&aggregated_stacks,
                                            &unwind_state->stack_key, &zero);
-  if (scount) {
-    __sync_fetch_and_add(scount, 1);
+  if (count) {
+    __sync_fetch_and_add(count, 1);
   }
 }
 
@@ -435,25 +386,27 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     LOG("\tcurrent sp: %llx", unwind_state->sp);
     LOG("\tcurrent bp: %llx", unwind_state->bp);
 
-    u64 offset = 0;
+    mapping_t *mapping = find_mapping(per_process_id, unwind_state->ip);
+    if (mapping == NULL) {
+      // find_mapping bumps the counters already.
+      // request_refresh_process_info?
+      return 1;
+    }
 
-    chunk_info_t *chunk_info = NULL;
-    enum find_unwind_table_return unwind_table_result = find_unwind_table(
-        &chunk_info, per_process_id, unwind_state->ip, &offset);
-
-    if (unwind_table_result == FIND_UNWIND_JITTED) {
+    if (mapping->type == 1) {
       LOG("JIT section, stopping");
       return 1;
-    } else if (unwind_table_result == FIND_UNWIND_SPECIAL) {
-      LOG("special section, stopping");
+    }
+
+    if (mapping->type == 2) {
+      LOG("JIT section, stopping");
       return 1;
-    } else if (unwind_table_result == FIND_UNWIND_MAPPING_NOT_FOUND) {
-      // request_refresh_process_info(ctx, user_pid);
+    }
+
+    u64 object_relative_pc = unwind_state->ip - mapping->load_address;
+    chunk_info_t *chunk_info = find_chunk(mapping, object_relative_pc);
+    if (chunk_info == NULL) {
       return 1;
-    } else if (chunk_info == NULL) {
-      // improve
-      reached_bottom_of_stack = true;
-      break;
     }
 
     stack_unwind_table_t *unwind_table =
@@ -463,28 +416,31 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       return 0;
     }
 
-    LOG("le offset: %llx", offset);
+    LOG("le load address: %llx", mapping->load_address);
+
     u64 left = chunk_info->low_index;
     u64 right = chunk_info->high_index;
     LOG("========== left %llu right %llu (shard index %d)", left, right,
         chunk_info->shard_index);
 
-    u64 table_idx = find_offset_for_pc(unwind_table, unwind_state->ip - offset,
-                                       left, right);
+    u64 table_idx = find_offset_for_pc(unwind_table, object_relative_pc, left, right);
 
     if (table_idx == BINARY_SEARCH_DEFAULT ||
         table_idx == BINARY_SEARCH_SHOULD_NEVER_HAPPEN ||
         table_idx == BINARY_SEARCH_EXHAUSTED_ITERATIONS) {
-      LOG("[error] binary search failed with %llx", table_idx);
+      LOG("[error] binary search failed with %llx, pc: %llx", table_idx, unwind_state->ip);
+      if (table_idx == BINARY_SEARCH_EXHAUSTED_ITERATIONS) {
+        bump_unwind_error_binary_search_exausted_iterations();
+      }
       return 1;
     }
 
     LOG("\t=> table_index: %d", table_idx);
-    LOG("\t=> adjusted pc: %llx", unwind_state->ip - offset);
+    LOG("\t=> object relative pc: %llx", object_relative_pc);
 
     // Appease the verifier.
     if (table_idx < 0 || table_idx >= MAX_UNWIND_TABLE_SIZE) {
-      LOG("\t[error] this should never happen 448");
+      LOG("\t[error] this should never happen");
       bump_unwind_error_should_never_happen();
       return 1;
     }
@@ -497,8 +453,13 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     LOG("\tcfa type: %d, offset: %d (row pc: %llx)", found_cfa_type,
         found_cfa_offset, found_pc);
 
+    if (found_cfa_type == CFA_TYPE_OFFSET_DID_NOT_FIT) {
+      bump_unwind_error_cfa_offset_did_not_fit();
+      return 1;
+    }
+
     if (found_cfa_type == CFA_TYPE_END_OF_FDE_MARKER) {
-      LOG("[info] PC %llx not contained in the unwind info, found marker",
+      LOG("[info] pc %llx not contained in the unwind info, found marker",
           unwind_state->ip);
       reached_bottom_of_stack = true;
       break;
@@ -510,20 +471,13 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       break;
     }
 
-    // LOG("[debug] Switching to mixed-mode unwinding");
-
     // Add address to stack.
     u64 len = unwind_state->stack.len;
     // Appease the verifier.
     if (len >= 0 && len < MAX_STACK_DEPTH) {
       unwind_state->stack.addresses[len] = unwind_state->ip;
-
       unwind_state->stack.len++;
     }
-
-    // Set unwind_state->unwinding_jit to false once we have checked for switch
-    // from JITed unwinding to DWARF unwinding unwind_state->unwinding_jit =
-    // false; LOG("[debug] Switched to mixed-mode DWARF unwinding");
 
     if (found_rbp_type == RBP_TYPE_REGISTER ||
         found_rbp_type == RBP_TYPE_EXPRESSION) {
@@ -546,7 +500,6 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       }
 
       LOG("CFA expression found with id %d", found_cfa_offset);
-
       u64 threshold = 0;
       if (found_cfa_offset == DWARF_EXPRESSION_PLT1) {
         threshold = 11;
@@ -587,22 +540,14 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
         bpf_probe_read_user(&previous_rip, 8, (void *)(previous_rip_addr));
 
     if (previous_rip == 0) {
-      process_info_t *proc_info = bpf_map_lookup_elem(&process_info, &per_process_id);
-      if (proc_info == NULL) {
-        LOG("[error] should never happen");
-        return 1;
+      if (err == 0) {
+        LOG("[warn] previous_rip=0, maybe this is a JIT segment?");
+      } else {
+        LOG("[error] previous_rip should not be zero. This can mean that the "
+            "read failed, ret=%d while reading @ %llx.",
+            err, previous_rip_addr);
+        bump_unwind_error_catchall();
       }
-
-      if (proc_info->is_jit_compiler) {
-        LOG("[info] rip=0, Section not added, yet");
-        bump_unwind_error_jit();
-        return 1;
-      }
-
-      LOG("[error] previous_rip should not be zero. This can mean that the "
-          "read failed, ret=%d while reading @ %llx.",
-          err, previous_rip_addr);
-      bump_unwind_error_catchall();
       return 1;
     }
 
@@ -654,22 +599,8 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       add_stack(ctx, pid_tgid, unwind_state);
       bump_unwind_success_dwarf();
     } else {
-      process_info_t *proc_info =
-          bpf_map_lookup_elem(&process_info, &per_process_id);
-      if (proc_info == NULL) {
-        LOG("[error] should never happen 610");
-        return 1;
-      }
-
-      if (proc_info->is_jit_compiler) {
-        LOG("[info] Section not added, yet");
-        bump_unwind_error_jit();
-        return 1;
-      }
-
-      LOG("[error] Could not find unwind table and rbp != 0 (%llx). New "
-          "mapping?",
-          unwind_state->bp);
+      LOG("[error] Could not find unwind table and rbp != 0 (%llx), pc: %llx. Bug / Node.js?",
+          unwind_state->bp, unwind_state->ip);
       // request_refresh_process_info(ctx, user_pid);
       bump_unwind_error_pc_not_covered();
     }
@@ -745,7 +676,7 @@ int on_event(struct bpf_perf_event_data *ctx) {
   u32 zero = 0;
   unwind_state_t *profiler_state = bpf_map_lookup_elem(&heap, &zero);
   if (profiler_state == NULL) {
-    bpf_printk("[error] profiler state should never be NULL");
+    LOG("[error] profiler state should never be NULL");
     return 0;
   }
 
@@ -758,11 +689,8 @@ int on_event(struct bpf_perf_event_data *ctx) {
   profiler_state->stack_key.user_stack_id = 0;
   profiler_state->stack_key.kernel_stack_id = 0;
 
-  process_info_t *proc_info =
-      bpf_map_lookup_elem(&process_info, &per_process_id);
-  if (proc_info) {
-    bpf_printk("== unwindin with per_process_id: %d", per_process_id);
-    bump_samples();
+  if (process_is_known(per_process_id)) {
+    bump_unwind_total();
 
     u64 ip = 0;
     u64 sp = 0;
@@ -789,12 +717,7 @@ int on_event(struct bpf_perf_event_data *ctx) {
     return 0;
   }
 
-  Event event = {
-      .type = EVENT_NEW_PROCESS,
-      .pid = per_process_id,
-  };
-  bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &event, sizeof(Event));
-
+  event_new_process(ctx, per_process_id);
   return 0;
 }
 

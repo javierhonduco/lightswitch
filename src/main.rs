@@ -9,8 +9,8 @@ use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
+use lightswitch::collector::Collector;
 use lightswitch::object::build_id;
-use lightswitch::profiler::Collector;
 use lightswitch::profiler::Profiler;
 use lightswitch::unwind_info::{compact_printing_callback, UnwindInfoBuilder};
 use primal::is_prime;
@@ -137,7 +137,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let collector = Collector::new();
 
-    let mut p: Profiler<'_> = Profiler::new(false, args.duration, args.sample_freq);
+    let mut p: Profiler<'_> = Profiler::new(true, args.duration, args.sample_freq);
     p.profile_pids(args.pids);
     p.run(collector.clone());
 
