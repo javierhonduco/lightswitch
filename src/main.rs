@@ -38,9 +38,34 @@ fn sample_freq_in_range(s: &str) -> Result<u16, String> {
         ));
     }
     if !is_prime(sample_freq.try_into().unwrap()) {
-        return Err("sample frequency is not prime".to_string());
+        let ba_result = primes_before_after(sample_freq);
+        match ba_result {
+            Ok((prime_before, prime_after)) => {
+                return Err(format!(
+                    "Sample frequency {} is not prime - use {} (before) or {} (after) instead",
+                    sample_freq, prime_before, prime_after
+                ));
+            }
+            Err(_) => println!("primes_before_after should not have failed"),
+        }
     }
     Ok(sample_freq as u16)
+}
+
+/// Given a non-prime unsigned int, return the prime number that precedes it
+/// as well as the prime that succeeds it
+fn primes_before_after(non_prime: usize) -> Result<(usize, usize), String> {
+    // If a prime number passed in, return Err
+    if is_prime(non_prime.try_into().unwrap()) {
+        return Err(format!("{} IS prime", non_prime));
+    }
+    // What is the count (not value) of the prime just before our non_prime?
+    let n_before: usize = primal::StreamingSieve::prime_pi(non_prime);
+    // And the count of the prime just after our non_prime?
+    let n_after: usize = n_before + 1;
+    let before = primal::StreamingSieve::nth_prime(n_before);
+    let after = primal::StreamingSieve::nth_prime(n_after);
+    Ok((before, after))
 }
 
 #[derive(Parser, Debug)]
@@ -177,7 +202,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::*;
     use assert_cmd::Command;
     use clap::Parser;
     use rstest::rstest;
@@ -208,13 +233,20 @@ mod tests {
     #[should_panic]
     #[case::neg101("-101", "sample frequency not in allowed range")]
     #[case::prime_19("19", "")]
-    #[case::non_prime_20("20", "sample frequency is not prime")]
+    #[case::non_prime_20(
+        "20",
+        "Sample frequency 20 is not prime - use 19 (before) or 23 (after) instead"
+    )]
     #[case::prime_47("47", "")]
-    #[case::non_prime_49("49", "sample frequency is not prime")]
+    #[case::non_prime_49(
+        "49",
+        "Sample frequency 49 is not prime - use 47 (before) or 53 (after) instead"
+    )]
     #[case::prime_101("101", "")]
     #[case::prime_1009("1009", "")]
     #[case::non_prime_out_of_range1010("1010", "sample frequency not in allowed range")]
     #[case::prime_out_of_range_1013("1013", "sample frequency not in allowed range")]
+    #[trace]
     fn sample_freq_successes(#[case] desired_freq: String, #[case] expected_msg: String) {
         let execname = env!("CARGO_PKG_NAME");
         let argname = "--sample-freq";
@@ -234,6 +266,45 @@ mod tests {
                 assert!(actual_message.contains(expected_msg.as_str()));
             }
         }
-        // Expected output/results for various inputs
     }
+
+    #[rstest]
+    #[case(49, (47,53), "")]
+    #[case(97, (0, 0), "97 IS prime")]
+    #[case(100, (97,101), "")]
+    #[case(398, (397,401), "")]
+    #[case(500, (499,503), "")]
+    #[case(1000, (997, 1009), "")]
+    #[case(1001, (997, 1009), "")]
+    #[case(1009, (0, 0), "1009 IS prime")]
+    fn test_primes_before_after(
+        #[case] non_prime: usize,
+        #[case] expected_tuple: (usize, usize),
+        #[case] expected_msg: String,
+    ) {
+        let actual_result = primes_before_after(non_prime);
+        match actual_result {
+            Ok(tuple) => {
+                assert_eq!(tuple.0, expected_tuple.0);
+                assert_eq!(tuple.1, expected_tuple.1);
+            }
+            Err(err) => {
+                let actual_message = err.to_string();
+                assert!(actual_message.contains(expected_msg.as_str()));
+            }
+        }
+    }
+
+    // Only usable on the nightly toolchain for now...
+    // use test::{black_box, Bencher};
+
+    // #[bench]
+    // fn bench_primes_before_after(b: &mut Bencher) {
+    //     b.iter(|| {
+    //         // Inner closure, the actual test
+    //         for i in 1..1009 {
+    //             black_box(primes_before_after(i));
+    //         }
+    //     });
+    // }
 }
