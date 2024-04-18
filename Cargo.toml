@@ -26,6 +26,7 @@ tracing-subscriber = "0.3.18"
 chrono = "0.4.37"
 inferno = "0.11.19"
 primal = "0.3.2"
+nix = { version = "0.28.0", features = ["user"]}
 
 [dev-dependencies]
 assert_cmd = { version = "2.0.14" }

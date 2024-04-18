@@ -10,6 +10,7 @@ use clap::ArgAction;
 use clap::Parser;
 
 use inferno::flamegraph;
+use nix::unistd::Uid;
 use tracing::{error, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
@@ -146,6 +147,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("unwind info {:?}", unwind_info.unwrap().process());
 
         return Ok(());
+    }
+
+    if !Uid::current().is_root() {
+        error!("root permissions are required to run lightswitch");
+        std::process::exit(1);
     }
 
     let collector = Collector::new();
