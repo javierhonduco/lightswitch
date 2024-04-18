@@ -1,10 +1,15 @@
+use std::error::Error;
+use std::fmt::Write;
+use std::fs::File;
+use std::ops::RangeInclusive;
+use std::panic;
+use std::path::PathBuf;
+use std::time::Duration;
+
 use clap::ArgAction;
 use clap::Parser;
 
 use inferno::flamegraph;
-use std::fmt::Write;
-use std::fs::File;
-use std::ops::RangeInclusive;
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
@@ -14,10 +19,6 @@ use lightswitch::object::build_id;
 use lightswitch::profiler::Profiler;
 use lightswitch::unwind_info::{compact_printing_callback, UnwindInfoBuilder};
 use primal::is_prime;
-use std::error::Error;
-use std::path::PathBuf;
-
-use std::time::Duration;
 
 const SAMPLE_FREQ_RANGE: RangeInclusive<usize> = 1..=1009;
 
@@ -107,7 +108,19 @@ struct Cli {
     flamegraph_file: PathBuf,
 }
 
+/// Exit the main thread if any thread panics. We prefer this behaviour because pretty much every
+/// thread is load bearing for the correct functioning.
+fn panic_thread_hook() {
+    let orig_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        orig_hook(panic_info);
+        std::process::exit(1);
+    }));
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
+    panic_thread_hook();
+
     let args = Cli::parse();
 
     let subscriber = FmtSubscriber::builder()
