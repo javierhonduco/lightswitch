@@ -429,7 +429,7 @@ impl Profiler<'_> {
                         kstack: result_kstack,
                         count: *count,
                     };
-                    debug!("RAW_AGGREGATED_SAMPLE: {}", raw_sample);
+                    debug!("RAW_AGGREGATED_SAMPLE: {:#?}", raw_sample);
                     result.push(raw_sample);
                 }
                 _ => continue,
