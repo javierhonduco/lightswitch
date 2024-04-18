@@ -404,7 +404,9 @@ impl Profiler<'_> {
                             Ok(Some(stack_bytes)) => {
                                 result_ustack = Some(*plain::from_bytes(&stack_bytes).unwrap());
                             }
-                            Ok(None) => {}
+                            Ok(None) => {
+                                warn!("NO USER STACK FOUND");
+                            }
                             Err(e) => {
                                 error!("\tfailed getting user stack {}", e);
                             }
@@ -427,7 +429,7 @@ impl Profiler<'_> {
                         kstack: result_kstack,
                         count: *count,
                     };
-
+                    debug!("RAW_AGGREGATED_SAMPLE: {}", raw_sample);
                     result.push(raw_sample);
                 }
                 _ => continue,
