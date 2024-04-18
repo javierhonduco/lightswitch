@@ -106,6 +106,7 @@ const SHARD_CAPACITY: usize = MAX_UNWIND_TABLE_SIZE as usize;
 const PERF_BUFFER_BYTES: usize = 512 * 1024;
 
 #[allow(dead_code)]
+#[derive(Debug)]
 pub struct RawAggregatedSample {
     pub pid: i32,
     pub ustack: Option<native_stack_t>,
