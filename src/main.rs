@@ -10,7 +10,7 @@ use clap::ArgAction;
 use clap::Parser;
 
 use inferno::flamegraph;
-use tracing::Level;
+use tracing::{error, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
@@ -208,7 +208,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let data = folded.as_bytes();
     let flame_path = args.flamegraph_file;
     let f = File::create(flame_path).unwrap();
-    flamegraph::from_reader(&mut options, data, f).unwrap();
+    match flamegraph::from_reader(&mut options, data, f) {
+        Ok(_) => {
+            eprintln!("Profile successfully written to disk");
+        }
+        Err(e) => {
+            error!("Failed generate profile: {:?}", e);
+        }
+    }
 
     Ok(())
 }
