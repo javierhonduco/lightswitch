@@ -848,6 +848,7 @@ dependencies = [
  "data-encoding",
  "errno",
  "gimli",
+ "glob",
  "inferno",
  "insta",
  "lazy_static",

@@ -16,11 +16,18 @@ use tracing::{debug, error, info, span, warn, Level};
 
 use crate::bpf::profiler_bindings::*;
 use crate::bpf::profiler_skel::{ProfilerSkel, ProfilerSkelBuilder};
+use crate::bpf::tracers_bindings::*;
+use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
 use crate::object::{BuildId, ObjectFile};
 use crate::perf_events::setup_perf_event;
 use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
 use crate::util::summarize_address_range;
+
+pub enum TracerEvent {
+    ProcessExit(i32),
+    Munmap(i32, u64),
+}
 
 // Some temporary data structures to get things going, this could use lots of
 // improvements
@@ -32,7 +39,14 @@ pub enum MappingType {
 }
 
 #[derive(Clone)]
+pub enum ProcessStatus {
+    Running,
+    Exited,
+}
+
+#[derive(Clone)]
 pub struct ProcessInfo {
+    pub status: ProcessStatus,
     pub mappings: Vec<ExecutableMapping>,
 }
 
@@ -78,12 +92,16 @@ pub struct Profiler<'bpf> {
     // Prevent the links from being removed
     _links: Vec<Link>,
     bpf: ProfilerSkel<'bpf>,
+    tracers: TracersSkel<'bpf>,
     // Profiler state
     procs: Arc<Mutex<HashMap<i32, ProcessInfo>>>,
     object_files: Arc<Mutex<HashMap<BuildId, ObjectFileInfo>>>,
-    // Channel for bpf events,.
+    // Channel for new process events.
     chan_send: Arc<Mutex<mpsc::Sender<Event>>>,
     chan_receive: Arc<Mutex<mpsc::Receiver<Event>>>,
+    // Channel for munmaps events.
+    tracers_chan_send: Arc<Mutex<mpsc::Sender<TracerEvent>>>,
+    tracers_chan_receive: Arc<Mutex<mpsc::Receiver<TracerEvent>>>,
     // Native unwinding state
     native_unwind_state: NativeUnwindState,
     // Debug options
@@ -139,6 +157,18 @@ impl Profiler<'_> {
         skel_builder.obj_builder.debug(bpf_debug);
         let open_skel = skel_builder.open().expect("open skel");
         let bpf = open_skel.load().expect("load skel");
+        let exec_mappings_fd = bpf.maps().exec_mappings().as_fd().as_raw_fd();
+
+        let mut tracers_builder = TracersSkelBuilder::default();
+        tracers_builder.obj_builder.debug(bpf_debug);
+        let open_tracers = tracers_builder.open().expect("open skel");
+        open_tracers
+            .maps()
+            .exec_mappings()
+            .reuse_fd(exec_mappings_fd)
+            .expect("reuse exec_mappings");
+
+        let tracers = open_tracers.load().expect("load skel");
 
         let procs = Arc::new(Mutex::new(HashMap::new()));
         let object_files = Arc::new(Mutex::new(HashMap::new()));
@@ -146,6 +176,10 @@ impl Profiler<'_> {
         let (sender, receiver) = mpsc::channel();
         let chan_send = Arc::new(Mutex::new(sender));
         let chan_receive = Arc::new(Mutex::new(receiver));
+
+        let (sender, receiver) = mpsc::channel();
+        let tracers_chan_send = Arc::new(Mutex::new(sender));
+        let tracers_chan_receive = Arc::new(Mutex::new(receiver));
 
         let live_shard = Vec::with_capacity(SHARD_CAPACITY);
         let build_id_to_executable_id = HashMap::new();
@@ -168,10 +202,13 @@ impl Profiler<'_> {
         Profiler {
             _links: Vec::new(),
             bpf,
+            tracers,
             procs,
             object_files,
             chan_send,
             chan_receive,
+            tracers_chan_send,
+            tracers_chan_receive,
             native_unwind_state,
             filter_pids,
             profile_send,
@@ -207,11 +244,14 @@ impl Profiler<'_> {
         self.setup_perf_events();
         self.set_bpf_map_info();
 
+        self.tracers.attach().expect("attach tracers");
+
+        // New process events.
         let chan_send = self.chan_send.clone();
         let perf_buffer = PerfBufferBuilder::new(self.bpf.maps().events())
             .pages(PERF_BUFFER_BYTES / page_size::get())
-            .sample_cb(move |cpu: i32, data: &[u8]| {
-                Self::handle_event(&chan_send, cpu, data);
+            .sample_cb(move |_cpu: i32, data: &[u8]| {
+                Self::handle_event(&chan_send, data);
             })
             .lost_cb(Self::handle_lost_events)
             .build()
@@ -219,6 +259,32 @@ impl Profiler<'_> {
 
         let _poll_thread = thread::spawn(move || loop {
             perf_buffer.poll(Duration::from_millis(100)).expect("poll");
+        });
+
+        // Trace events are received here, such memory unmaps.
+        let tracers_send = self.tracers_chan_send.clone();
+        let tracers_events_perf_buffer =
+            PerfBufferBuilder::new(self.tracers.maps().tracer_events())
+                .pages(PERF_BUFFER_BYTES / page_size::get())
+                .sample_cb(move |_cpu: i32, data: &[u8]| {
+                    let mut event = tracer_event_t::default();
+                    plain::copy_from_bytes(&mut event, data).expect("serde tracers event");
+                    tracers_send
+                        .lock()
+                        .expect("sender lock")
+                        .send(TracerEvent::from(event))
+                        .expect("handle event send");
+                })
+                .lost_cb(|_cpu, lost_count| {
+                    warn!("lost {} events from the tracers", lost_count);
+                })
+                .build()
+                .unwrap();
+
+        let _tracers_poll_thread = thread::spawn(move || loop {
+            tracers_events_perf_buffer
+                .poll(Duration::from_millis(100))
+                .expect("poll");
         });
 
         let profile_receive = self.profile_receive.clone();
@@ -259,37 +325,80 @@ impl Profiler<'_> {
                 time_since_last_scheduled_collection = Instant::now();
             }
 
-            let read = self.chan_receive.lock().expect("receive lock").try_recv();
+            let read = self
+                .tracers_chan_receive
+                .lock()
+                .expect("receive lock")
+                .recv_timeout(Duration::from_millis(50));
 
             match read {
-                Ok(event) => {
-                    let pid = event.pid;
-
-                    if event.type_ == event_type_EVENT_NEW_PROCESS {
-                        // let span = span!(Level::DEBUG, "calling event_new_proc").entered();
-                        self.event_new_proc(pid);
-
-                        //let mut pname = "<unknown>".to_string();
-                        /*                         if let Ok(proc) = procfs::process::Process::new(pid) {
-                            if let Ok(name) = proc.cmdline() {
-                                pname = name.join("").to_string();
-                            }
-                        } */
-                    } else {
-                        error!("unknown event {}", event.type_);
-                    }
+                Ok(TracerEvent::Munmap(pid, start_address)) => {
+                    self.handle_unmap(pid, start_address);
                 }
-                Err(_) => {
-                    // todo
+                Ok(TracerEvent::ProcessExit(pid)) => {
+                    self.handle_process_exit(pid);
+                }
+                Err(_) => {}
+            }
+
+            let read = self
+                .chan_receive
+                .lock()
+                .expect("receive lock")
+                .recv_timeout(Duration::from_millis(150));
+
+            if let Ok(event) = read {
+                if event.type_ == event_type_EVENT_NEW_PROCESS {
+                    self.event_new_proc(event.pid);
+                } else {
+                    error!("unknown event type {}", event.type_);
                 }
             }
 
             if self.native_unwind_state.dirty
                 && self.native_unwind_state.last_persisted.elapsed() > Duration::from_millis(100)
             {
-                self.persist_unwind_info(&self.native_unwind_state.live_shard);
-                self.native_unwind_state.dirty = false;
+                if self.persist_unwind_info(&self.native_unwind_state.live_shard) {
+                    self.native_unwind_state.dirty = false;
+                }
                 self.native_unwind_state.last_persisted = Instant::now();
+            }
+        }
+    }
+
+    pub fn handle_process_exit(&self, pid: i32) {
+        let mut procs = self.procs.lock().expect("lock");
+
+        match procs.get_mut(&pid) {
+            Some(proc_info) => {
+                debug!("marking process {} as exited", pid);
+                proc_info.status = ProcessStatus::Exited;
+            }
+            None => {
+                debug!("could not find process {} while marking as exited", pid);
+            }
+        }
+    }
+
+    pub fn handle_unmap(&self, pid: i32, start_address: u64) {
+        let procs = self.procs.lock().expect("lock");
+
+        match procs.get(&pid) {
+            Some(proc_info) => {
+                for mapping in &proc_info.mappings {
+                    if mapping.start_addr <= start_address && start_address <= mapping.end_addr {
+                        debug!("found memory mapping {:x} for {} while handling munmap, not doing anything", start_address, pid);
+                        return;
+                    }
+                }
+
+                debug!(
+                    "could not find memory mapping {:x} for {} while handling munmap",
+                    start_address, pid
+                );
+            }
+            None => {
+                debug!("could not find {} while handling munmap", pid);
             }
         }
     }
@@ -448,7 +557,7 @@ impl Profiler<'_> {
         self.procs.lock().expect("lock").get(&pid).is_some()
     }
 
-    fn persist_unwind_info(&self, live_shard: &Vec<stack_unwind_row_t>) {
+    fn persist_unwind_info(&self, live_shard: &Vec<stack_unwind_row_t>) -> bool {
         let _span = span!(Level::DEBUG, "persist_unwind_info").entered();
 
         let key = self.native_unwind_state.shard_index.to_ne_bytes();
@@ -460,11 +569,21 @@ impl Profiler<'_> {
             )
         };
 
-        self.bpf
+        match self
+            .bpf
             .maps()
             .unwind_tables()
             .update(&key, val, MapFlags::ANY)
-            .expect("update"); // error with  value: System(7)', src/main.rs:663:26
+        {
+            Ok(_) => {
+                debug!("unwind info persisted succesfully");
+                true
+            }
+            Err(e) => {
+                warn!("failed to persist unwind info with {:?}", e);
+                false
+            }
+        }
     }
 
     fn add_bpf_mapping(
@@ -486,9 +605,7 @@ impl Profiler<'_> {
 
         // Local unwind info state
         let mut mappings = Vec::with_capacity(MAX_MAPPINGS_PER_PROCESS as usize);
-
-        // hack for kworkers and such
-        let mut got_some_unwind_info: bool = true;
+        let mut have_unwind_info = false;
 
         // Get unwind info
         for mapping in self
@@ -638,11 +755,7 @@ impl Profiler<'_> {
                 self.native_unwind_state.build_id_to_executable_id.len(),
             );
 
-            // no unwind info / errors
-            if found_unwind_info.is_empty() {
-                got_some_unwind_info = false;
-                break;
-            }
+            have_unwind_info = !found_unwind_info.is_empty();
 
             let first_pc = found_unwind_info[0].pc;
             let last_pc = found_unwind_info[found_unwind_info.len() - 1].pc;
@@ -697,7 +810,9 @@ impl Profiler<'_> {
                 if available_space == 0 {
                     info!("no space in live shard, allocating a new one");
 
-                    self.persist_unwind_info(&self.native_unwind_state.live_shard);
+                    if self.persist_unwind_info(&self.native_unwind_state.live_shard) {
+                        self.native_unwind_state.dirty = false;
+                    }
                     self.native_unwind_state.live_shard.truncate(0);
                     self.native_unwind_state.shard_index += 1;
                     continue;
@@ -775,7 +890,7 @@ impl Profiler<'_> {
                 .insert(build_id, executable_id as u32);
         } // Added all mappings
 
-        if got_some_unwind_info {
+        if have_unwind_info {
             self.native_unwind_state.dirty = true;
 
             // Add entry just with the pid to signal processes that we already know about.
@@ -938,7 +1053,10 @@ impl Profiler<'_> {
         }
 
         mappings.sort_by_key(|k| k.start_addr.cmp(&k.start_addr));
-        let proc_info = ProcessInfo { mappings };
+        let proc_info = ProcessInfo {
+            status: ProcessStatus::Running,
+            mappings,
+        };
         self.procs
             .clone()
             .lock()
@@ -948,7 +1066,7 @@ impl Profiler<'_> {
         Ok(())
     }
 
-    fn handle_event(sender: &Arc<Mutex<std::sync::mpsc::Sender<Event>>>, _cpu: i32, data: &[u8]) {
+    fn handle_event(sender: &Arc<Mutex<std::sync::mpsc::Sender<Event>>>, data: &[u8]) {
         let event = plain::from_bytes(data).expect("handle event serde");
         sender
             .lock()

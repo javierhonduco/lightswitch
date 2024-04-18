@@ -2,22 +2,16 @@
 // Copyright 2022 The Parca Authors
 // Copyright 2024 The Lightswitch Authors
 
-#include "common.h"
+#include "constants.h"
 #include "vmlinux.h"
 #include "profiler.h"
+#include "shared_maps.h"
+#include "shared_helpers.h"
 
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
-
-struct {
-  __uint(type, BPF_MAP_TYPE_LPM_TRIE);
-  __type(key, struct exec_mappings_key);
-  __type(value, mapping_t);
-  __uint(map_flags, BPF_F_NO_PREALLOC);
-  __uint(max_entries, MAX_PROCESSES * 200);
-} exec_mappings SEC(".maps");
 
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
@@ -70,47 +64,12 @@ struct {
 } unwind_tables SEC(".maps");
 
 struct {
-  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-  __uint(max_entries, 1);
-  __type(key, u32);
-  __type(value, struct unwinder_stats_t);
-} percpu_stats SEC(".maps");
-
-
-struct {
   __uint(type, BPF_MAP_TYPE_HASH);
   __uint(max_entries, MAX_PROCESSES);
   __type(key, Event);
   __type(value, bool);
 } rate_limits SEC(".maps");
 
-/*=========================== HELPER FUNCTIONS ==============================*/
-
-#define DEFINE_COUNTER(__func__name)                                           \
-  static void bump_unwind_##__func__name() {                                   \
-    u32 zero = 0;                                                              \
-    struct unwinder_stats_t *unwinder_stats =                                  \
-        bpf_map_lookup_elem(&percpu_stats, &zero);                             \
-    if (unwinder_stats != NULL) {                                              \
-      unwinder_stats->__func__name++;                                          \
-    }                                                                          \
-  }
-
-DEFINE_COUNTER(total);
-DEFINE_COUNTER(success_dwarf);
-DEFINE_COUNTER(error_truncated);
-DEFINE_COUNTER(error_unsupported_expression);
-DEFINE_COUNTER(error_unsupported_frame_pointer_action);
-DEFINE_COUNTER(error_unsupported_cfa_register);
-DEFINE_COUNTER(error_catchall);
-DEFINE_COUNTER(error_should_never_happen);
-DEFINE_COUNTER(error_pc_not_covered);
-DEFINE_COUNTER(error_mapping_not_found);
-DEFINE_COUNTER(error_mapping_does_not_contain_pc);
-DEFINE_COUNTER(error_chunk_not_found);
-DEFINE_COUNTER(error_binary_search_exausted_iterations);
-DEFINE_COUNTER(error_sending_new_process_event);
-DEFINE_COUNTER(error_cfa_offset_did_not_fit);
 
 // Binary search the unwind table to find the row index containing the unwind
 // information for a given program counter (pc) relative to the object file.
@@ -144,29 +103,6 @@ static __always_inline u64 find_offset_for_pc(stack_unwind_table_t *table, u64 p
     }
   }
   return BINARY_SEARCH_EXHAUSTED_ITERATIONS;
-}
-
-static __always_inline mapping_t* find_mapping(int per_process_id, u64 pc) {
-  struct exec_mappings_key key = {};
-  key.prefix_len = PREFIX_LEN;
-  key.pid = __builtin_bswap32((u32) per_process_id);
-  key.data = __builtin_bswap64(pc);
-
-  mapping_t *mapping = bpf_map_lookup_elem(&exec_mappings, &key);
-
-  if (mapping == NULL) {
-    LOG("[error] no mapping found for pc %llx", pc);
-    bump_unwind_error_mapping_not_found();
-    return NULL;
-  }
-
-  if (pc < mapping->begin || pc >= mapping->end) {
-    LOG("[error] pc %llx not contained within begin: %llx end: %llx", pc, mapping->begin, mapping->end);
-    bump_unwind_error_mapping_does_not_contain_pc();
-    return NULL;
-  }
-
-  return mapping;
 }
 
 // Finds the shard information for a given pid and program counter. Optionally,
@@ -207,14 +143,6 @@ find_chunk(mapping_t *mapping, u64 object_relative_pc) {
   return NULL;
 }
 
-static __always_inline bool process_is_known(int per_process_id) {
-  struct exec_mappings_key key = {};
-  key.prefix_len = PREFIX_LEN;
-  key.pid = __builtin_bswap32((u32) per_process_id);
-  key.data = 0;
-
-  return bpf_map_lookup_elem(&exec_mappings, &key) != NULL;
-}
 
 static __always_inline void event_new_process(struct bpf_perf_event_data *ctx, int per_process_id) {
   Event event = {
