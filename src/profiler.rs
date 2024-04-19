@@ -129,7 +129,7 @@ impl fmt::Display for RawAggregatedSample {
                     let cvtd = format!("{addr}, ");
                     addrs_as_string.push_str(&cvtd);
                 }
-                addrs_as_string;
+                &addrs_as_string
             }
         };
         let kstack_rep = match self.kstack {
