@@ -118,26 +118,59 @@ pub struct RawAggregatedSample {
 impl fmt::Display for RawAggregatedSample {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut scratch_string: String = String::new();
-        let ustack_rep = match self.ustack {
-            None => "NONE",
-            Some(ustack) => {
-                scratch_string.clear();
-                scratch_string.push_str("[ ");
-                for (i, addr) in ustack.addresses.into_iter().enumerate() {
-                    if ustack.len <= i.try_into().unwrap() {
-                        break;
+
+        fn format_native_stack(native_stack: native_stack_t) -> &str {
+            let str_rep = match native_stack {
+                None => "NONE",
+                Some(native_stack) => {
+                    scratch_string.clear();
+                    scratch_string.push_str("[\n");
+                    for (i, addr) in native_stack.addresses.into_iter().enumerate() {
+                        if native_stack.len <= i.try_into().unwrap() {
+                            break;
+                        }
+                        let cvtd = format!("{}: {:#016x},\n", i, addr);
+                        scratch_string.push_str(&cvtd);
                     }
-                    let cvtd = format!("{:#016x},\n", addr);
-                    scratch_string.push_str(&cvtd);
+                    scratch_string.push_str("]");
+                    &scratch_string
                 }
-                scratch_string.push_str(" ]");
-                &scratch_string
-            }
-        };
-        let kstack_rep = match self.kstack {
-            None => "NONE",
-            Some(kstack) => "[ TBD KERNEL STACK ]",
-        };
+            };
+        }
+        let ustack_rep = format_native_stack(self.ustack);
+        let kstack_rep = format_native_stack(self.kstack);
+        // let ustack_rep = match self.ustack {
+        //     None => "NONE",
+        //     Some(ustack) => {
+        //         scratch_string.clear();
+        //         scratch_string.push_str("[\n");
+        //         for (i, addr) in ustack.addresses.into_iter().enumerate() {
+        //             if ustack.len <= i.try_into().unwrap() {
+        //                 break;
+        //             }
+        //             let cvtd = format!("{:#016x},\n", addr);
+        //             scratch_string.push_str(&cvtd);
+        //         }
+        //         scratch_string.push_str("]");
+        //         &scratch_string
+        //     }
+        // };
+        // let kstack_rep = match self.kstack {
+        //     None => "NONE",
+        //     Some(kstack) => {
+        //         scratch_string.clear();
+        //         scratch_string.push_str("[\n");
+        //         for (i, addr) in kstack.addresses.into_iter().enumerate() {
+        //             if kstack.len <= i.try_into().unwrap() {
+        //                 break;
+        //             }
+        //             let cvtd = format!("{}: {:#016x},\n", i, addr);
+        //             scratch_string.push_str(&cvtd);
+        //         }
+        //         scratch_string.push_str("]");
+        //         &scratch_string
+        //     }
+        // };
         write!(
             f,
             "pid: {}\nustack: {}\nkstack: {}\ncount: {}",
