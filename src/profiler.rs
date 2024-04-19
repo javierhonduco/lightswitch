@@ -122,13 +122,15 @@ impl fmt::Display for RawAggregatedSample {
             None => "NONE",
             Some(ustack) => {
                 scratch_string.clear();
+                scratch_string.push_str("[ ");
                 for (i, addr) in ustack.addresses.into_iter().enumerate() {
                     if ustack.len <= i.try_into().unwrap() {
                         break;
                     }
-                    let cvtd = format!("{addr}, ");
+                    let cvtd = format!("{:#016x},\n", addr);
                     scratch_string.push_str(&cvtd);
                 }
+                scratch_string.push_str(" ]");
                 &scratch_string
             }
         };
