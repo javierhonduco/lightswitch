@@ -101,6 +101,8 @@ pub struct Profiler<'bpf> {
 // Static config
 const MAX_SHARDS: u64 = MAX_UNWIND_INFO_SHARDS as u64;
 const SHARD_CAPACITY: usize = MAX_UNWIND_TABLE_SIZE as usize;
+const MAX_CHUNKS: usize = MAX_UNWIND_TABLE_CHUNKS as usize;
+
 // Make each perf buffer 512 KB
 // TODO: should make this configurable via a command line argument in future
 const PERF_BUFFER_BYTES: usize = 512 * 1024;
@@ -540,7 +542,7 @@ impl Profiler<'_> {
             let object_file_info = my_lock.get(&mapping.build_id.clone().unwrap());
             if object_file_info.is_none() {
                 warn!("mapping not found");
-                continue
+                continue;
             }
             let object_file_info = object_file_info.unwrap();
             let obj_path = object_file_info.path.clone();
@@ -583,7 +585,7 @@ impl Profiler<'_> {
                 }
             }
 
-            let mut chunks = Vec::with_capacity(MAX_UNWIND_TABLE_CHUNKS as usize);
+            let mut chunks = Vec::with_capacity(MAX_CHUNKS);
 
             // == Add mapping
             mappings.push(mapping_t {
@@ -740,18 +742,17 @@ impl Profiler<'_> {
             assert!(found_unwind_info.len() == chunk_cumulative_len, "total length of chunks should be as big as the size of the whole unwind information");
 
             // Add chunks
-            chunks.resize(
-                MAX_UNWIND_TABLE_CHUNKS as usize,
-                chunk_info_t {
-                    low_pc: 0,
-                    high_pc: 0,
-                    shard_index: 0,
-                    low_index: 0,
-                    high_index: 0,
-                },
-            );
+            if chunks.len() > MAX_CHUNKS {
+                error!(
+                    "maximum allowed chunks {} but found {}",
+                    MAX_CHUNKS,
+                    chunks.len()
+                );
+            }
 
-            let all_chunks_boxed: Box<[chunk_info_t; MAX_UNWIND_TABLE_CHUNKS as usize]> =
+            chunks.resize(MAX_CHUNKS, chunk_info_t::default());
+
+            let all_chunks_boxed: Box<[chunk_info_t; MAX_CHUNKS]> =
                 chunks.try_into().expect("try into");
 
             let all_chunks = unwind_info_chunks_t {
