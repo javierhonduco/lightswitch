@@ -27,7 +27,7 @@ pub fn symbolize_profile(
     let ksyms: Vec<crate::ksym::Ksym> = KsymIter::from_kallsyms().collect();
 
     for sample in profile {
-        // debug!("--- raw sample: {}", sample);
+        debug!("--- raw sample: {}", sample);
         let mut symbolized_sample: SymbolizedAggregatedSample = SymbolizedAggregatedSample {
             pid: sample.pid,
             count: sample.count,
@@ -63,7 +63,7 @@ pub fn symbolize_profile(
                 symbolized_sample.kstack.push(le_symbol.symbol_name);
             }
         };
-        debug!("--- symbolized sample: {}", symbolized_sample);
+        // debug!("--- symbolized sample: {}", symbolized_sample);
 
         r.push(symbolized_sample);
     }
