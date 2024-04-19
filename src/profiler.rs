@@ -117,19 +117,19 @@ pub struct RawAggregatedSample {
 
 impl fmt::Display for RawAggregatedSample {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "pid: {}", self.pid);
+        let mut scratch_string: String = String::new();
         let ustack_rep = match self.ustack {
             None => "NONE",
             Some(ustack) => {
-                let mut addrs_as_string: String = "".to_owned();
+                scratch_string.clear();
                 for (i, addr) in ustack.addresses.into_iter().enumerate() {
                     if ustack.len <= i.try_into().unwrap() {
                         break;
                     }
                     let cvtd = format!("{addr}, ");
-                    addrs_as_string.push_str(&cvtd);
+                    scratch_string.push_str(&cvtd);
                 }
-                &addrs_as_string
+                &scratch_string
             }
         };
         let kstack_rep = match self.kstack {
