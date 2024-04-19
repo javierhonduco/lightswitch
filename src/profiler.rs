@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 use std::os::fd::{AsFd, AsRawFd};
 use std::path::PathBuf;
@@ -112,6 +113,35 @@ pub struct RawAggregatedSample {
     pub ustack: Option<native_stack_t>,
     pub kstack: Option<native_stack_t>,
     pub count: u64,
+}
+
+impl fmt::Display for RawAggregatedSample {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "pid: {}", self.pid);
+        let ustack_rep = match self.ustack {
+            None => "NONE",
+            Some(ustack) => {
+                let mut addrs_as_string: String = "".to_owned();
+                for (i, addr) in ustack.addresses.into_iter().enumerate() {
+                    if ustack.len <= i.try_into().unwrap() {
+                        break;
+                    }
+                    let cvtd = format!("{addr}, ");
+                    addrs_as_string.push_str(&cvtd);
+                }
+                addrs_as_string;
+            }
+        };
+        let kstack_rep = match self.kstack {
+            None => "NONE",
+            Some(kstack) => "[ TBD KERNEL STACK ]",
+        };
+        write!(
+            f,
+            "pid: {}\nustack: {}\nkstack: {}\ncount: {}",
+            self.pid, ustack_rep, kstack_rep, self.count
+        )
+    }
 }
 
 #[derive(Default, Debug)]
