@@ -2,7 +2,7 @@ use anyhow::Result;
 use gimli::{CfaRule, CieOrFde, EhFrame, UnwindContext, UnwindSection};
 use lazy_static::lazy_static;
 use memmap2::Mmap;
-use object::{Object, ObjectSection};
+use object::{Object, ObjectSection, Section};
 use std::fs::File;
 use thiserror::Error;
 
@@ -122,6 +122,34 @@ pub fn compact_printing_callback(unwind_data: &UnwindData) {
     }
 }
 
+/// Just used for debugging.
+pub fn show_unwind_info_sections(path: &str) {
+    let file = File::open(path).expect("open object file");
+    let mmap = unsafe { memmap2::Mmap::map(&file).expect("mmap") };
+    let object_file = object::File::parse(&mmap[..]).expect("object file parse");
+
+    let eh_frame_section = object_file.section_by_name(".eh_frame");
+    let uu_eh_frame_section = object_file.section_by_name(".__eh_frame");
+
+    let debug_frame_section = object_file.section_by_name(".debug_frame");
+    let uu_zdebug_frame_section = object_file.section_by_name(".__zdebug_frame");
+
+    fn get_size(s: Option<Section>) -> Option<u64> {
+        s.as_ref()?;
+
+        Some(s.unwrap().size())
+    }
+
+    println!("Unwind info sizes for {}", path);
+    println!(
+        ".eh_frame: {:?} .__eh_frame: {:?} .debug_frame: {:?} .__zdebug_frame {:?}",
+        get_size(eh_frame_section),
+        get_size(uu_eh_frame_section),
+        get_size(debug_frame_section),
+        get_size(uu_zdebug_frame_section)
+    )
+}
+
 // Ideally this interface should do most of the preparatory work in the
 // constructor but this is complicated by the various lifetimes.
 pub struct UnwindInfoBuilder<'a> {
@@ -200,6 +228,7 @@ impl<'a> UnwindInfoBuilder<'a> {
         let eh_frame_section = object_file
             .section_by_name(".eh_frame")
             .ok_or(Error::ErrorNoEhFrameSection)?;
+
         let text = object_file
             .section_by_name(".text")
             .ok_or(Error::ErrorNoTextSection)?;
