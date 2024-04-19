@@ -7,10 +7,11 @@ use data_encoding::HEXUPPER;
 use memmap2;
 use ring::digest::{Context, Digest, SHA256};
 
-use object::elf::FileHeader64;
+use object::elf::{FileHeader32, FileHeader64};
 use object::read::elf::FileHeader;
 use object::read::elf::ProgramHeader;
 use object::Endianness;
+use object::FileKind;
 use object::Object;
 use object::ObjectKind;
 use object::ObjectSection;
@@ -118,15 +119,41 @@ impl ObjectFile<'_> {
 
     pub fn elf_load(&self) -> Result<ElfLoad> {
         let mmap = unsafe { &**self.leaked_mmap_ptr };
-        let header: &FileHeader64<Endianness> = FileHeader64::<Endianness>::parse(mmap)?;
-        let endian = header.endian()?;
-        let segments = header.program_headers(endian, mmap)?;
 
-        if let Some(segment) = segments.iter().next() {
-            return Ok(ElfLoad {
-                offset: segment.p_offset(endian),
-                vaddr: segment.p_vaddr(endian),
-            });
+        match FileKind::parse(mmap) {
+            Ok(FileKind::Elf32) => {
+                let header: &FileHeader32<Endianness> = FileHeader32::<Endianness>::parse(mmap)?;
+                let endian = header.endian()?;
+                let segments = header.program_headers(endian, mmap)?;
+
+                if let Some(segment) = segments.iter().next() {
+                    return Ok(ElfLoad {
+                        offset: segment.p_offset(endian) as u64,
+                        vaddr: segment.p_vaddr(endian) as u64,
+                    });
+                }
+            }
+            Ok(FileKind::Elf64) => {
+                let header: &FileHeader64<Endianness> = FileHeader64::<Endianness>::parse(mmap)?;
+                let endian = header.endian()?;
+                let segments = header.program_headers(endian, mmap)?;
+
+                if let Some(segment) = segments.iter().next() {
+                    return Ok(ElfLoad {
+                        offset: segment.p_offset(endian),
+                        vaddr: segment.p_vaddr(endian),
+                    });
+                }
+            }
+            Ok(other_file_kind) => {
+                return Err(anyhow!(
+                    "object is not an 32 or 64 bits ELF but {:?}",
+                    other_file_kind
+                ));
+            }
+            Err(e) => {
+                return Err(anyhow!("FileKind failed with {:?}", e));
+            }
         }
 
         Err(anyhow!("no segments found"))
