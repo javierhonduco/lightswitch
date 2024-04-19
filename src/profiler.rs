@@ -536,7 +536,13 @@ impl Profiler<'_> {
 
             let my_lock = self.object_files.lock().unwrap();
 
-            let object_file_info = my_lock.get(&mapping.build_id.clone().unwrap()).unwrap();
+            // We might know about a mapping that failed to open for some reason.
+            let object_file_info = my_lock.get(&mapping.build_id.clone().unwrap());
+            if object_file_info.is_none() {
+                warn!("mapping not found");
+                continue
+            }
+            let object_file_info = object_file_info.unwrap();
             let obj_path = object_file_info.path.clone();
 
             let mut load_address = 0;
