@@ -1175,6 +1175,14 @@ impl Profiler<'_> {
 
     pub fn setup_perf_events(&mut self) {
         let mut prog_fds = Vec::new();
+        // TODO: The call to num_possible_cpus is afflicted by https://github.com/libbpf/libbpf/issues/103
+        // Seeing examples of hosts where the number of possible CPUs is not the actual number of
+        // online CPUs:
+        // $ cat /sys/devices/system/cpu/possible
+        // 0-7
+        // $ cat /sys/devices/system/cpu/online
+        // 0-3
+        // So we need the number of online, not possible CPUs, to avoid failures
         for i in 0..num_possible_cpus().expect("get possible CPUs") {
             let perf_fd =
                 unsafe { setup_perf_event(i.try_into().unwrap(), self.sample_freq as u64) }
