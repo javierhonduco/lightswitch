@@ -728,11 +728,26 @@ impl Profiler<'_> {
             )
             .entered();
 
-            let Ok(mut found_unwind_info) =
-                in_memory_unwind_info(&first_mapping.path.to_string_lossy())
-            else {
-                continue;
-            };
+            let mut found_unwind_info: Vec<stack_unwind_row_t>;
+
+            match in_memory_unwind_info(&first_mapping.path.to_string_lossy()) {
+                Ok(unwind_info) => {
+                    found_unwind_info = unwind_info;
+                }
+                Err(e) => {
+                    warn!(
+                        "failed to get unwind information for {} with {:?}",
+                        first_mapping.path.to_string_lossy(),
+                        e
+                    );
+
+                    use crate::unwind_info::log_unwind_info_sections;
+                    if let Err(e) = log_unwind_info_sections(&first_mapping.path) {
+                        info!("log_unwind_info_sections failed with {}", e);
+                    }
+                    continue;
+                }
+            }
             span.exit();
 
             let span: span::EnteredSpan = span!(Level::DEBUG, "sort unwind info").entered();
