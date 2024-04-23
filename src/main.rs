@@ -187,8 +187,16 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             let process_name = match procfs::process::Process::new(sample.pid) {
                 Ok(p) => match p.stat() {
+                    // NOTE:
+                    // If p.pid() == p.pgrp() for this process, this is a stack for the main thread
+                    // of the pid, and stat.comm is the name of the process binary file, so use:
+                    // process name = stat.comm, and thread name = "main"
+                    // Otherwise, stat.comm is the name of the thread, and you have to look up the
+                    // process binary name, so use:
+                    // process name = <derive from stat.pgrp>, and thread name = stat.comm
+                    //
                     Ok(stat) => stat.comm,
-                    Err(_) => "<could not fetch proc stat".to_string(),
+                    Err(_) => "<could not fetch proc stat>".to_string(),
                 },
                 Err(_) => "<could not get proc comm>".to_string(),
             };

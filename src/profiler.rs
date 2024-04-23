@@ -186,7 +186,7 @@ impl fmt::Display for SymbolizedAggregatedSample {
             }
             scratch_string.push(']');
             scratch_string
-        }
+        };
         let ustack_rep = format_symbolized_stack(self.ustack);
         let kstack_rep = format_symbolized_stack(self.kstack);
         let final_rep = write!(
