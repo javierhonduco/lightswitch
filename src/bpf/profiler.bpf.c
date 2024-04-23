@@ -2,22 +2,16 @@
 // Copyright 2022 The Parca Authors
 // Copyright 2024 The Lightswitch Authors
 
-#include "common.h"
+#include "constants.h"
 #include "vmlinux.h"
 #include "profiler.h"
+#include "shared_maps.h"
+#include "shared_helpers.h"
 
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
-
-struct {
-  __uint(type, BPF_MAP_TYPE_LPM_TRIE);
-  __type(key, struct exec_mappings_key);
-  __type(value, mapping_t);
-  __uint(map_flags, BPF_F_NO_PREALLOC);
-  __uint(max_entries, MAX_PROCESSES * 200);
-} exec_mappings SEC(".maps");
 
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
@@ -70,47 +64,29 @@ struct {
 } unwind_tables SEC(".maps");
 
 struct {
-  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-  __uint(max_entries, 1);
-  __type(key, u32);
-  __type(value, struct unwinder_stats_t);
-} percpu_stats SEC(".maps");
-
-
-struct {
   __uint(type, BPF_MAP_TYPE_HASH);
   __uint(max_entries, MAX_PROCESSES);
   __type(key, Event);
   __type(value, bool);
 } rate_limits SEC(".maps");
 
-/*=========================== HELPER FUNCTIONS ==============================*/
 
-#define DEFINE_COUNTER(__func__name)                                           \
-  static void bump_unwind_##__func__name() {                                   \
-    u32 zero = 0;                                                              \
-    struct unwinder_stats_t *unwinder_stats =                                  \
-        bpf_map_lookup_elem(&percpu_stats, &zero);                             \
-    if (unwinder_stats != NULL) {                                              \
-      unwinder_stats->__func__name++;                                          \
-    }                                                                          \
-  }
-
-DEFINE_COUNTER(total);
-DEFINE_COUNTER(success_dwarf);
-DEFINE_COUNTER(error_truncated);
-DEFINE_COUNTER(error_unsupported_expression);
-DEFINE_COUNTER(error_unsupported_frame_pointer_action);
-DEFINE_COUNTER(error_unsupported_cfa_register);
-DEFINE_COUNTER(error_catchall);
-DEFINE_COUNTER(error_should_never_happen);
-DEFINE_COUNTER(error_pc_not_covered);
-DEFINE_COUNTER(error_mapping_not_found);
-DEFINE_COUNTER(error_mapping_does_not_contain_pc);
-DEFINE_COUNTER(error_chunk_not_found);
-DEFINE_COUNTER(error_binary_search_exausted_iterations);
-DEFINE_COUNTER(error_sending_new_process_event);
-DEFINE_COUNTER(error_cfa_offset_did_not_fit);
+// On arm64 running 6.8.4-200.fc39.aarch64 the verifier fails with argument list too long. This
+// did not use to happen before and it's probably due to a regression in the way the verifier
+// accounts for the explored paths. I have tried many other things, such as two mid variables
+// but that did not do it. The theory of why this works is that perhaps it's making the verifier
+// reset the state it had about the program exploration so the branches its exploring per iteration
+// do not grow as much.
+#ifdef __TARGET_ARCH_arm64
+static u32 __attribute__((optnone)) verifier_workaround(u32 value) {
+    return value;
+}
+#endif
+#ifdef __TARGET_ARCH_x86
+static __always_inline u32 verifier_workaround(u32 value) {
+    return value;
+}
+#endif
 
 // Binary search the unwind table to find the row index containing the unwind
 // information for a given program counter (pc) relative to the object file.
@@ -126,8 +102,7 @@ static __always_inline u64 find_offset_for_pc(stack_unwind_table_t *table, u64 p
       return found;
     }
 
-    u32 mid = (left + right) / 2;
-
+    u32 mid = verifier_workaround((left + right) / 2);
     // Appease the verifier.
     if (mid < 0 || mid >= MAX_UNWIND_TABLE_SIZE) {
       LOG("\t.should never happen, mid: %lu, max: %lu", mid,
@@ -144,29 +119,6 @@ static __always_inline u64 find_offset_for_pc(stack_unwind_table_t *table, u64 p
     }
   }
   return BINARY_SEARCH_EXHAUSTED_ITERATIONS;
-}
-
-static __always_inline mapping_t* find_mapping(int per_process_id, u64 pc) {
-  struct exec_mappings_key key = {};
-  key.prefix_len = PREFIX_LEN;
-  key.pid = __builtin_bswap32((u32) per_process_id);
-  key.data = __builtin_bswap64(pc);
-
-  mapping_t *mapping = bpf_map_lookup_elem(&exec_mappings, &key);
-
-  if (mapping == NULL) {
-    LOG("[error] no mapping found for pc %llx", pc);
-    bump_unwind_error_mapping_not_found();
-    return NULL;
-  }
-
-  if (pc < mapping->begin || pc >= mapping->end) {
-    LOG("[error] pc %llx not contained within begin: %llx end: %llx", pc, mapping->begin, mapping->end);
-    bump_unwind_error_mapping_does_not_contain_pc();
-    return NULL;
-  }
-
-  return mapping;
 }
 
 // Finds the shard information for a given pid and program counter. Optionally,
@@ -207,14 +159,6 @@ find_chunk(mapping_t *mapping, u64 object_relative_pc) {
   return NULL;
 }
 
-static __always_inline bool process_is_known(int per_process_id) {
-  struct exec_mappings_key key = {};
-  key.prefix_len = PREFIX_LEN;
-  key.pid = __builtin_bswap32((u32) per_process_id);
-  key.data = 0;
-
-  return bpf_map_lookup_elem(&exec_mappings, &key) != NULL;
-}
 
 static __always_inline void event_new_process(struct bpf_perf_event_data *ctx, int per_process_id) {
   Event event = {
@@ -328,11 +272,11 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
   // Hash and add user stack.
   if (unwind_state->stack.len >= 1) {
     u64 user_stack_id = hash_stack(&unwind_state->stack);
-    stack_key->user_stack_id = user_stack_id;
-
     int err = bpf_map_update_elem(&stacks, &user_stack_id, &unwind_state->stack,
                                   BPF_ANY);
-    if (err != 0) {
+    if (err == 0) {
+      stack_key->user_stack_id = user_stack_id;
+    } else {
       LOG("[error] failed to insert user stack: %d", err);
     }
   }
@@ -345,11 +289,11 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
 
   if (unwind_state->stack.len >= 1) {
     u64 kernel_stack_id = hash_stack(&unwind_state->stack);
-    stack_key->kernel_stack_id = kernel_stack_id;
-
     int err = bpf_map_update_elem(&stacks, &kernel_stack_id, &unwind_state->stack,
                                   BPF_ANY);
-    if (err != 0) {
+    if (err == 0) {
+      stack_key->kernel_stack_id = kernel_stack_id;
+    } else {
       LOG("[error] failed to insert kernel stack: %d", err);
     }
   }
@@ -387,9 +331,16 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     LOG("\tcurrent bp: %llx", unwind_state->bp);
 
     mapping_t *mapping = find_mapping(per_process_id, unwind_state->ip);
+
     if (mapping == NULL) {
-      // find_mapping bumps the counters already.
-      // request_refresh_process_info?
+      LOG("[error] no mapping found for pc %llx", unwind_state->ip);
+      bump_unwind_error_mapping_not_found();
+      return 1;
+    }
+
+    if (unwind_state->ip < mapping->begin || unwind_state->ip >= mapping->end) {
+      LOG("[error] pc %llx not contained within begin: %llx end: %llx", unwind_state->ip, mapping->begin, mapping->end);
+      bump_unwind_error_mapping_does_not_contain_pc();
       return 1;
     }
 
@@ -618,38 +569,24 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
   return 0;
 }
 
-// Set up the initial registers to start unwinding.
-static __always_inline bool set_initial_dwarf_state(struct pt_regs *regs) {
-  u32 zero = 0;
-
-  unwind_state_t *unwind_state = bpf_map_lookup_elem(&heap, &zero);
-  if (unwind_state == NULL) {
-    // This should never happen.
-    return false;
-  }
-
-  // Just reset the stack size. This must be checked in userspace to ensure
-  // we aren't reading garbage data.
+// Set up the initial unwinding state.
+static __always_inline bool set_initial_state(unwind_state_t *unwind_state, struct pt_regs *regs) {
   unwind_state->stack.len = 0;
   unwind_state->tail_calls = 0;
-  // unwind_state->unwinding_jit = false;
 
-  u64 ip = 0;
-  u64 sp = 0;
-  u64 bp = 0;
+  unwind_state->stack_key.pid = 0;
+  unwind_state->stack_key.task_id = 0;
+  unwind_state->stack_key.user_stack_id = 0;
+  unwind_state->stack_key.kernel_stack_id = 0;
 
   if (in_kernel(PT_REGS_IP(regs))) {
-    if (retrieve_task_registers(&ip, &sp, &bp)) {
-      // we are in kernelspace, but got the user regs
-      unwind_state->ip = ip;
-      unwind_state->sp = sp;
-      unwind_state->bp = bp;
-    } else {
+    if (!retrieve_task_registers(&unwind_state->ip, &unwind_state->sp, &unwind_state->bp)) {
       // in kernelspace, but failed, probs a kworker
+      // todo: bump counter
       return false;
     }
   } else {
-    // in userspace
+    // Currently executing userspace code.
     unwind_state->ip = PT_REGS_IP(regs);
     unwind_state->sp = PT_REGS_SP(regs);
     unwind_state->bp = PT_REGS_FP(regs);
@@ -673,45 +610,16 @@ int on_event(struct bpf_perf_event_data *ctx) {
     return 0;
   }
 
-  u32 zero = 0;
-  unwind_state_t *profiler_state = bpf_map_lookup_elem(&heap, &zero);
-  if (profiler_state == NULL) {
-    LOG("[error] profiler state should never be NULL");
-    return 0;
-  }
-
-  // == Init
-  profiler_state->stack.len = 0;
-  profiler_state->tail_calls = 0;
-
-  profiler_state->stack_key.pid = 0;
-  profiler_state->stack_key.task_id = 0;
-  profiler_state->stack_key.user_stack_id = 0;
-  profiler_state->stack_key.kernel_stack_id = 0;
-
   if (process_is_known(per_process_id)) {
     bump_unwind_total();
 
-    u64 ip = 0;
-    u64 sp = 0;
-    u64 bp = 0;
-
-    if (in_kernel(PT_REGS_IP(&ctx->regs))) {
-      if (retrieve_task_registers(&ip, &sp, &bp)) {
-        // we are in kernelspace, but got the user regs
-        profiler_state->ip = ip;
-        profiler_state->sp = sp;
-        profiler_state->bp = bp;
-      } else {
-        // in kernelspace, but failed, probs a kworker
-        // return false;
-      }
-    } else {
-      // in userspace
-      profiler_state->ip = PT_REGS_IP(&ctx->regs);
-      profiler_state->sp = PT_REGS_SP(&ctx->regs);
-      profiler_state->bp = PT_REGS_FP(&ctx->regs);
+    u32 zero = 0;
+    unwind_state_t *profiler_state = bpf_map_lookup_elem(&heap, &zero);
+    if (profiler_state == NULL) {
+      LOG("[error] profiler state should never be NULL");
+      return 0;
     }
+    set_initial_state(profiler_state, &ctx->regs);
 
     bpf_tail_call(ctx, &programs, PROGRAM_NATIVE_UNWINDER);
     return 0;

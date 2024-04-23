@@ -2,8 +2,9 @@ use anyhow::Result;
 use gimli::{CfaRule, CieOrFde, EhFrame, UnwindContext, UnwindSection};
 use lazy_static::lazy_static;
 use memmap2::Mmap;
-use object::{Object, ObjectSection};
+use object::{Object, ObjectSection, Section};
 use std::fs::File;
+use std::path::PathBuf;
 use thiserror::Error;
 
 use crate::bpf::profiler_bindings::stack_unwind_row_t;
@@ -122,6 +123,37 @@ pub fn compact_printing_callback(unwind_data: &UnwindData) {
     }
 }
 
+/// Just used for debugging.
+pub fn log_unwind_info_sections(path: &PathBuf) -> Result<()> {
+    use tracing::info;
+
+    let file = File::open(path)?;
+    let mmap = unsafe { memmap2::Mmap::map(&file)? };
+    let object_file = object::File::parse(&mmap[..])?;
+
+    let eh_frame_section = object_file.section_by_name(".eh_frame");
+    let dunder_eh_frame_section = object_file.section_by_name(".__eh_frame");
+    let debug_frame_section = object_file.section_by_name(".debug_frame");
+    let dunder_zdebug_frame_section = object_file.section_by_name(".__zdebug_frame");
+
+    fn get_size(s: Option<Section>) -> Option<u64> {
+        s.as_ref()?;
+
+        Some(s.expect("should never happen").size())
+    }
+
+    info!(
+        "Unwind info sizes for object {:?} .eh_frame: {:?} .__eh_frame: {:?} .debug_frame: {:?} .__zdebug_frame {:?}",
+        path,
+        get_size(eh_frame_section),
+        get_size(dunder_eh_frame_section),
+        get_size(debug_frame_section),
+        get_size(dunder_zdebug_frame_section)
+    );
+
+    Ok(())
+}
+
 // Ideally this interface should do most of the preparatory work in the
 // constructor but this is complicated by the various lifetimes.
 pub struct UnwindInfoBuilder<'a> {
@@ -200,6 +232,7 @@ impl<'a> UnwindInfoBuilder<'a> {
         let eh_frame_section = object_file
             .section_by_name(".eh_frame")
             .ok_or(Error::ErrorNoEhFrameSection)?;
+
         let text = object_file
             .section_by_name(".text")
             .ok_or(Error::ErrorNoTextSection)?;
@@ -391,6 +424,7 @@ pub fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<stack_unwind_row_
     let mut unwind_info = Vec::new();
     let mut last_function_end_addr: Option<u64> = None;
     let mut last_row = None;
+
     let builder = UnwindInfoBuilder::with_callback(path, |unwind_data| {
         match unwind_data {
             UnwindData::Function(_, end_addr) => {

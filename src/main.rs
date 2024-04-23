@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::fmt::Write;
 use std::fs::File;
+use std::io::IsTerminal;
 use std::ops::RangeInclusive;
 use std::panic;
 use std::path::PathBuf;
@@ -11,6 +12,7 @@ use clap::Parser;
 
 use inferno::flamegraph;
 use nix::unistd::Uid;
+use primal::is_prime;
 use tracing::{error, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
@@ -19,7 +21,6 @@ use lightswitch::collector::Collector;
 use lightswitch::object::ObjectFile;
 use lightswitch::profiler::Profiler;
 use lightswitch::unwind_info::{compact_printing_callback, UnwindInfoBuilder};
-use primal::is_prime;
 
 const SAMPLE_FREQ_RANGE: RangeInclusive<usize> = 1..=1009;
 
@@ -131,6 +132,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Level::INFO
         })
         .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE)
+        .with_ansi(std::io::stdout().is_terminal())
         .finish();
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");

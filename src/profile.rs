@@ -20,9 +20,7 @@ pub fn symbolize_profile(
 ) -> SymbolizedAggregatedProfile {
     let _span = span!(Level::DEBUG, "symbolize_profile").entered();
     let mut r = SymbolizedAggregatedProfile::new();
-    let mut addresses_per_sample = HashMap::new();
-
-    let _ = fetch_symbols_for_profile(&mut addresses_per_sample, profile, procs, objs); // best effort
+    let addresses_per_sample = fetch_symbols_for_profile(profile, procs, objs);
 
     let ksyms: Vec<crate::ksym::Ksym> = KsymIter::from_kallsyms().collect();
 
@@ -38,7 +36,7 @@ pub fn symbolize_profile(
 
         if let Some(ustack) = sample.ustack {
             symbolized_sample.ustack =
-                symbolize_native_stack(&mut addresses_per_sample, procs, objs, sample.pid, &ustack);
+                symbolize_native_stack(&addresses_per_sample, procs, objs, sample.pid, &ustack);
         };
 
         if let Some(kstack) = sample.kstack {
@@ -82,24 +80,18 @@ fn find_mapping(mappings: &[ExecutableMapping], addr: u64) -> Option<ExecutableM
 }
 
 fn fetch_symbols_for_profile(
-    addresses_per_sample: &mut HashMap<PathBuf, HashMap<u64, String>>,
     profile: &RawAggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<BuildId, ObjectFileInfo>,
-) -> anyhow::Result<()> {
+) -> HashMap<PathBuf, HashMap<u64, Vec<String>>> {
+    let mut addresses_per_sample: HashMap<PathBuf, HashMap<u64, Vec<String>>> = HashMap::new();
+
     for sample in profile {
         let Some(native_stack) = sample.ustack else {
             continue;
         };
-        let task_id = sample.pid;
 
-        // We should really continue
-        // Also it would be ideal not to have to query procfs again...
-        let p = procfs::process::Process::new(task_id)?;
-        let status = p.status()?;
-        let tgid = status.tgid;
-
-        let Some(info) = procs.get(&tgid) else {
+        let Some(info) = procs.get(&sample.pid) else {
             continue;
         };
 
@@ -124,7 +116,8 @@ fn fetch_symbols_for_profile(
 
                             let key = obj.path.clone();
                             let addrs = addresses_per_sample.entry(key).or_default();
-                            addrs.insert(normalized_addr, "".to_string()); // <- default value is a bit janky
+                            addrs.insert(normalized_addr, vec!["<default>".to_string()]);
+                            // <- default value is a bit janky
                         }
                         None => {
                             println!("\t\t - [no build id found]");
@@ -140,21 +133,21 @@ fn fetch_symbols_for_profile(
 
     // second pass, symbolize
     for (path, addr_to_symbol_mapping) in addresses_per_sample.iter_mut() {
-        let addresses = addr_to_symbol_mapping.iter().map(|a| *a.0 - 1).collect();
-        let symbols: Vec<String> = symbolize_native_stack_blaze(addresses, path);
-        for (addr, symbol) in addr_to_symbol_mapping.clone().iter_mut().zip(symbols) {
-            addr_to_symbol_mapping.insert(*addr.0, symbol.to_string());
+        let addresses = addr_to_symbol_mapping.iter().map(|a| *a.0).collect();
+        let symbols = symbolize_native_stack_blaze(addresses, path);
+        for (a, symbol) in addr_to_symbol_mapping.clone().iter_mut().zip(symbols) {
+            addr_to_symbol_mapping.insert(*a.0, symbol);
         }
     }
 
-    Ok(())
+    addresses_per_sample
 }
 
 fn symbolize_native_stack(
-    addresses_per_sample: &mut HashMap<PathBuf, HashMap<u64, String>>,
+    addresses_per_sample: &HashMap<PathBuf, HashMap<u64, Vec<String>>>,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<BuildId, ObjectFileInfo>,
-    task_id: i32,
+    pid: i32,
     native_stack: &native_stack_t,
 ) -> Vec<String> {
     let mut r = Vec::new();
@@ -164,33 +157,39 @@ fn symbolize_native_stack(
             break;
         }
 
-        let Some(info) = procs.get(&task_id) else {
-            return r;
-            //return Err(anyhow!("process not found"));
+        let Some(info) = procs.get(&pid) else {
+            r.push("<could not find process>".to_string());
+            continue;
         };
 
         let Some(mapping) = find_mapping(&info.mappings, addr) else {
-            return r;
-            //return Err(anyhow!("could not find mapping"));
+            r.push("<could not find mapping>".to_string());
+            continue;
         };
 
         // finally
         match &mapping.build_id {
             Some(build_id) => match objs.get(build_id) {
                 Some(obj) => {
+                    let failed_to_fetch_symbol =
+                        vec!["<failed to fetch symbol for addr>".to_string()];
+                    let failed_to_symbolize = vec!["<failed to symbolize>".to_string()];
+
                     let normalized_addr = addr - mapping.start_addr + mapping.offset
                         - obj.load_offset
                         + obj.load_vaddr;
 
-                    let func_name = match addresses_per_sample.get(&obj.path) {
+                    let func_names = match addresses_per_sample.get(&obj.path) {
                         Some(value) => match value.get(&normalized_addr) {
-                            Some(v) => v.to_string(),
-                            None => "<failed to fetch symbol for addr>".to_string(),
+                            Some(v) => v,
+                            None => &failed_to_fetch_symbol,
                         },
-                        None => "<failed to symbolize>".to_string(),
+                        None => &failed_to_symbolize,
                     };
-                    //println!("\t\t - {:?}", name);
-                    r.push(func_name.to_string());
+
+                    for func_name in func_names {
+                        r.push(func_name.clone());
+                    }
                 }
                 None => {
                     debug!("\t\t - [no build id found]");

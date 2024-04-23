@@ -1,6 +1,6 @@
 #include "basic_types.h"
 
-#define MAX_UNWIND_INFO_SHARDS 25
+#define MAX_UNWIND_INFO_SHARDS 65
 
 // Number of frames to walk per tail call iteration.
 #define MAX_STACK_DEPTH_PER_PROGRAM 7
@@ -20,8 +20,8 @@ _Static_assert(MAX_TAIL_CALLS *MAX_STACK_DEPTH_PER_PROGRAM >= MAX_STACK_DEPTH,
 // 2^19 can bisect ~524_288 entries.
 #define MAX_BINARY_SEARCH_DEPTH 19
 // Size of the unwind table.
-// 250k * sizeof(stack_unwind_row_t) = 2MB
-#define MAX_UNWIND_TABLE_SIZE 250 * 1000
+// 100k * sizeof(stack_unwind_row_t) = 1.4MB
+#define MAX_UNWIND_TABLE_SIZE 100 * 1000
 _Static_assert(1 << MAX_BINARY_SEARCH_DEPTH >= MAX_UNWIND_TABLE_SIZE,
                "unwind table is big enough");
 
@@ -205,7 +205,7 @@ unsigned long long hash_stack(native_stack_t *stack) {
 
   unsigned long long hash = seed ^ (stack->len * m);
 
-  for (int i = 0; i < MAX_STACK_DEPTH; i++) {
+  for (unsigned long long i = 0; i < MAX_STACK_DEPTH; i++) {
     // The stack is not zeroed when we initialise it, we simply
     // set the length to zero. This is a workaround to produce
     // the same hash for two stacks that might have garbage values
