@@ -355,12 +355,14 @@ impl Profiler<'_> {
                 }
             }
 
+            let due_to_persist =
+                self.native_unwind_state.last_persisted.elapsed() > Duration::from_millis(100);
+
             if self.native_unwind_state.dirty
-                && self.native_unwind_state.last_persisted.elapsed() > Duration::from_millis(100)
+                && due_to_persist
+                && self.persist_unwind_info(&self.native_unwind_state.live_shard)
             {
-                if self.persist_unwind_info(&self.native_unwind_state.live_shard) {
-                    self.native_unwind_state.dirty = false;
-                }
+                self.native_unwind_state.dirty = false;
                 self.native_unwind_state.last_persisted = Instant::now();
             }
         }
@@ -827,9 +829,9 @@ impl Profiler<'_> {
 
                     if self.persist_unwind_info(&self.native_unwind_state.live_shard) {
                         self.native_unwind_state.dirty = false;
+                        self.native_unwind_state.live_shard.truncate(0);
+                        self.native_unwind_state.shard_index += 1;
                     }
-                    self.native_unwind_state.live_shard.truncate(0);
-                    self.native_unwind_state.shard_index += 1;
                     continue;
                 }
 
