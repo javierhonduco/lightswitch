@@ -331,9 +331,16 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     LOG("\tcurrent bp: %llx", unwind_state->bp);
 
     mapping_t *mapping = find_mapping(per_process_id, unwind_state->ip);
+
     if (mapping == NULL) {
-      // find_mapping bumps the counters already.
-      // request_refresh_process_info?
+      LOG("[error] no mapping found for pc %llx", unwind_state->ip);
+      bump_unwind_error_mapping_not_found();
+      return 1;
+    }
+
+    if (unwind_state->ip < mapping->begin || unwind_state->ip >= mapping->end) {
+      LOG("[error] pc %llx not contained within begin: %llx end: %llx", unwind_state->ip, mapping->begin, mapping->end);
+      bump_unwind_error_mapping_does_not_contain_pc();
       return 1;
     }
 
