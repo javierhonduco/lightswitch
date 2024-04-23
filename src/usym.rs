@@ -10,17 +10,26 @@ use blazesym::symbolize::Symbolizer;
 
 const ADDR2LINE_BIN: &str = "/usr/bin/addr2line";
 
-pub fn symbolize_native_stack_blaze(addrs: Vec<u64>, object_path: &PathBuf) -> Vec<String> {
+pub fn symbolize_native_stack_blaze(addrs: Vec<u64>, object_path: &PathBuf) -> Vec<Vec<String>> {
     let mut res = Vec::new();
 
     let src = Source::Elf(Elf::new(object_path));
     let symbolizer = Symbolizer::new();
-    let syms = symbolizer
-        .symbolize(&src, Input::VirtOffset(&addrs))
-        .unwrap(); // <----
+    let syms = match symbolizer.symbolize(&src, Input::VirtOffset(&addrs)) {
+        Ok(symbolized) => symbolized,
+        Err(e) => {
+            res.resize(
+                addrs.len(),
+                vec![format!("<blazesym: failed to symbolize due to {}", e)],
+            );
+            return res;
+        }
+    };
 
-    for sym in syms.iter() {
-        match sym {
+    for symbol in syms {
+        let mut symbols = Vec::new();
+
+        match symbol {
             Symbolized::Sym(Sym {
                 name,
                 addr: _,
@@ -29,16 +38,18 @@ pub fn symbolize_native_stack_blaze(addrs: Vec<u64>, object_path: &PathBuf) -> V
                 inlined,
                 ..
             }) => {
-                res.push(name.to_string());
+                symbols.push(name.to_string());
 
                 for frame in inlined.iter() {
-                    res.push(format!("{} (inlined)", frame.name));
+                    symbols.push(format!("{} (inlined)", frame.name));
                 }
             }
             Symbolized::Unknown(r) => {
-                res.push(format!("<unknown {}>", r));
+                symbols.push(format!("<blazesym: unknown symbol due to {}>", r));
             }
         }
+
+        res.push(symbols);
     }
     res
 }
