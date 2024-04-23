@@ -177,18 +177,18 @@ pub struct SymbolizedAggregatedSample {
 
 impl fmt::Display for SymbolizedAggregatedSample {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let format_symbolized_stack = |symbolized_stack: Vec<String>| -> String {
+        let format_symbolized_stack = |symbolized_stack: &Vec<String>| -> String {
             let mut scratch_string: String = String::new();
             scratch_string.push_str("[\n");
-            for (i, symbol) in symbolized_stack.into_iter().enumerate() {
+            for (i, symbol) in symbolized_stack.iter().enumerate() {
                 let cvtd = format!("{:3}: {},\n", i, symbol);
                 scratch_string.push_str(&cvtd);
             }
             scratch_string.push(']');
             scratch_string
         };
-        let ustack_rep = format_symbolized_stack(self.ustack);
-        let kstack_rep = format_symbolized_stack(self.kstack);
+        let ustack_rep = format_symbolized_stack(&self.ustack);
+        let kstack_rep = format_symbolized_stack(&self.kstack);
         let final_rep = write!(
             f,
             "SymbolizedAggregatedSample:\npid: {}\nustack: {}\nkstack: {}\ncount: {}",
