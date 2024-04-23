@@ -256,11 +256,11 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
   // Hash and add user stack.
   if (unwind_state->stack.len >= 1) {
     u64 user_stack_id = hash_stack(&unwind_state->stack);
-    stack_key->user_stack_id = user_stack_id;
-
     int err = bpf_map_update_elem(&stacks, &user_stack_id, &unwind_state->stack,
                                   BPF_ANY);
-    if (err != 0) {
+    if (err == 0) {
+      stack_key->user_stack_id = user_stack_id;
+    } else {
       LOG("[error] failed to insert user stack: %d", err);
     }
   }
@@ -273,11 +273,11 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
 
   if (unwind_state->stack.len >= 1) {
     u64 kernel_stack_id = hash_stack(&unwind_state->stack);
-    stack_key->kernel_stack_id = kernel_stack_id;
-
     int err = bpf_map_update_elem(&stacks, &kernel_stack_id, &unwind_state->stack,
                                   BPF_ANY);
-    if (err != 0) {
+    if (err == 0) {
+      stack_key->kernel_stack_id = kernel_stack_id;
+    } else {
       LOG("[error] failed to insert kernel stack: %d", err);
     }
   }
@@ -546,38 +546,24 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
   return 0;
 }
 
-// Set up the initial registers to start unwinding.
-static __always_inline bool set_initial_dwarf_state(struct pt_regs *regs) {
-  u32 zero = 0;
-
-  unwind_state_t *unwind_state = bpf_map_lookup_elem(&heap, &zero);
-  if (unwind_state == NULL) {
-    // This should never happen.
-    return false;
-  }
-
-  // Just reset the stack size. This must be checked in userspace to ensure
-  // we aren't reading garbage data.
+// Set up the initial unwinding state.
+static __always_inline bool set_initial_state(unwind_state_t *unwind_state, struct pt_regs *regs) {
   unwind_state->stack.len = 0;
   unwind_state->tail_calls = 0;
-  // unwind_state->unwinding_jit = false;
 
-  u64 ip = 0;
-  u64 sp = 0;
-  u64 bp = 0;
+  unwind_state->stack_key.pid = 0;
+  unwind_state->stack_key.task_id = 0;
+  unwind_state->stack_key.user_stack_id = 0;
+  unwind_state->stack_key.kernel_stack_id = 0;
 
   if (in_kernel(PT_REGS_IP(regs))) {
-    if (retrieve_task_registers(&ip, &sp, &bp)) {
-      // we are in kernelspace, but got the user regs
-      unwind_state->ip = ip;
-      unwind_state->sp = sp;
-      unwind_state->bp = bp;
-    } else {
+    if (!retrieve_task_registers(&unwind_state->ip, &unwind_state->sp, &unwind_state->bp)) {
       // in kernelspace, but failed, probs a kworker
+      // todo: bump counter
       return false;
     }
   } else {
-    // in userspace
+    // Currently executing userspace code.
     unwind_state->ip = PT_REGS_IP(regs);
     unwind_state->sp = PT_REGS_SP(regs);
     unwind_state->bp = PT_REGS_FP(regs);
@@ -601,45 +587,16 @@ int on_event(struct bpf_perf_event_data *ctx) {
     return 0;
   }
 
-  u32 zero = 0;
-  unwind_state_t *profiler_state = bpf_map_lookup_elem(&heap, &zero);
-  if (profiler_state == NULL) {
-    LOG("[error] profiler state should never be NULL");
-    return 0;
-  }
-
-  // == Init
-  profiler_state->stack.len = 0;
-  profiler_state->tail_calls = 0;
-
-  profiler_state->stack_key.pid = 0;
-  profiler_state->stack_key.task_id = 0;
-  profiler_state->stack_key.user_stack_id = 0;
-  profiler_state->stack_key.kernel_stack_id = 0;
-
   if (process_is_known(per_process_id)) {
     bump_unwind_total();
 
-    u64 ip = 0;
-    u64 sp = 0;
-    u64 bp = 0;
-
-    if (in_kernel(PT_REGS_IP(&ctx->regs))) {
-      if (retrieve_task_registers(&ip, &sp, &bp)) {
-        // we are in kernelspace, but got the user regs
-        profiler_state->ip = ip;
-        profiler_state->sp = sp;
-        profiler_state->bp = bp;
-      } else {
-        // in kernelspace, but failed, probs a kworker
-        // return false;
-      }
-    } else {
-      // in userspace
-      profiler_state->ip = PT_REGS_IP(&ctx->regs);
-      profiler_state->sp = PT_REGS_SP(&ctx->regs);
-      profiler_state->bp = PT_REGS_FP(&ctx->regs);
+    u32 zero = 0;
+    unwind_state_t *profiler_state = bpf_map_lookup_elem(&heap, &zero);
+    if (profiler_state == NULL) {
+      LOG("[error] profiler state should never be NULL");
+      return 0;
     }
+    set_initial_state(profiler_state, &ctx->regs);
 
     bpf_tail_call(ctx, &programs, PROGRAM_NATIVE_UNWINDER);
     return 0;

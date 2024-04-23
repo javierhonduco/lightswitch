@@ -55,6 +55,8 @@ int tracer_process_exit(void *ctx) {
     if (bpf_perf_event_output(ctx, &tracer_events, BPF_F_CURRENT_CPU, &event, sizeof(tracer_event_t)) < 0) {
         LOG("[error] failed to send process exit tracer event");
     }
+
+    return 0;
 }
 
 SEC("tracepoint/syscalls/sys_enter_munmap")
