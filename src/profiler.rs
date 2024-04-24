@@ -593,7 +593,7 @@ impl Profiler<'_> {
                     }
 
                     let raw_sample = RawAggregatedSample {
-                        pid: key.task_id,
+                        pid: key.pid,
                         ustack: result_ustack,
                         kstack: result_kstack,
                         count: *count,
