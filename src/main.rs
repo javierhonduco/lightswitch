@@ -185,25 +185,46 @@ fn main() -> Result<(), Box<dyn Error>> {
             let kstack = kstack.join(";");
             let count: String = sample.count.to_string();
 
-            let process_name = match procfs::process::Process::new(sample.pid) {
+            let (process_name, thread_name) = match procfs::process::Process::new(sample.pid) {
                 Ok(p) => match p.stat() {
-                    // NOTE:
-                    // If p.pid() == p.pgrp() for this process, this is a stack for the main thread
-                    // of the pid, and stat.comm is the name of the process binary file, so use:
-                    // process name = stat.comm, and thread name = "main"
-                    // Otherwise, stat.comm is the name of the thread, and you have to look up the
-                    // process binary name, so use:
-                    // process name = <derive from stat.pgrp>, and thread name = stat.comm
-                    //
-                    Ok(stat) => stat.comm,
-                    Err(_) => "<could not fetch proc stat>".to_string(),
+                    Ok(stat) => {
+                        if stat.pid == stat.pgrp {
+                            // NOTE:
+                            // If stat.pid() == stat.pgrp() for this process, this is a stack for the main thread
+                            // of the pid, and stat.comm is the name of the process binary file, so use:
+                            // process name = stat.comm, and thread name = "main_thread"
+                            (stat.comm, "main_thread".to_string())
+                        } else {
+                            // NOTE:
+                            // Otherwise, stat.comm is the name of the thread, and you have to look up the
+                            // process binary name, so use:
+                            // process name = <derive from stat.pgrp>, and thread name = stat.comm
+                            //
+                            let process_name = match procfs::process::Process::new(stat.pgrp) {
+                                Ok(p) => match p.stat() {
+                                    Ok(stat2) => stat2.comm,
+                                    Err(_) => "<could not fetch process name>".to_string(),
+                                },
+                                Err(_) => "<could not fetch process info>".to_string(),
+                            };
+                            (process_name, stat.comm)
+                        }
+                    }
+                    Err(_) => (
+                        "<could not fetch proc stat>".to_string(),
+                        "<could not fetch thread name>".to_string(),
+                    ),
                 },
-                Err(_) => "<could not get proc comm>".to_string(),
+                Err(_) => (
+                    "<could not get proc comm>".to_string(),
+                    "<could not fetch thread name>".to_string(),
+                ),
             };
 
             writeln!(
                 folded,
-                "{:?}{}{} {}",
+                "{:?}{}{}{} {}",
+                thread_name,
                 process_name,
                 if ustack.trim().is_empty() {
                     "".to_string()
