@@ -223,9 +223,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             writeln!(
                 folded,
-                "{:?}{}{}{} {}",
-                thread_name,
+                "{};{}{}{} {}",
                 process_name,
+                thread_name,
                 if ustack.trim().is_empty() {
                     "".to_string()
                 } else {
