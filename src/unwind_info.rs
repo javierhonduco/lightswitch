@@ -420,7 +420,7 @@ pub fn remove_redundant(info: &Vec<stack_unwind_row_t>) -> Vec<stack_unwind_row_
     unwind_info
 }
 
-pub fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<stack_unwind_row_t>> {
+pub fn to_vec(path: &str) -> anyhow::Result<Vec<stack_unwind_row_t>> {
     let mut unwind_info = Vec::new();
     let mut last_function_end_addr: Option<u64> = None;
     let mut last_row = None;

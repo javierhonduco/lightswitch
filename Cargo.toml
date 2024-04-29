@@ -32,11 +32,16 @@ nix = { version = "0.28.0", features = ["user"]}
 assert_cmd = { version = "2.0.14" }
 insta = { version = "1.38.0", features = ["yaml"] }
 rstest = "0.18.2"
+criterion = "0.3"
 
 [build-dependencies]
 bindgen = "0.69.4"
 libbpf-cargo = "0.22.1"
 glob = "0.3.1"
+
+[[bench]]
+name = "unwind_info"
+harness = false
 
 [profile.dev.package]
 insta.opt-level = 3

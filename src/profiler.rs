@@ -21,7 +21,7 @@ use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
 use crate::object::{BuildId, ObjectFile};
 use crate::perf_events::setup_perf_event;
-use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
+use crate::unwind_info::{to_vec, remove_redundant, remove_unnecesary_markers};
 use crate::util::summarize_address_range;
 
 pub enum TracerEvent {
@@ -732,7 +732,7 @@ impl Profiler<'_> {
 
             let mut found_unwind_info: Vec<stack_unwind_row_t>;
 
-            match in_memory_unwind_info(&first_mapping.path.to_string_lossy()) {
+            match to_vec(&first_mapping.path.to_string_lossy()) {
                 Ok(unwind_info) => {
                     found_unwind_info = unwind_info;
                 }
