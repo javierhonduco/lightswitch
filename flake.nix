@@ -58,6 +58,8 @@
               (import ./vm.nix { inherit pkgs; }).kernel_6_0
               (import ./vm.nix { inherit pkgs; }).kernel_6_2
               (import ./vm.nix { inherit pkgs; }).kernel_6_6
+              (import ./vm.nix { inherit pkgs; }).kernel_6_8_7
+              (import ./vm.nix { inherit pkgs; }).kernel_6_9_rc5
             ];
 
             LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_16.libclang ];
