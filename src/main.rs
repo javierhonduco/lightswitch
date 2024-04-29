@@ -20,7 +20,10 @@ use tracing_subscriber::FmtSubscriber;
 use lightswitch::collector::Collector;
 use lightswitch::object::ObjectFile;
 use lightswitch::profiler::Profiler;
-use lightswitch::unwind_info::{compact_printing_callback, UnwindInfoBuilder};
+use lightswitch::unwind_info::remove_redundant;
+use lightswitch::unwind_info::remove_unnecesary_markers;
+use lightswitch::unwind_info::to_vec;
+use lightswitch::unwind_info::UnwindInfoBuilder;
 
 const SAMPLE_FREQ_RANGE: RangeInclusive<usize> = 1..=1009;
 
@@ -138,7 +141,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     if let Some(path) = args.show_unwind_info {
-        UnwindInfoBuilder::with_callback(&path, compact_printing_callback)?.process()?;
+        let mut unwind_info = to_vec(&path).unwrap();
+        remove_unnecesary_markers(&mut unwind_info);
+        remove_redundant(&mut unwind_info);
+
+        for compact_row in unwind_info {
+            println!("{:?}", compact_row);
+        }
         return Ok(());
     }
 

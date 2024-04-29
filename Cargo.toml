@@ -43,6 +43,9 @@ glob = "0.3.1"
 name = "unwind_info"
 harness = false
 
+[lib]
+bench = false
+
 [profile.dev.package]
 insta.opt-level = 3
 similar.opt-level = 3

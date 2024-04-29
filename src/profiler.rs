@@ -21,7 +21,7 @@ use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
 use crate::object::{BuildId, ObjectFile};
 use crate::perf_events::setup_perf_event;
-use crate::unwind_info::{to_vec, remove_redundant, remove_unnecesary_markers};
+use crate::unwind_info::{remove_redundant, remove_unnecesary_markers, to_vec};
 use crate::util::summarize_address_range;
 
 pub enum TracerEvent {
@@ -752,17 +752,9 @@ impl Profiler<'_> {
             }
             span.exit();
 
-            let span: span::EnteredSpan = span!(Level::DEBUG, "sort unwind info").entered();
-            found_unwind_info.sort_by(|a, b| {
-                let a_pc = a.pc;
-                let b_pc = b.pc;
-                a_pc.cmp(&b_pc)
-            });
-            span.exit();
-
             let span: span::EnteredSpan = span!(Level::DEBUG, "optimize unwind info").entered();
-            let found_unwind_info = remove_unnecesary_markers(&found_unwind_info);
-            let found_unwind_info = remove_redundant(&found_unwind_info);
+            remove_unnecesary_markers(&mut found_unwind_info);
+            remove_redundant(&mut found_unwind_info);
             span.exit();
 
             debug!(
