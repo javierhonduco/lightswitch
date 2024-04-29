@@ -20,7 +20,10 @@ use tracing_subscriber::FmtSubscriber;
 use lightswitch::collector::Collector;
 use lightswitch::object::ObjectFile;
 use lightswitch::profiler::Profiler;
-use lightswitch::unwind_info::{compact_printing_callback, UnwindInfoBuilder};
+use lightswitch::unwind_info::in_memory_unwind_info;
+use lightswitch::unwind_info::remove_redundant;
+use lightswitch::unwind_info::remove_unnecesary_markers;
+use lightswitch::unwind_info::UnwindInfoBuilder;
 
 const SAMPLE_FREQ_RANGE: RangeInclusive<usize> = 1..=1009;
 
@@ -125,6 +128,25 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let args = Cli::parse();
 
+    if let Some(path) = args.show_unwind_info {
+        let mut unwind_info = in_memory_unwind_info(&path).unwrap();
+        remove_unnecesary_markers(&mut unwind_info);
+        remove_redundant(&mut unwind_info);
+
+        for compact_row in unwind_info {
+            let pc = compact_row.pc;
+            let cfa_type = compact_row.cfa_type;
+            let rbp_type = compact_row.rbp_type;
+            let cfa_offset = compact_row.cfa_offset;
+            let rbp_offset = compact_row.rbp_offset;
+            println!(
+                "pc: {:x} cfa_type: {:<2} rbp_type: {:<2} cfa_offset: {:<4} rbp_offset: {:<4}",
+                pc, cfa_type, rbp_type, cfa_offset, rbp_offset
+            );
+        }
+        return Ok(());
+    }
+
     let subscriber = FmtSubscriber::builder()
         .with_max_level(if args.filter_logs {
             Level::TRACE
@@ -136,11 +158,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         .finish();
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
-
-    if let Some(path) = args.show_unwind_info {
-        UnwindInfoBuilder::with_callback(&path, compact_printing_callback)?.process()?;
-        return Ok(());
-    }
 
     if let Some(path) = args.show_info {
         let objet_file = ObjectFile::new(&PathBuf::from(path.clone())).unwrap();

@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::bpf::profiler_bindings::stack_unwind_row_t;
 use anyhow::anyhow;
-use tracing::error;
+use tracing::{error, span, Level};
 
 #[repr(u8)]
 pub enum CfaType {
@@ -252,8 +252,8 @@ impl<'a> UnwindInfoBuilder<'a> {
         let eh_frame = EhFrame::new(eh_frame_data, endian);
         let mut entries_iter = eh_frame.entries(&bases);
 
-        let mut ctx = Box::new(UnwindContext::new());
         let mut cur_cie = None;
+        let mut pc_and_fde_offset = Vec::new();
 
         while let Ok(Some(entry)) = entries_iter.next() {
             match entry {
@@ -261,7 +261,7 @@ impl<'a> UnwindInfoBuilder<'a> {
                     cur_cie = Some(cie);
                 }
                 CieOrFde::Fde(partial_fde) => {
-                    if let Ok(fde) = partial_fde.parse(|eh_frame, bases, cie_offset| {
+                    let fde = partial_fde.parse(|eh_frame, bases, cie_offset| {
                         if let Some(cie) = &cur_cie {
                             if cie.offset() == cie_offset.0 {
                                 return Ok(cie.clone());
@@ -272,111 +272,125 @@ impl<'a> UnwindInfoBuilder<'a> {
                             cur_cie = Some(cie.clone());
                         }
                         cie
-                    }) {
-                        (self.callback)(&UnwindData::Function(
-                            fde.initial_address(),
-                            fde.initial_address() + fde.len(),
-                        ));
+                    });
 
-                        let mut table = fde.rows(&eh_frame, &bases, &mut ctx)?;
-
-                        loop {
-                            let mut compact_row = CompactUnwindRow::default();
-
-                            match table.next_row() {
-                                Ok(None) => break,
-                                Ok(Some(row)) => {
-                                    compact_row.pc = row.start_address();
-                                    match row.cfa() {
-                                        CfaRule::RegisterAndOffset { register, offset } => {
-                                            if register == &RBP_X86 {
-                                                compact_row.cfa_type =
-                                                    CfaType::FramePointerOffset as u8;
-                                            } else if register == &RSP_X86 {
-                                                compact_row.cfa_type =
-                                                    CfaType::StackPointerOffset as u8;
-                                            } else {
-                                                compact_row.cfa_type =
-                                                    CfaType::UnsupportedRegisterOffset as u8;
-                                            }
-
-                                            match u16::try_from(*offset) {
-                                                Ok(off) => {
-                                                    compact_row.cfa_offset = off;
-                                                }
-                                                Err(_) => {
-                                                    compact_row.cfa_type =
-                                                        CfaType::OffsetDidNotFit as u8;
-                                                }
-                                            }
-                                        }
-                                        CfaRule::Expression(exp) => {
-                                            let found_expression = exp.0.slice();
-
-                                            if found_expression == *PLT1 {
-                                                compact_row.cfa_offset = PltType::Plt1 as u16;
-                                            } else if found_expression == *PLT2 {
-                                                compact_row.cfa_offset = PltType::Plt2 as u16;
-                                            }
-
-                                            compact_row.cfa_type = CfaType::Expression as u8;
-                                        }
-                                    };
-
-                                    match row.register(RBP_X86) {
-                                        gimli::RegisterRule::Undefined => {}
-                                        gimli::RegisterRule::Offset(offset) => {
-                                            compact_row.rbp_type = RbpType::CfaOffset as u8;
-                                            compact_row.rbp_offset =
-                                                i16::try_from(offset).expect("convert rbp offset");
-                                        }
-                                        gimli::RegisterRule::Register(_reg) => {
-                                            compact_row.rbp_type = RbpType::Register as u8;
-                                        }
-                                        gimli::RegisterRule::Expression(_) => {
-                                            compact_row.rbp_type = RbpType::Expression as u8;
-                                        }
-                                        _ => {
-                                            // print!(", rbp unsupported {:?}", rbp);
-                                        }
-                                    }
-
-                                    if row.register(fde.cie().return_address_register())
-                                        == gimli::RegisterRule::Undefined
-                                    {
-                                        compact_row.rbp_type =
-                                            RbpType::UndefinedReturnAddress as u8;
-                                    }
-
-                                    // print!(", ra {:?}", row.register(fde.cie().return_address_register()));
-                                }
-                                _ => continue,
-                            }
-
-                            (self.callback)(&UnwindData::Instruction(compact_row));
-                        }
-                        // start_addresses.push(fde.initial_address() as u32);
-                        // end_addresses.push((fde.initial_address() + fde.len()) as u32);
+                    if let Ok(fde) = fde {
+                        pc_and_fde_offset.push((fde.initial_address(), fde.offset()));
                     }
                 }
             }
+        }
+
+        let span = span!(Level::DEBUG, "sort pc and fdes").entered();
+        pc_and_fde_offset.sort_by_key(|(pc, _)| *pc);
+        span.exit();
+
+        let mut ctx = Box::new(UnwindContext::new());
+        for (_, fde_offset) in pc_and_fde_offset {
+            let fde = eh_frame.fde_from_offset(
+                &bases,
+                gimli::EhFrameOffset(fde_offset),
+                EhFrame::cie_from_offset,
+            )?;
+
+            (self.callback)(&UnwindData::Function(
+                fde.initial_address(),
+                fde.initial_address() + fde.len(),
+            ));
+
+            let mut table = fde.rows(&eh_frame, &bases, &mut ctx)?;
+
+            loop {
+                let mut compact_row = CompactUnwindRow::default();
+
+                match table.next_row() {
+                    Ok(None) => break,
+                    Ok(Some(row)) => {
+                        compact_row.pc = row.start_address();
+                        match row.cfa() {
+                            CfaRule::RegisterAndOffset { register, offset } => {
+                                if register == &RBP_X86 {
+                                    compact_row.cfa_type = CfaType::FramePointerOffset as u8;
+                                } else if register == &RSP_X86 {
+                                    compact_row.cfa_type = CfaType::StackPointerOffset as u8;
+                                } else {
+                                    compact_row.cfa_type = CfaType::UnsupportedRegisterOffset as u8;
+                                }
+
+                                match u16::try_from(*offset) {
+                                    Ok(off) => {
+                                        compact_row.cfa_offset = off;
+                                    }
+                                    Err(_) => {
+                                        compact_row.cfa_type = CfaType::OffsetDidNotFit as u8;
+                                    }
+                                }
+                            }
+                            CfaRule::Expression(exp) => {
+                                let found_expression = exp.0.slice();
+
+                                if found_expression == *PLT1 {
+                                    compact_row.cfa_offset = PltType::Plt1 as u16;
+                                } else if found_expression == *PLT2 {
+                                    compact_row.cfa_offset = PltType::Plt2 as u16;
+                                }
+
+                                compact_row.cfa_type = CfaType::Expression as u8;
+                            }
+                        };
+
+                        match row.register(RBP_X86) {
+                            gimli::RegisterRule::Undefined => {}
+                            gimli::RegisterRule::Offset(offset) => {
+                                compact_row.rbp_type = RbpType::CfaOffset as u8;
+                                compact_row.rbp_offset =
+                                    i16::try_from(offset).expect("convert rbp offset");
+                            }
+                            gimli::RegisterRule::Register(_reg) => {
+                                compact_row.rbp_type = RbpType::Register as u8;
+                            }
+                            gimli::RegisterRule::Expression(_) => {
+                                compact_row.rbp_type = RbpType::Expression as u8;
+                            }
+                            _ => {
+                                // print!(", rbp unsupported {:?}", rbp);
+                            }
+                        }
+
+                        if row.register(fde.cie().return_address_register())
+                            == gimli::RegisterRule::Undefined
+                        {
+                            compact_row.rbp_type = RbpType::UndefinedReturnAddress as u8;
+                        }
+
+                        // print!(", ra {:?}", row.register(fde.cie().return_address_register()));
+                    }
+                    _ => continue,
+                }
+
+                (self.callback)(&UnwindData::Instruction(compact_row));
+            }
+            // start_addresses.push(fde.initial_address() as u32);
+            // end_addresses.push((fde.initial_address() + fde.len()) as u32);
         }
         Ok(())
     }
 }
 
-// Must be sorted. Also, not very optimized as of now.
-pub fn remove_unnecesary_markers(info: &Vec<stack_unwind_row_t>) -> Vec<stack_unwind_row_t> {
-    let mut unwind_info = Vec::with_capacity(info.len());
+// Must be sorted.
+pub fn remove_unnecesary_markers(unwind_info: &mut Vec<stack_unwind_row_t>) {
     let mut last_row: Option<stack_unwind_row_t> = None;
+    let mut new_i: usize = 0;
 
-    for row in info {
+    for i in 0..unwind_info.len() {
+        let row = unwind_info[i];
+
         if let Some(last_row_unwrapped) = last_row {
             let previous_is_redundant_marker = (last_row_unwrapped.cfa_type
                 == CfaType::EndFdeMarker as u8)
                 && last_row_unwrapped.pc == row.pc;
             if previous_is_redundant_marker {
-                unwind_info.pop();
+                new_i -= 1;
             }
         }
 
@@ -387,22 +401,25 @@ pub fn remove_unnecesary_markers(info: &Vec<stack_unwind_row_t>) -> Vec<stack_un
         }
 
         if !current_is_redundant_marker {
-            unwind_info.push(*row);
+            unwind_info[new_i] = row;
+            new_i += 1;
         }
 
-        last_row = Some(*row);
+        last_row = Some(row);
     }
 
-    unwind_info
+    unwind_info.truncate(new_i);
 }
 
-// Must be sorted. Also, not very optimized as of now.
-pub fn remove_redundant(info: &Vec<stack_unwind_row_t>) -> Vec<stack_unwind_row_t> {
-    let mut unwind_info = Vec::with_capacity(info.len());
+// Must be sorted.
+pub fn remove_redundant(unwind_info: &mut Vec<stack_unwind_row_t>) {
     let mut last_row: Option<stack_unwind_row_t> = None;
+    let mut new_i: usize = 0;
 
-    for row in info {
+    for i in 0..unwind_info.len() {
         let mut redundant = false;
+        let row = unwind_info[i];
+
         if let Some(last_row_unwrapped) = last_row {
             redundant = row.cfa_type == last_row_unwrapped.cfa_type
                 && row.cfa_offset == last_row_unwrapped.cfa_offset
@@ -411,17 +428,18 @@ pub fn remove_redundant(info: &Vec<stack_unwind_row_t>) -> Vec<stack_unwind_row_
         }
 
         if !redundant {
-            unwind_info.push(*row);
+            unwind_info[new_i] = row;
+            new_i += 1;
         }
 
-        last_row = Some(*row);
+        last_row = Some(row);
     }
 
-    unwind_info
+    unwind_info.truncate(new_i);
 }
 
 pub fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<stack_unwind_row_t>> {
-    let mut unwind_info = Vec::new();
+    let mut unwind_info: Vec<stack_unwind_row_t> = Vec::new();
     let mut last_function_end_addr: Option<u64> = None;
     let mut last_row = None;
 

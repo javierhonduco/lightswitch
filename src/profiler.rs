@@ -752,17 +752,9 @@ impl Profiler<'_> {
             }
             span.exit();
 
-            let span: span::EnteredSpan = span!(Level::DEBUG, "sort unwind info").entered();
-            found_unwind_info.sort_by(|a, b| {
-                let a_pc = a.pc;
-                let b_pc = b.pc;
-                a_pc.cmp(&b_pc)
-            });
-            span.exit();
-
             let span: span::EnteredSpan = span!(Level::DEBUG, "optimize unwind info").entered();
-            let found_unwind_info = remove_unnecesary_markers(&found_unwind_info);
-            let found_unwind_info = remove_redundant(&found_unwind_info);
+            remove_unnecesary_markers(&mut found_unwind_info);
+            remove_redundant(&mut found_unwind_info);
             span.exit();
 
             debug!(
