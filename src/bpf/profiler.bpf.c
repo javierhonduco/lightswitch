@@ -219,7 +219,7 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp) {
   }
 
   void *ptr = stack + THREAD_SIZE - TOP_OF_KERNEL_STACK_PADDING;
-  struct pt_regs *regs = ((struct pt_regs *)ptr) - 1;
+  bpf_user_pt_regs_t *regs = ((bpf_user_pt_regs_t *)ptr) - 1;
 
   *ip = PT_REGS_IP_CORE(regs);
   *sp = PT_REGS_SP_CORE(regs);
@@ -560,7 +560,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 }
 
 // Set up the initial unwinding state.
-static __always_inline bool set_initial_state(unwind_state_t *unwind_state, struct pt_regs *regs) {
+static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_user_pt_regs_t *regs) {
   unwind_state->stack.len = 0;
   unwind_state->tail_calls = 0;
 
