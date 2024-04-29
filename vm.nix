@@ -52,6 +52,32 @@
     '';
   };
 
+  kernel_6_8_7 = pkgs.stdenv.mkDerivation {
+    name = "download-kernel-6.8.7";
+    src = pkgs.fetchurl {
+      url = "https://github.com/javierhonduco/lightswitch-kernels/raw/c0af7a3/bzImage_v6.8.7";
+      hash = "sha256-fZwGajRi9+otzokRxoss99aH9PLRuyl2UfJ5Echehdo=";
+    };
+    dontUnpack = true;
+    installPhase = ''
+      mkdir -p $out
+      cp -r $src $out/bzImage
+    '';
+  };
+
+  kernel_6_9_rc5 = pkgs.stdenv.mkDerivation {
+    name = "download-kernel-6.9-rc5";
+    src = pkgs.fetchurl {
+      url = "https://github.com/javierhonduco/lightswitch-kernels/raw/c0af7a3/bzImage_v6.9-rc5";
+      hash = "sha256-EA+nJ1M0/6QFPVA+fYkvXDhBcsmTnALpGr+tCJZsVyw=";
+    };
+    dontUnpack = true;
+    installPhase = ''
+      mkdir -p $out
+      cp -r $src $out/bzImage
+    '';
+  };
+
   vmtest = pkgs.rustPlatform.buildRustPackage {
     name = "vmtest";
     src = pkgs.fetchFromGitHub {
