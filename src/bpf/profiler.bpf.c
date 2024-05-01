@@ -340,7 +340,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     }
 
     if (mapping->type == 2) {
-      LOG("JIT section, stopping");
+      LOG("vDSO section, stopping");
       return 1;
     }
 
