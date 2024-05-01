@@ -924,7 +924,7 @@ impl Profiler<'_> {
                     let key = exec_mappings_key::new(
                         pid.try_into().unwrap(),
                         address_range.addr,
-                        address_range.range,
+                        32 + address_range.prefix_len,
                     );
 
                     self.add_bpf_mapping(&key, &mapping).unwrap();
