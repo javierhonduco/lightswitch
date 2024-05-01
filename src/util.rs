@@ -1,7 +1,7 @@
 #[derive(Debug, PartialEq)]
 pub struct AddressBlockRange {
     pub addr: u64,
-    pub range: u32,
+    pub prefix_len: u32,
 }
 
 /// For a given address range, calculate all the prefix ranges to ensure searching
@@ -22,7 +22,7 @@ pub fn summarize_address_range(low: u64, high: u64) -> Vec<AddressBlockRange> {
         );
         res.push(AddressBlockRange {
             addr: curr,
-            range: 64 - number_of_bits,
+            prefix_len: 64 - number_of_bits,
         });
         curr += 1 << number_of_bits;
         if curr - 1 == u64::MAX {
@@ -51,18 +51,21 @@ mod tests {
         assert_eq!(
             summarize_address_range(0, 100),
             vec![
-                AddressBlockRange { addr: 0, range: 58 },
+                AddressBlockRange {
+                    addr: 0,
+                    prefix_len: 58
+                },
                 AddressBlockRange {
                     addr: 64,
-                    range: 59
+                    prefix_len: 59
                 },
                 AddressBlockRange {
                     addr: 96,
-                    range: 62
+                    prefix_len: 62
                 },
                 AddressBlockRange {
                     addr: 100,
-                    range: 64
+                    prefix_len: 64
                 }
             ]
         );
@@ -100,7 +103,8 @@ mod tests {
         assert!(mapping1.end < mapping2.begin);
 
         for address_range in summarize_address_range(mapping1.begin, mapping1.end - 1) {
-            let key = exec_mappings_key::new(510530, address_range.addr, address_range.range);
+            let key =
+                exec_mappings_key::new(510530, address_range.addr, 32 + address_range.prefix_len);
             map.update(
                 unsafe { plain::as_bytes(&key) },
                 unsafe { plain::as_bytes(&mapping1) },
@@ -110,7 +114,8 @@ mod tests {
         }
 
         for address_range in summarize_address_range(mapping2.begin, mapping2.end - 1) {
-            let key = exec_mappings_key::new(510530, address_range.addr, address_range.range);
+            let key =
+                exec_mappings_key::new(510530, address_range.addr, 32 + address_range.prefix_len);
             map.update(
                 unsafe { plain::as_bytes(&key) },
                 unsafe { plain::as_bytes(&mapping2) },
