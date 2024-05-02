@@ -13,7 +13,7 @@ use clap::Parser;
 use inferno::flamegraph;
 use nix::unistd::Uid;
 use primal::is_prime;
-use tracing::{debug, error, Level};
+use tracing::{error, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
