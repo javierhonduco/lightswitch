@@ -1,0 +1,34 @@
+name: vmtests
+on:
+    pull_request:
+    push:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vmtests:
+    runs-on: ubuntu-22.04
+    permissions:
+        id-token: write
+        contents: read
+
+    steps:
+    - uses: actions/checkout@main
+    - uses: DeterminateSystems/nix-installer-action@main
+    - uses: DeterminateSystems/magic-nix-cache-action@main
+
+    - name: Install system dependencies
+      run: |
+        export DEBIAN_FRONTEND=noninteractive
+        sudo apt-get -y install --no-install-recommends qemu-system-x86 qemu-guest-agent
+
+    - name: Set up nix dev env
+      run: nix develop --command echo 0
+
+    - name: Build `lightswitch`
+      run: nix develop --ignore-environment --command bash -c 'cargo build'
+
+    - name: Run kernel tests
+      run: nix develop --command 'vmtest'

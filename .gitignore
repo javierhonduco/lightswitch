@@ -1,3 +1,4 @@
 /target
 flame.svg
 src/bpf/*_skel.rs
+.vmtest.log

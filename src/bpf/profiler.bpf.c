@@ -71,29 +71,19 @@ struct {
 } rate_limits SEC(".maps");
 
 
-// On arm64 running 6.8.4-200.fc39.aarch64 the verifier fails with argument list too long. This
-// did not use to happen before and it's probably due to a regression in the way the verifier
-// accounts for the explored paths. I have tried many other things, such as two mid variables
-// but that did not do it. The theory of why this works is that perhaps it's making the verifier
-// reset the state it had about the program exploration so the branches its exploring per iteration
-// do not grow as much.
-#ifdef __TARGET_ARCH_arm64
-static u32 __attribute__((optnone)) verifier_workaround(u32 value) {
-    return value;
-}
-#endif
-#ifdef __TARGET_ARCH_x86
-static __always_inline u32 verifier_workaround(u32 value) {
-    return value;
-}
-#endif
-
 // Binary search the unwind table to find the row index containing the unwind
 // information for a given program counter (pc) relative to the object file.
 static __always_inline u64 find_offset_for_pc(stack_unwind_table_t *table, u64 pc, u64 left,
                               u64 right) {
   u64 found = BINARY_SEARCH_DEFAULT;
 
+
+  // On kernels ~6.8 and greater the verifier fails with argument list too long. This did not use to
+  // happen before and it's probably due to a regression in the way the verifier accounts for the explored
+  // paths. I have tried many other things, such as two mid variables but that did not do it.
+  // Perhaps unrolling the loop works is that the verifier doesn't have as many states to explore
+  // per iteration.
+  #pragma unroll
   for (int i = 0; i < MAX_BINARY_SEARCH_DEPTH; i++) {
     // TODO(javierhonduco): ensure that this condition is right as we use
     // unsigned values...
@@ -102,7 +92,7 @@ static __always_inline u64 find_offset_for_pc(stack_unwind_table_t *table, u64 p
       return found;
     }
 
-    u32 mid = verifier_workaround((left + right) / 2);
+    u32 mid = (left + right) / 2;
     // Appease the verifier.
     if (mid < 0 || mid >= MAX_UNWIND_TABLE_SIZE) {
       LOG("\t.should never happen, mid: %lu, max: %lu", mid,
@@ -229,7 +219,7 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp) {
   }
 
   void *ptr = stack + THREAD_SIZE - TOP_OF_KERNEL_STACK_PADDING;
-  struct pt_regs *regs = ((struct pt_regs *)ptr) - 1;
+  bpf_user_pt_regs_t *regs = ((bpf_user_pt_regs_t *)ptr) - 1;
 
   *ip = PT_REGS_IP_CORE(regs);
   *sp = PT_REGS_SP_CORE(regs);
@@ -350,7 +340,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     }
 
     if (mapping->type == 2) {
-      LOG("JIT section, stopping");
+      LOG("vDSO section, stopping");
       return 1;
     }
 
@@ -570,7 +560,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 }
 
 // Set up the initial unwinding state.
-static __always_inline bool set_initial_state(unwind_state_t *unwind_state, struct pt_regs *regs) {
+static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_user_pt_regs_t *regs) {
   unwind_state->stack.len = 0;
   unwind_state->tail_calls = 0;
 

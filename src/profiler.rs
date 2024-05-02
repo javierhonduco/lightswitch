@@ -809,17 +809,9 @@ impl Profiler<'_> {
             }
             span.exit();
 
-            let span: span::EnteredSpan = span!(Level::DEBUG, "sort unwind info").entered();
-            found_unwind_info.sort_by(|a, b| {
-                let a_pc = a.pc;
-                let b_pc = b.pc;
-                a_pc.cmp(&b_pc)
-            });
-            span.exit();
-
             let span: span::EnteredSpan = span!(Level::DEBUG, "optimize unwind info").entered();
-            let found_unwind_info = remove_unnecesary_markers(&found_unwind_info);
-            let found_unwind_info = remove_redundant(&found_unwind_info);
+            remove_unnecesary_markers(&mut found_unwind_info);
+            remove_redundant(&mut found_unwind_info);
             span.exit();
 
             debug!(
@@ -981,7 +973,7 @@ impl Profiler<'_> {
                     let key = exec_mappings_key::new(
                         pid.try_into().unwrap(),
                         address_range.addr,
-                        address_range.range,
+                        32 + address_range.prefix_len,
                     );
 
                     self.add_bpf_mapping(&key, &mapping).unwrap();

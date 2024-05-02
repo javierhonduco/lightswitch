@@ -1,0 +1,29 @@
+[[target]]
+name = "Fedora 5.15"
+kernel = "/nix/store/cg9wq48zz2dbvayh7sigr5smaf4dwcxp-download-kernel-5.15/bzImage"
+command = "/mnt/vmtest/target/debug/lightswitch --duration 0"
+
+[[target]]
+name = "Fedora 6.0"
+kernel = "/nix/store/p8xc9gqdkpfjpmcb9ja2gx6g6bd9cby7-download-kernel-6.0/bzImage"
+command = "/mnt/vmtest/target/debug/lightswitch --duration 0"
+
+[[target]]
+name = "Fedora 6.2"
+kernel = "/nix/store/79wzcqy12fncdf6pk1fj627ggh7v0nc7-download-kernel-6.2/bzImage"
+command = "/mnt/vmtest/target/debug/lightswitch --duration 0"
+
+[[target]]
+name = "Fedora 6.6"
+kernel = "/nix/store/77ixckavs2qidx1pglmlxsj6bfvjqijb-download-kernel-6.6/bzImage"
+command = "/mnt/vmtest/target/debug/lightswitch --duration 0"
+
+[[target]]
+name = "Upstream 6.8.7"
+kernel = "/nix/store/3ip5l5bmrxpjdf11xbrqpbrh7pqjn9wa-download-kernel-6.8.7/bzImage"
+command = "/mnt/vmtest/target/debug/lightswitch --duration 0"
+
+[[target]]
+name = "Upstream v6.9-rc5"
+kernel = "/nix/store/zjwmw9s2gr772mjf0y3pfqvknbs0mcdc-download-kernel-6.9-rc5/bzImage"
+command = "/mnt/vmtest/target/debug/lightswitch --duration 0"

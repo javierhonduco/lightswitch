@@ -16,9 +16,17 @@ unsafe impl Plain for exec_mappings_key {}
 unsafe impl Plain for mapping_t {}
 
 impl exec_mappings_key {
-    pub fn new(pid: u32, address: u64, prefix: u32) -> Self {
+    pub fn new(pid: u32, address: u64, prefix_len: u32) -> Self {
+        let key_size_bits = std::mem::size_of::<Self>() * 8;
+        assert!(
+            prefix_len <= key_size_bits.try_into().unwrap(),
+            "prefix_len {} should be <= than the size of exec_mappings_key {}",
+            prefix_len,
+            key_size_bits
+        );
+
         Self {
-            prefix_len: 32 + prefix,
+            prefix_len,
             pid: pid.to_be(),
             data: address.to_be(),
         }
