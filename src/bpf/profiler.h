@@ -1,6 +1,5 @@
 #include "basic_types.h"
 
-
 // Number of frames to walk per tail call iteration.
 #define MAX_STACK_DEPTH_PER_PROGRAM 7
 // Number of BPF tail calls that will be attempted.
@@ -34,6 +33,12 @@ _Static_assert(MAX_BINARY_SEARCH_DEPTH >= UNWIND_INFO_PAGE_BIT_LEN, "unwind tabl
 #define LOW_PC(addr) (addr & LOW_PC_MASK)
 
 #define MAX_EXECUTABLE_TO_PAGE_ENTRIES 500 * 1000
+
+#define MAPPING_TYPE_FILE 0
+#define MAPPING_TYPE_ANON 1
+#define MAPPING_TYPE_VDSO 2
+
+
 typedef struct {
   u64 executable_id;
   u64 file_offset;

@@ -5,6 +5,7 @@ use std::fs;
 use std::fs::File;
 use std::mem::size_of;
 use std::os::fd::{AsFd, AsRawFd};
+use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::process;
 use std::sync::{Arc, Mutex};
@@ -14,7 +15,7 @@ use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Result};
 use itertools::Itertools;
 use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
@@ -34,6 +35,7 @@ use crate::collector::*;
 use crate::object::ElfLoad;
 use crate::object::{BuildId, ExecutableId, ObjectFile};
 use crate::perf_events::setup_perf_event;
+use crate::unwind_info::log_unwind_info_sections;
 use crate::unwind_info::CompactUnwindRow;
 use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
 use crate::util::{get_online_cpus, summarize_address_range};
@@ -45,7 +47,7 @@ pub enum TracerEvent {
 
 // Some temporary data structures to get things going, this could use lots of
 // improvements
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MappingType {
     FileBacked,
     Anonymous,
@@ -192,8 +194,9 @@ impl ExecutableMapping {
 
             debug_assert!(
                 object_file.references >= 0,
-                "Reference count for {} is negative ",
-                object_file.path.display()
+                "Reference count for {} is negative: {}",
+                object_file.path.display(),
+                object_file.references,
             );
         }
         false
@@ -502,6 +505,29 @@ impl Default for Profiler<'_> {
 
         Self::new(ProfilerConfig::default(), stop_signal_receive)
     }
+}
+
+/// Extract the vdso object file loaded in the address space of each process.
+fn fetch_vdso_info<'a>(
+    pid: i32,
+    start_addr: u64,
+    end_addr: u64,
+    offset: u64,
+) -> Result<(PathBuf, ObjectFile<'a>)> {
+    // Read raw memory
+    let file = fs::File::open(format!("/proc/{}/mem", pid))?;
+    let size = end_addr - start_addr;
+    let mut buf: Vec<u8> = vec![0; size as usize];
+    file.read_exact_at(&mut buf, start_addr + offset)?;
+
+    // Write to a temporary place
+    let dumped_vdso = PathBuf::from("/tmp/lightswitch-dumped-vdso");
+    fs::write(&dumped_vdso, &buf)?;
+
+    // Pass that to the object parser
+    let object = ObjectFile::new(&dumped_vdso)?;
+
+    Ok((dumped_vdso, object))
 }
 
 impl Profiler<'_> {
@@ -837,6 +863,9 @@ impl Profiler<'_> {
                             if res.is_err() {
                                 info!("deleting the BPF unwind info array failed with {:?}", res);
                             }
+
+                            // The object file (`object_files`) is not removed here as we still need it for
+                            // normalization before sending the profiles.
                             entry.remove_entry();
                         }
                     }
@@ -888,6 +917,9 @@ impl Profiler<'_> {
                                         res
                                     );
                                 }
+
+                                // The object file (`object_files`) is not removed here as we still need it for
+                                // normalization before sending the profiles.
                                 entry.remove_entry();
                             }
                         }
@@ -1302,7 +1334,7 @@ impl Profiler<'_> {
             panic!("add_unwind_info -- expected process to be known");
         }
 
-        let mut mappings = Vec::new();
+        let mut bpf_mappings = Vec::new();
 
         // Get unwind info
         for mapping in self
@@ -1316,35 +1348,21 @@ impl Profiler<'_> {
             .0
             .iter()
         {
-            // Skip vdso / jit mappings
-            match mapping.kind {
-                MappingType::Anonymous => {
-                    mappings.push(mapping_t {
-                        load_address: 0,
-                        begin: mapping.start_addr,
-                        end: mapping.end_addr,
-                        executable_id: 0,
-                        type_: 1, // jitted
-                    });
-                    continue;
-                }
-                MappingType::Vdso => {
-                    mappings.push(mapping_t {
-                        load_address: 0,
-                        begin: mapping.start_addr,
-                        end: mapping.end_addr,
-                        executable_id: 0,
-                        type_: 2, // vdso
-                    });
-                    continue;
-                }
-                MappingType::FileBacked => {
-                    // Handled below
-                }
+            // There is no unwind information for anonymous (JIT) mappings, so let's skip them.
+            // In the future we could either try to synthetise the unwind information.
+            if mapping.kind == MappingType::Anonymous {
+                bpf_mappings.push(mapping_t {
+                    load_address: 0,
+                    begin: mapping.start_addr,
+                    end: mapping.end_addr,
+                    executable_id: 0,
+                    type_: MAPPING_TYPE_ANON,
+                });
+                continue;
             }
 
             if mapping.build_id.is_none() {
-                panic!("build id should not be none for file backed mappings");
+                panic!("build id should be present for file backed mappings");
             }
 
             let object_files = self.object_files.lock().unwrap();
@@ -1380,12 +1398,16 @@ impl Profiler<'_> {
             {
                 Some(_) => {
                     // == Add mapping
-                    mappings.push(mapping_t {
+                    bpf_mappings.push(mapping_t {
                         executable_id: mapping.executable_id,
                         load_address,
                         begin: mapping.start_addr,
                         end: mapping.end_addr,
-                        type_: 0, // normal i think
+                        type_: if mapping.kind == MappingType::Vdso {
+                            MAPPING_TYPE_VDSO
+                        } else {
+                            MAPPING_TYPE_FILE
+                        },
                     });
                     debug!("unwind info CACHED for executable {:?}", obj_path);
                     continue;
@@ -1396,12 +1418,16 @@ impl Profiler<'_> {
             }
 
             // == Add mapping
-            mappings.push(mapping_t {
+            bpf_mappings.push(mapping_t {
                 load_address,
                 begin: mapping.start_addr,
                 end: mapping.end_addr,
                 executable_id: mapping.executable_id,
-                type_: 0, // normal i think
+                type_: if mapping.kind == MappingType::Vdso {
+                    MAPPING_TYPE_VDSO
+                } else {
+                    MAPPING_TYPE_FILE
+                },
             });
 
             // This is not released (see note "deadlock")
@@ -1426,15 +1452,24 @@ impl Profiler<'_> {
                     found_unwind_info = unwind_info;
                 }
                 Err(e) => {
-                    warn!(
-                        "failed to get unwind information for {} with {:?}",
-                        executable.path.to_string_lossy(),
-                        e
-                    );
+                    let executable_path_str = executable.path.to_string_lossy();
+                    let known_naughty = executable_path_str.contains("libicudata");
 
-                    use crate::unwind_info::log_unwind_info_sections;
-                    if let Err(e) = log_unwind_info_sections(&executable_path) {
-                        warn!("log_unwind_info_sections failed with {}", e);
+                    // tracing doesn't support a level chosen at runtime: https://github.com/tokio-rs/tracing/issues/2730
+                    if known_naughty {
+                        debug!(
+                            "failed to get unwind information for {} with {}",
+                            executable_path_str, e
+                        );
+                    } else {
+                        info!(
+                            "failed to get unwind information for {} with {}",
+                            executable_path_str, e
+                        );
+
+                        if let Err(e) = log_unwind_info_sections(&executable_path) {
+                            warn!("log_unwind_info_sections failed with {}", e);
+                        }
                     }
                     continue;
                 }
@@ -1507,7 +1542,7 @@ impl Profiler<'_> {
         } // Added all mappings
 
         // Add mappings to BPF maps.
-        if let Err(e) = Self::add_bpf_mappings(&self.bpf, pid, &mappings) {
+        if let Err(e) = Self::add_bpf_mappings(&self.bpf, pid, &bpf_mappings) {
             warn!("failed to add BPF mappings due to {:?}", e);
         }
         // Add entry just with the pid to signal processes that we already know about.
@@ -1615,6 +1650,9 @@ impl Profiler<'_> {
                         continue;
                     };
 
+                    // Find the first address for a file backed mapping. Some loaders split
+                    // the .rodata section in their own non-executable section, which we need
+                    // to account for here.
                     let load_address = || {
                         for map2 in maps.iter() {
                             if map2.pathname == map.pathname {
@@ -1673,22 +1711,57 @@ impl Profiler<'_> {
                         unmapped: false,
                     });
                 }
-                procfs::process::MMapPath::Vsyscall
-                | procfs::process::MMapPath::Vdso
-                | procfs::process::MMapPath::Vsys(_)
-                | procfs::process::MMapPath::Vvar => {
-                    mappings.push(ExecutableMapping {
-                        executable_id: 0, // Placeholder for vDSO.
-                        build_id: None,
-                        kind: MappingType::Vdso,
-                        start_addr: map.address.0,
-                        end_addr: map.address.1,
-                        offset: map.offset,
-                        load_address: 0,
-                        main_exec: false,
-                        unmapped: false,
-                    });
+                procfs::process::MMapPath::Vdso | procfs::process::MMapPath::Vsyscall => {
+                    // This could be cached, but we are not doing it yet. If we want to add caching here we need to
+                    // be careful, the kernel might be upgraded since last time we ran, and that cache might not be
+                    // valid anymore.
+
+                    if let Ok((vdso_path, object_file)) =
+                        fetch_vdso_info(pid, map.address.0, map.address.1, map.offset)
+                    {
+                        let mut object_files = object_files_clone.lock().expect("lock");
+                        let Ok(executable_id) = object_file.id() else {
+                            debug!("vDSO object file id failed");
+                            continue;
+                        };
+                        let Ok(build_id) = object_file.build_id() else {
+                            debug!("vDSO object file build_id failed");
+                            continue;
+                        };
+                        let Ok(file) = std::fs::File::open(&vdso_path) else {
+                            debug!("vDSO object file open failed");
+                            continue;
+                        };
+                        let Ok(elf_load_segments) = object_file.elf_load_segments() else {
+                            debug!("vDSO elf_load_segments failed");
+                            continue;
+                        };
+
+                        object_files.insert(
+                            executable_id,
+                            ObjectFileInfo {
+                                path: vdso_path.clone(),
+                                file,
+                                elf_load_segments,
+                                is_dyn: object_file.is_dynamic(),
+                                references: 1,
+                                native_unwind_info_size: None,
+                            },
+                        );
+                        mappings.push(ExecutableMapping {
+                            executable_id,
+                            build_id: Some(build_id),
+                            kind: MappingType::Vdso,
+                            start_addr: map.address.0,
+                            end_addr: map.address.1,
+                            offset: map.offset,
+                            load_address: map.address.0,
+                            main_exec: false,
+                            unmapped: false,
+                        });
+                    }
                 }
+                // Skip every other mapping we don't care about: Heap, Stack, Vsys, Vvar, etc
                 _ => {}
             }
         }
