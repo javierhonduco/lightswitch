@@ -1,7 +1,7 @@
 name: static build and upload
 on:
-    pull_request:
-    push:
+  pull_request:
+  push:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
