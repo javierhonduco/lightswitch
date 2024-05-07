@@ -18,7 +18,7 @@
           pkgs = import nixpkgs {
             inherit system overlays;
           };
-          elfutils-without-zstd = pkgs.elfutils.overrideAttrs (attrs: {
+          elfutils' = (pkgs.elfutils.override { enableDebuginfod = false; }).overrideAttrs (attrs: {
             configureFlags = attrs.configureFlags ++ [ "--without-zstd" ];
           });
         in
@@ -44,7 +44,7 @@
               # Native deps
               glibc
               glibc.static
-              elfutils-without-zstd
+              elfutils'
               zlib.static
               zlib.dev
               openssl
@@ -63,7 +63,7 @@
             ];
 
             LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_16.libclang ];
-            LD_LIBRARY_PATH = lib.makeLibraryPath [ zlib.static elfutils-without-zstd ];
+            LD_LIBRARY_PATH = lib.makeLibraryPath [ zlib.static elfutils' ];
           };
         }
       );
