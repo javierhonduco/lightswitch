@@ -9,8 +9,13 @@
         flake-utils.follows = "flake-utils";
       };
     };
+
+    crane = {
+      url = "github:ipetkov/crane";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
-  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay, crane }:
     flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ]
       (system:
         let
@@ -21,32 +26,53 @@
           elfutils' = (pkgs.elfutils.override { enableDebuginfod = false; }).overrideAttrs (attrs: {
             configureFlags = attrs.configureFlags ++ [ "--without-zstd" ];
           });
+          buildInputs = with pkgs; [
+            llvmPackages_16.clang
+            llvmPackages_16.libcxx
+            llvmPackages_16.libclang
+            llvmPackages_16.lld
+            elfutils'
+            zlib.static
+            zlib.dev
+            glibc
+            glibc.static
+          ];
+          nativeBuildInputs = with pkgs; [
+            pkg-config
+          ];
+          craneLib = crane.lib.${system};
+          lightswitch = craneLib.buildPackage {
+            src = ./.;
+            doCheck = false;
+            buildInputs = buildInputs;
+            nativeBuildInputs = nativeBuildInputs;
+            LIBCLANG_PATH = with pkgs; lib.makeLibraryPath [ llvmPackages_16.libclang ];
+            LD_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [ zlib.static elfutils' ];
+          };
         in
         with pkgs;
         {
           formatter = pkgs.nixpkgs-fmt;
-
-          devShells.default = mkShell rec {
-            # https://discourse.nixos.org/t/how-to-add-pkg-config-file-to-a-nix-package/8264/4
-            nativeBuildInputs = with pkgs; [
-              pkg-config
-            ];
-            buildInputs = [
+          packages = {
+            default = lightswitch;
+            container = pkgs.dockerTools.buildLayeredImage {
+              name = "lightswitch";
+              tag = "${self.dirtyShortRev}";
+              config = {
+                Cmd = [ "${lightswitch}/bin/lightswitch" ];
+                Env = [
+                  "RUST_BACKTRACE=1"
+                ];
+              };
+            };
+          };
+          devShells.default = mkShell {
+            nativeBuildInputs = nativeBuildInputs;
+            buildInputs = buildInputs ++ [
               rust-bin.stable.latest.default
-              llvmPackages_16.clang
-              # llvmPackages_16.clang-unwrapped https://github.com/NixOS/nixpkgs/issues/30670
-              llvmPackages_16.libcxx
-              llvmPackages_16.libclang
-              llvmPackages_16.lld
               # Debugging
               strace
               gdb
-              # Native deps
-              glibc
-              glibc.static
-              elfutils'
-              zlib.static
-              zlib.dev
               openssl
               # Other tools
               cargo-edit
@@ -64,6 +90,7 @@
 
             LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_16.libclang ];
             LD_LIBRARY_PATH = lib.makeLibraryPath [ zlib.static elfutils' ];
+            RUST_GDB = "${gdb}/bin/gdb";
           };
         }
       );
