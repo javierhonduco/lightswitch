@@ -57,7 +57,6 @@
             default = lightswitch;
             container = pkgs.dockerTools.buildLayeredImage {
               name = "lightswitch";
-              tag = "${self.dirtyShortRev}";
               config = {
                 Cmd = [ "${lightswitch}/bin/lightswitch" ];
                 Env = [
@@ -75,6 +74,7 @@
               gdb
               openssl
               # Other tools
+              skopeo
               cargo-edit
               # snapshot testing plugin binary
               cargo-insta
