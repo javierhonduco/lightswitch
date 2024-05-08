@@ -67,8 +67,14 @@ int tracer_enter_munmap(struct munmap_entry_args *args) {
 
     // We might not know about some mappings, but also we definitely don't want to notify
     // of non-executable mappings being unmapped.
-    if (find_mapping(per_process_id, start_address) == NULL){
+    mapping_t *mapping = find_mapping(per_process_id, start_address);
+    if (mapping == NULL){
         return 0;
+    }
+
+    // Ensure we didn't get a process entry.
+    if (start_address < mapping->begin || start_address >= mapping->end) {
+      return 0;
     }
 
     mmap_data_key_t key = {
