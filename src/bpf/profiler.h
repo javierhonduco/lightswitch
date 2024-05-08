@@ -67,6 +67,7 @@ typedef struct {
 #define RBP_TYPE_EXPRESSION 3
 // Special values.
 #define RBP_TYPE_UNDEFINED_RETURN_ADDRESS 4
+#define RBP_TYPE_OFFSET_DID_NOT_FIT 5
 
 // Binary search error codes.
 #define BINARY_SEARCH_DEFAULT 0xFABADAFABADAULL
@@ -175,6 +176,8 @@ typedef struct {
   unsigned long long ip;
   unsigned long long sp;
   unsigned long long bp;
+  unsigned long long lr;
+
   int tail_calls;
 
   stack_count_key_t stack_key;
