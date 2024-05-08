@@ -989,17 +989,14 @@ impl Profiler<'_> {
                         continue;
                     };
 
-                    let mut load_address = map.address.0;
-                    match maps.iter().nth(i.wrapping_sub(1)) {
-                        Some(thing) => {
-                            if thing.pathname == map.pathname {
-                                load_address = thing.address.0;
+                    let load_address = || {
+                        for map2 in maps.iter() {
+                            if map2.pathname == map.pathname {
+                                return map2.address.0;
                             }
                         }
-                        _ => {
-                            // todo: cleanup
-                        }
-                    }
+                        map.address.0
+                    };
 
                     mappings.push(ExecutableMapping {
                         build_id: Some(build_id.clone()),
@@ -1007,7 +1004,7 @@ impl Profiler<'_> {
                         start_addr: map.address.0,
                         end_addr: map.address.1,
                         offset: map.offset,
-                        load_address,
+                        load_address: load_address(),
                         unwinder,
                     });
 
