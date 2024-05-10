@@ -1205,7 +1205,7 @@ mod tests {
         let addrs = [0; 127];
 
         // User stack but no kernel stack
-        let mut ustack = addrs.clone();
+        let mut ustack = addrs;
         ustack[0] = 0xffff;
         ustack[1] = 0xdeadbeef;
 
@@ -1238,7 +1238,7 @@ mod tests {
         "###);
 
         // user and kernel stacks
-        let mut ustack = addrs.clone();
+        let mut ustack = addrs;
         let ureplace: &[u64] = &[
             0x007f7c91c82314,
             0x007f7c91c4ff93,
@@ -1253,9 +1253,9 @@ mod tests {
             0x007f7c91e22038,
             0x007f7c91e23fc6,
         ];
-        ustack[..ureplace.len()].copy_from_slice(&ureplace);
+        ustack[..ureplace.len()].copy_from_slice(ureplace);
 
-        let mut kstack = addrs.clone();
+        let mut kstack = addrs;
         let kreplace: &[u64] = &[
             0xffffffff8749ae51,
             0xffffffffc04c4804,
@@ -1266,7 +1266,7 @@ mod tests {
             0xffffffff8727f8a7,
             0xffffffff87e0116e,
         ];
-        kstack[..kreplace.len()].copy_from_slice(&kreplace);
+        kstack[..kreplace.len()].copy_from_slice(kreplace);
 
         let ustack_data = Some(native_stack_t {
             addresses: ustack,
