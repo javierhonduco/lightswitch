@@ -22,7 +22,7 @@ use crate::collector::*;
 use crate::object::{BuildId, ObjectFile};
 use crate::perf_events::setup_perf_event;
 use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
-use crate::util::summarize_address_range;
+use crate::util::{get_online_cpus, summarize_address_range};
 
 pub enum TracerEvent {
     ProcessExit(i32),
@@ -1107,7 +1107,7 @@ impl Profiler<'_> {
 
     pub fn setup_perf_events(&mut self) {
         let mut prog_fds = Vec::new();
-        for i in 0..num_possible_cpus().expect("get possible CPUs") {
+        for i in 0..get_online_cpus().expect("get online CPUs") {
             let perf_fd =
                 unsafe { setup_perf_event(i.try_into().unwrap(), self.sample_freq as u64) }
                     .expect("setup perf event");
