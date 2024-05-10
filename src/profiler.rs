@@ -7,7 +7,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
 use libbpf_rs::skel::{OpenSkel, Skel};
 use libbpf_rs::{Link, MapFlags, PerfBufferBuilder};
@@ -234,7 +233,7 @@ impl Profiler<'_> {
     }
 
     pub fn run(mut self, collector: Arc<Mutex<Collector>>) {
-        let num_cpus = num_possible_cpus().expect("get possible CPUs") as u64;
+        let num_cpus = get_online_cpus().expect("get online CPUs").len() as u64;
         let max_samples_per_session =
             self.sample_freq as u64 * num_cpus * self.session_duration.as_secs();
         if max_samples_per_session >= MAX_AGGREGATED_STACKS_ENTRIES.into() {
@@ -465,7 +464,7 @@ impl Profiler<'_> {
         let value = unsafe { plain::as_bytes(&default) };
 
         let mut values: Vec<Vec<u8>> = Vec::new();
-        let num_cpus = num_possible_cpus().expect("get possible CPUs") as u64;
+        let num_cpus = get_online_cpus().expect("get online CPUs").len() as u64;
         for _ in 0..num_cpus {
             values.push(value.to_vec());
         }
