@@ -147,7 +147,8 @@ impl fmt::Display for RawAggregatedSample {
                         if native_stack.len <= i.try_into().unwrap() {
                             break;
                         }
-                        let cvtd = format!("{:3}: {:#016x},\n", i, addr);
+                        // The 18 includes the '0x' prefix for hex addresses
+                        let cvtd = format!("{:3}: {:#018x},\n", i, addr);
                         scratch_string.push_str(&cvtd);
                     }
                     scratch_string.push(']');
@@ -1191,5 +1192,102 @@ impl Profiler<'_> {
 
     pub fn teardown_perf_events(&mut self) {
         self._links = vec![];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_raw_aggregated_sample() {
+        // let addrs = [0; MAX_STACK_SIZE];
+        let addrs = [0; 127];
+
+        // User stack but no kernel stack
+        let mut ustack = addrs.clone();
+        ustack[0] = 0xffff;
+        ustack[1] = 0xdeadbeef;
+
+        let ustack_data = Some(native_stack_t {
+            addresses: ustack,
+            len: 2,
+        });
+
+        let sample = RawAggregatedSample {
+            pid: 1234,
+            ustack: ustack_data,
+            kstack: None,
+            count: 1,
+        };
+        insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
+        ---
+        "RawAggregatedSample:\npid: 1234\nustack: [\n  0: 0x000000000000ffff,\n  1: 0x00000000deadbeef,\n]\nkstack: NONE\ncount: 1"
+        "###);
+
+        // No user or kernel stacks
+        let sample = RawAggregatedSample {
+            pid: 1234,
+            ustack: None,
+            kstack: None,
+            count: 1,
+        };
+        insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
+        ---
+        "RawAggregatedSample:\npid: 1234\nustack: NONE\nkstack: NONE\ncount: 1"
+        "###);
+
+        // user and kernel stacks
+        let mut ustack = addrs.clone();
+        let ureplace: &[u64] = &[
+            0x007f7c91c82314,
+            0x007f7c91c4ff93,
+            0x007f7c91c5d8ae,
+            0x007f7c91c4d2c3,
+            0x007f7c91c45400,
+            0x007f7c91c10933,
+            0x007f7c91c38153,
+            0x007f7c91c331d9,
+            0x007f7c91dfa501,
+            0x007f7c91c16b05,
+            0x007f7c91e22038,
+            0x007f7c91e23fc6,
+        ];
+        ustack[..ureplace.len()].copy_from_slice(&ureplace);
+
+        let mut kstack = addrs.clone();
+        let kreplace: &[u64] = &[
+            0xffffffff8749ae51,
+            0xffffffffc04c4804,
+            0xffffffff874ddfd0,
+            0xffffffff874e0843,
+            0xffffffff874e0b8a,
+            0xffffffff8727f600,
+            0xffffffff8727f8a7,
+            0xffffffff87e0116e,
+        ];
+        kstack[..kreplace.len()].copy_from_slice(&kreplace);
+
+        let ustack_data = Some(native_stack_t {
+            addresses: ustack,
+            len: ureplace.len() as u64,
+        });
+        println!("ustack_data: {:?}", ustack_data);
+        let kstack_data = Some(native_stack_t {
+            addresses: kstack,
+            len: kreplace.len() as u64,
+        });
+        println!("kstack_data: {:?}", kstack_data);
+
+        let sample = RawAggregatedSample {
+            pid: 128821,
+            ustack: ustack_data,
+            kstack: kstack_data,
+            count: 42,
+        };
+        insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
+        ---
+        "RawAggregatedSample:\npid: 128821\nustack: [\n  0: 0x00007f7c91c82314,\n  1: 0x00007f7c91c4ff93,\n  2: 0x00007f7c91c5d8ae,\n  3: 0x00007f7c91c4d2c3,\n  4: 0x00007f7c91c45400,\n  5: 0x00007f7c91c10933,\n  6: 0x00007f7c91c38153,\n  7: 0x00007f7c91c331d9,\n  8: 0x00007f7c91dfa501,\n  9: 0x00007f7c91c16b05,\n 10: 0x00007f7c91e22038,\n 11: 0x00007f7c91e23fc6,\n]\nkstack: [\n  0: 0xffffffff8749ae51,\n  1: 0xffffffffc04c4804,\n  2: 0xffffffff874ddfd0,\n  3: 0xffffffff874e0843,\n  4: 0xffffffff874e0b8a,\n  5: 0xffffffff8727f600,\n  6: 0xffffffff8727f8a7,\n  7: 0xffffffff87e0116e,\n]\ncount: 42"
+        "###);
     }
 }
