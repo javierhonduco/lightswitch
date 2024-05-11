@@ -7,6 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
+use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
 use libbpf_rs::skel::{OpenSkel, Skel};
 use libbpf_rs::{Link, MapFlags, PerfBufferBuilder};
@@ -233,6 +234,8 @@ impl Profiler<'_> {
     }
 
     pub fn run(mut self, collector: Arc<Mutex<Collector>>) {
+        // In this case, we only want to calculate maximum sampling buffer sizes based on the
+        // number of online CPUs, NOT possible CPUs, when they differ - which is often.
         let num_cpus = get_online_cpus().expect("get online CPUs").len() as u64;
         let max_samples_per_session =
             self.sample_freq as u64 * num_cpus * self.session_duration.as_secs();
@@ -464,7 +467,10 @@ impl Profiler<'_> {
         let value = unsafe { plain::as_bytes(&default) };
 
         let mut values: Vec<Vec<u8>> = Vec::new();
-        let num_cpus = get_online_cpus().expect("get online CPUs").len() as u64;
+        // This is a place where you need to know the POSSIBLE, not ONLINE CPUs, because eBPF's
+        // internals require setting up certain buffers for all possible CPUs, even if the CPUs
+        // don't all exist.
+        let num_cpus = num_possible_cpus().expect("get possible CPUs") as u64;
         for _ in 0..num_cpus {
             values.push(value.to_vec());
         }
