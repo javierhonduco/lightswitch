@@ -49,17 +49,17 @@ fn _read_cpu_range(path: &str) -> Result<Vec<u32>, Error> {
                 cpu_range
                     .trim_end()
                     .parse::<u32>()
-                    .expect("Unable to parse lone CPU number"),
+                    .map_err(|e| format!("Failed to parse lone CPU: {:?}", e))?,
             ),
             Some(index) => {
                 let start = cpu_range[..index]
                     .trim_end()
                     .parse::<u32>()
-                    .expect("starting CPU number");
+                    .map_err(|e| format!("Failed to parse starting CPU: {:?}", e))?;
                 let end = cpu_range[index + 1..]
                     .trim_end()
                     .parse::<u32>()
-                    .expect("ending CPU number");
+                    .map_err(|e| format!("Failed to parse ending CPU: {:?}", e))?;
                 cpus.extend(start..end + 1);
             }
         }
