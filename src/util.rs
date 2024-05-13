@@ -1,4 +1,4 @@
-use anyhow::Error;
+use anyhow::{Context, Error};
 use std::{fs::File, io::Read};
 
 #[derive(Debug, PartialEq)]
@@ -49,17 +49,17 @@ fn _read_cpu_range(path: &str) -> Result<Vec<u32>, Error> {
                 cpu_range
                     .trim_end()
                     .parse::<u32>()
-                    .map_err(|e| format!("Failed to parse lone CPU: {:?}", e))?,
+                    .with_context(|| "Failed to parse lone CPU".to_string())?,
             ),
             Some(index) => {
                 let start = cpu_range[..index]
                     .trim_end()
                     .parse::<u32>()
-                    .map_err(|e| format!("Failed to parse starting CPU: {:?}", e))?;
+                    .with_context(|| "Failed to parse starting CPU".to_string())?;
                 let end = cpu_range[index + 1..]
                     .trim_end()
                     .parse::<u32>()
-                    .map_err(|e| format!("Failed to parse ending CPU: {:?}", e))?;
+                    .with_context(|| "Failed to parse ending CPU".to_string())?;
                 cpus.extend(start..end + 1);
             }
         }
