@@ -50,14 +50,25 @@ fn main() {
     let skel = Path::new(PROFILER_SKELETON);
     SkeletonBuilder::new()
         .source(PROFILER_BPF_SOURCE)
-        .clang_args("-Wextra -Wall -Werror -Wno-unused-command-line-argument")
+        .clang_args([
+            "-Wextra",
+            "-Wall",
+            "-Werror",
+            "-Wno-unused-command-line-argument",
+        ])
         .build_and_generate(skel)
         .expect("run skeleton builder");
 
     let skel = Path::new(TRACERS_SKELETON);
     SkeletonBuilder::new()
         .source(TRACERS_BPF_SOURCE)
-        .clang_args("-Wextra -Wall -Werror -Wno-unused-command-line-argument -Wno-unused-function")
+        .clang_args([
+            "-Wextra",
+            "-Wall",
+            "-Werror",
+            "-Wno-unused-command-line-argument",
+            "-Wno-unused-function",
+        ])
         .build_and_generate(skel)
         .expect("run skeleton builder");
 }
