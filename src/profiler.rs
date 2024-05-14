@@ -147,20 +147,27 @@ pub type SymbolizedAggregatedProfile = Vec<SymbolizedAggregatedSample>;
 
 impl Default for Profiler<'_> {
     fn default() -> Self {
-        Self::new(false, Duration::MAX, 19)
+        Self::new(false, false, Duration::MAX, 19)
     }
 }
 
 impl Profiler<'_> {
-    pub fn new(bpf_debug: bool, duration: Duration, sample_freq: u16) -> Self {
+    pub fn new(
+        libbpf_debug: bool,
+        bpf_logging: bool,
+        duration: Duration,
+        sample_freq: u16,
+    ) -> Self {
         let mut skel_builder: ProfilerSkelBuilder = ProfilerSkelBuilder::default();
-        skel_builder.obj_builder.debug(bpf_debug);
-        let open_skel = skel_builder.open().expect("open skel");
+        skel_builder.obj_builder.debug(libbpf_debug);
+        let mut open_skel = skel_builder.open().expect("open skel");
+        open_skel.rodata_mut().lightswitch_config.verbose_logging = bpf_logging;
         let bpf = open_skel.load().expect("load skel");
+        info!("native unwinder BPF program loaded");
         let exec_mappings_fd = bpf.maps().exec_mappings().as_fd().as_raw_fd();
 
         let mut tracers_builder = TracersSkelBuilder::default();
-        tracers_builder.obj_builder.debug(bpf_debug);
+        tracers_builder.obj_builder.debug(libbpf_debug);
         let open_tracers = tracers_builder.open().expect("open skel");
         open_tracers
             .maps()
@@ -169,6 +176,7 @@ impl Profiler<'_> {
             .expect("reuse exec_mappings");
 
         let tracers = open_tracers.load().expect("load skel");
+        info!("munmap and process exit tracing BPF programs loaded");
 
         let procs = Arc::new(Mutex::new(HashMap::new()));
         let object_files = Arc::new(Mutex::new(HashMap::new()));
@@ -822,7 +830,10 @@ impl Profiler<'_> {
                 );
 
                 if available_space == 0 {
-                    info!("no space in live shard, allocating a new one");
+                    info!(
+                        "live shard is full, allocating a new one [{}/{}]",
+                        self.native_unwind_state.shard_index, MAX_SHARDS
+                    );
 
                     if self.persist_unwind_info(&self.native_unwind_state.live_shard) {
                         self.native_unwind_state.dirty = false;
