@@ -161,10 +161,15 @@ impl Profiler<'_> {
         let mut skel_builder: ProfilerSkelBuilder = ProfilerSkelBuilder::default();
         skel_builder.obj_builder.debug(libbpf_debug);
         let mut open_skel = skel_builder.open().expect("open skel");
-        open_skel.rodata_mut().lightswitch_config.verbose_logging = bpf_logging;
+        open_skel
+            .rodata_mut()
+            .lightswitch_config
+            .verbose_logging
+            .write(bpf_logging);
         let bpf = open_skel.load().expect("load skel");
         info!("native unwinder BPF program loaded");
-        let exec_mappings_fd = bpf.maps().exec_mappings().as_fd().as_raw_fd();
+        let native_unwinder_maps = bpf.maps();
+        let exec_mappings_fd = native_unwinder_maps.exec_mappings().as_fd();
 
         let mut tracers_builder = TracersSkelBuilder::default();
         tracers_builder.obj_builder.debug(libbpf_debug);

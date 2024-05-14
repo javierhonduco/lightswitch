@@ -327,7 +327,11 @@ impl<'a> UnwindInfoBuilder<'a> {
                                 }
                             }
                             CfaRule::Expression(exp) => {
-                                let found_expression = exp.0.slice();
+                                let found_expression = exp
+                                    .get(&eh_frame)
+                                    .expect("getting the expression should never fail")
+                                    .0
+                                    .slice();
 
                                 if found_expression == *PLT1 {
                                     compact_row.cfa_offset = PltType::Plt1 as u16;
