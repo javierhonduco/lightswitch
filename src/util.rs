@@ -1,3 +1,6 @@
+use anyhow::{Context, Error};
+use std::{fs::File, io::Read};
+
 #[derive(Debug, PartialEq)]
 pub struct AddressBlockRange {
     pub addr: u64,
@@ -33,9 +36,48 @@ pub fn summarize_address_range(low: u64, high: u64) -> Vec<AddressBlockRange> {
     res
 }
 
+fn _read_cpu_range(path: &str) -> Result<Vec<u32>, Error> {
+    let mut cpus: Vec<_> = vec![];
+    let mut fh = File::open(path)?;
+    let mut cpu_range_str = String::new();
+    fh.read_to_string(&mut cpu_range_str)?;
+
+    for cpu_range in cpu_range_str.split(',') {
+        let rangeop_result = cpu_range.find('-');
+        match rangeop_result {
+            None => cpus.push(
+                cpu_range
+                    .trim_end()
+                    .parse::<u32>()
+                    .with_context(|| "Failed to parse lone CPU".to_string())?,
+            ),
+            Some(index) => {
+                let start = cpu_range[..index]
+                    .trim_end()
+                    .parse::<u32>()
+                    .with_context(|| "Failed to parse starting CPU".to_string())?;
+                let end = cpu_range[index + 1..]
+                    .trim_end()
+                    .parse::<u32>()
+                    .with_context(|| "Failed to parse ending CPU".to_string())?;
+                cpus.extend(start..end + 1);
+            }
+        }
+    }
+
+    Ok(cpus)
+}
+
+pub fn get_online_cpus() -> Result<Vec<u32>, Error> {
+    let cpus: Vec<u32> = _read_cpu_range("/sys/devices/system/cpu/online")?;
+
+    Ok(cpus)
+}
+
 #[cfg(test)]
 mod tests {
     use std::mem::size_of;
+    use tempdir::TempDir;
 
     use libbpf_rs::libbpf_sys;
     use libbpf_rs::MapFlags;
@@ -154,5 +196,51 @@ mod tests {
             let parsed: mapping_t = *plain::from_bytes(&retrieved).unwrap();
             assert_eq!(parsed.executable_id, mapping2.executable_id);
         }
+    }
+
+    #[test]
+    fn cpu_ranges_to_list() {
+        use std::io::Seek;
+        use std::io::Write;
+
+        let tmp_dir = TempDir::new("cpu_devs").unwrap();
+        let file_path = tmp_dir.path().join("online");
+        let mut tmp_file = File::create(file_path.clone()).unwrap();
+        let file_str = file_path.to_str().unwrap();
+
+        writeln!(tmp_file, "0").unwrap();
+        let cpus = _read_cpu_range(file_str).unwrap();
+        assert_eq!(cpus, vec![0]);
+
+        tmp_file.rewind().unwrap();
+        writeln!(tmp_file, "0-7").unwrap();
+
+        let cpus = _read_cpu_range(file_str).unwrap();
+        assert_eq!(cpus, (0..=7).collect::<Vec<_>>());
+
+        tmp_file.rewind().unwrap();
+        writeln!(tmp_file, "0-7,16-23").unwrap();
+
+        let cpus = _read_cpu_range(file_str).unwrap();
+        let expected = (0..=7).chain(16..=23).collect::<Vec<_>>();
+
+        assert_eq!(cpus, expected);
+
+        tmp_file.rewind().unwrap();
+        writeln!(tmp_file, "0-1,3,7-9,48,49").unwrap();
+
+        let cpus = _read_cpu_range(file_str).unwrap();
+        assert_eq!(
+            cpus,
+            (0..=1)
+                .chain(3..=3)
+                .chain(7..=9)
+                .chain(48..=48)
+                .chain(49..=49)
+                .collect::<Vec<_>>()
+        );
+
+        drop(tmp_file);
+        tmp_dir.close().expect("tempdir should be destroyed");
     }
 }
