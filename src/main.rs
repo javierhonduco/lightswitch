@@ -7,7 +7,6 @@ use std::panic;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use clap::ArgAction;
 use clap::Parser;
 
 use inferno::flamegraph;
@@ -74,6 +73,16 @@ fn primes_before_after(non_prime: usize) -> Result<(usize, usize), String> {
     Ok((before, after))
 }
 
+#[derive(clap::ValueEnum, Debug, Clone, Default)]
+enum LoggingLevel {
+    Trace,
+    Debug,
+    #[default]
+    Info,
+    Warn,
+    Error,
+}
+
 #[derive(Parser, Debug)]
 struct Cli {
     /// Specific PIDs to profile
@@ -84,13 +93,12 @@ struct Cli {
     tids: Vec<i32>,
     /// Show unwind info for given binary
     #[arg(long, value_name = "PATH_TO_BINARY",
-        conflicts_with_all = ["pids", "tids", "show_info", "duration",
-            "filter_logs", "sample_freq", "flamegraph_file"]
+        conflicts_with_all = ["pids", "tids", "show_info", "duration", "sample_freq", "flamegraph_file"]
     )]
     show_unwind_info: Option<String>,
     /// Show build ID for given binary
     #[arg(long, value_name = "PATH_TO_BINARY",
-        conflicts_with_all = ["pids", "tids", "duration", "filter_logs",
+        conflicts_with_all = ["pids", "tids", "duration",
             "sample_freq", "flamegraph_file"]
     )]
     show_info: Option<String>,
@@ -98,9 +106,15 @@ struct Cli {
     #[arg(short='D', long, default_value = Duration::MAX.as_secs().to_string(),
         value_parser = parse_duration)]
     duration: Duration,
-    /// Enable TRACE (max) level logging - defaults to INFO level otherwise
-    #[arg(long, action=ArgAction::SetFalse)]
-    filter_logs: bool,
+    /// Enable libbpf logs. This includes the BPF verifier output
+    #[arg(long)]
+    libbpf_logs: bool,
+    /// Enable BPF programs logging
+    #[arg(long)]
+    bpf_logging: bool,
+    /// Set lightswitch's logging level
+    #[arg(long, default_value_t, value_enum)]
+    logging: LoggingLevel,
     // Verification for this option guarantees the only possible selections
     // are prime numbers up to and including 1001
     /// Per-CPU Sampling Frequency in Hz
@@ -148,10 +162,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(if args.filter_logs {
-            Level::TRACE
-        } else {
-            Level::INFO
+        .with_max_level(match args.logging {
+            LoggingLevel::Trace => Level::TRACE,
+            LoggingLevel::Debug => Level::DEBUG,
+            LoggingLevel::Info => Level::INFO,
+            LoggingLevel::Warn => Level::WARN,
+            LoggingLevel::Error => Level::ERROR,
         })
         .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE)
         .with_ansi(std::io::stdout().is_terminal())
@@ -176,7 +192,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let collector = Collector::new();
 
-    let mut p: Profiler<'_> = Profiler::new(true, args.duration, args.sample_freq);
+    let mut p: Profiler<'_> = Profiler::new(
+        args.libbpf_logs,
+        args.bpf_logging,
+        args.duration,
+        args.sample_freq,
+    );
     p.profile_pids(args.pids);
     p.run(collector.clone());
 
@@ -268,7 +289,7 @@ mod tests {
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
         insta::assert_yaml_snapshot!(actual, @r###"
         ---
-        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n  -D, --duration <DURATION>\n          How long this agent will run in seconds [default: 18446744073709551615]\n      --filter-logs\n          Enable TRACE (max) level logging - defaults to INFO level otherwise\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz [default: 19]\n      --flamegraph-file <FLAMEGRAPH_FILE>\n          Output file for Flame Graph in SVG format [default: flame.svg]\n  -h, --help\n          Print help\n"
+        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n  -D, --duration <DURATION>\n          How long this agent will run in seconds [default: 18446744073709551615]\n      --libbpf-logs\n          Enable libbpf logs. This includes the BPF verifier output\n      --bpf-logging\n          Enable BPF programs logging\n      --logging <LOGGING>\n          Set lightswitch's logging level [default: info] [possible values: trace, debug, info, warn, error]\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz [default: 19]\n      --flamegraph-file <FLAMEGRAPH_FILE>\n          Output file for Flame Graph in SVG format [default: flame.svg]\n  -h, --help\n          Print help\n"
         "###);
     }
 
@@ -340,17 +361,4 @@ mod tests {
             }
         }
     }
-
-    // Only usable on the nightly toolchain for now...
-    // use test::{black_box, Bencher};
-
-    // #[bench]
-    // fn bench_primes_before_after(b: &mut Bencher) {
-    //     b.iter(|| {
-    //         // Inner closure, the actual test
-    //         for i in 1..1009 {
-    //             black_box(primes_before_after(i));
-    //         }
-    //     });
-    // }
 }
