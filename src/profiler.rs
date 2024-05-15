@@ -23,7 +23,7 @@ use crate::collector::*;
 use crate::object::{BuildId, ObjectFile};
 use crate::perf_events::setup_perf_event;
 use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
-use crate::util::summarize_address_range;
+use crate::util::{get_online_cpus, summarize_address_range};
 
 pub enum TracerEvent {
     ProcessExit(i32),
@@ -204,20 +204,32 @@ pub type SymbolizedAggregatedProfile = Vec<SymbolizedAggregatedSample>;
 
 impl Default for Profiler<'_> {
     fn default() -> Self {
-        Self::new(false, Duration::MAX, 19)
+        Self::new(false, false, Duration::MAX, 19)
     }
 }
 
 impl Profiler<'_> {
-    pub fn new(bpf_debug: bool, duration: Duration, sample_freq: u16) -> Self {
+    pub fn new(
+        libbpf_debug: bool,
+        bpf_logging: bool,
+        duration: Duration,
+        sample_freq: u16,
+    ) -> Self {
         let mut skel_builder: ProfilerSkelBuilder = ProfilerSkelBuilder::default();
-        skel_builder.obj_builder.debug(bpf_debug);
-        let open_skel = skel_builder.open().expect("open skel");
+        skel_builder.obj_builder.debug(libbpf_debug);
+        let mut open_skel = skel_builder.open().expect("open skel");
+        open_skel
+            .rodata_mut()
+            .lightswitch_config
+            .verbose_logging
+            .write(bpf_logging);
         let bpf = open_skel.load().expect("load skel");
-        let exec_mappings_fd = bpf.maps().exec_mappings().as_fd().as_raw_fd();
+        info!("native unwinder BPF program loaded");
+        let native_unwinder_maps = bpf.maps();
+        let exec_mappings_fd = native_unwinder_maps.exec_mappings().as_fd();
 
         let mut tracers_builder = TracersSkelBuilder::default();
-        tracers_builder.obj_builder.debug(bpf_debug);
+        tracers_builder.obj_builder.debug(libbpf_debug);
         let open_tracers = tracers_builder.open().expect("open skel");
         open_tracers
             .maps()
@@ -226,6 +238,7 @@ impl Profiler<'_> {
             .expect("reuse exec_mappings");
 
         let tracers = open_tracers.load().expect("load skel");
+        info!("munmap and process exit tracing BPF programs loaded");
 
         let procs = Arc::new(Mutex::new(HashMap::new()));
         let object_files = Arc::new(Mutex::new(HashMap::new()));
@@ -291,7 +304,9 @@ impl Profiler<'_> {
     }
 
     pub fn run(mut self, collector: Arc<Mutex<Collector>>) {
-        let num_cpus = num_possible_cpus().expect("get possible CPUs") as u64;
+        // In this case, we only want to calculate maximum sampling buffer sizes based on the
+        // number of online CPUs, NOT possible CPUs, when they differ - which is often.
+        let num_cpus = get_online_cpus().expect("get online CPUs").len() as u64;
         let max_samples_per_session =
             self.sample_freq as u64 * num_cpus * self.session_duration.as_secs();
         if max_samples_per_session >= MAX_AGGREGATED_STACKS_ENTRIES.into() {
@@ -522,6 +537,9 @@ impl Profiler<'_> {
         let value = unsafe { plain::as_bytes(&default) };
 
         let mut values: Vec<Vec<u8>> = Vec::new();
+        // This is a place where you need to know the POSSIBLE, not ONLINE CPUs, because eBPF's
+        // internals require setting up certain buffers for all possible CPUs, even if the CPUs
+        // don't all exist.
         let num_cpus = num_possible_cpus().expect("get possible CPUs") as u64;
         for _ in 0..num_cpus {
             values.push(value.to_vec());
@@ -875,7 +893,10 @@ impl Profiler<'_> {
                 );
 
                 if available_space == 0 {
-                    info!("no space in live shard, allocating a new one");
+                    info!(
+                        "live shard is full, allocating a new one [{}/{}]",
+                        self.native_unwind_state.shard_index, MAX_SHARDS
+                    );
 
                     if self.persist_unwind_info(&self.native_unwind_state.live_shard) {
                         self.native_unwind_state.dirty = false;
@@ -1047,17 +1068,14 @@ impl Profiler<'_> {
                         continue;
                     };
 
-                    let mut load_address = map.address.0;
-                    match maps.iter().nth(i.wrapping_sub(1)) {
-                        Some(thing) => {
-                            if thing.pathname == map.pathname {
-                                load_address = thing.address.0;
+                    let load_address = || {
+                        for map2 in maps.iter() {
+                            if map2.pathname == map.pathname {
+                                return map2.address.0;
                             }
                         }
-                        _ => {
-                            // todo: cleanup
-                        }
-                    }
+                        map.address.0
+                    };
 
                     mappings.push(ExecutableMapping {
                         build_id: Some(build_id.clone()),
@@ -1065,7 +1083,7 @@ impl Profiler<'_> {
                         start_addr: map.address.0,
                         end_addr: map.address.1,
                         offset: map.offset,
-                        load_address,
+                        load_address: load_address(),
                         unwinder,
                     });
 
@@ -1168,15 +1186,7 @@ impl Profiler<'_> {
 
     pub fn setup_perf_events(&mut self) {
         let mut prog_fds = Vec::new();
-        // TODO: The call to num_possible_cpus is afflicted by https://github.com/libbpf/libbpf/issues/103
-        // Seeing examples of hosts where the number of possible CPUs is not the actual number of
-        // online CPUs:
-        // $ cat /sys/devices/system/cpu/possible
-        // 0-7
-        // $ cat /sys/devices/system/cpu/online
-        // 0-3
-        // So we need the number of online, not possible CPUs, to avoid failures
-        for i in 0..num_possible_cpus().expect("get possible CPUs") {
+        for i in get_online_cpus().expect("get online CPUs") {
             let perf_fd =
                 unsafe { setup_perf_event(i.try_into().unwrap(), self.sample_freq as u64) }
                     .expect("setup perf event");
