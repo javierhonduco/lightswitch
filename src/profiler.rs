@@ -1013,7 +1013,7 @@ impl Profiler<'_> {
             return true;
         }
 
-        return self.filter_pids.get(&pid).is_some();
+        self.filter_pids.contains_key(&pid)
     }
 
     fn event_new_proc(&mut self, pid: i32) {
