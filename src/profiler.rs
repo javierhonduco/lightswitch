@@ -138,23 +138,23 @@ pub struct RawAggregatedSample {
 impl fmt::Display for RawAggregatedSample {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let format_native_stack = |native_stack: Option<native_stack_t>| -> String {
-            let mut scratch_string: String = String::new();
+            let mut acc: Vec<String> = vec![];
             match native_stack {
-                None => scratch_string.push_str("NONE"),
+                None => acc.push("NONE".to_string()),
                 Some(native_stack) => {
-                    scratch_string.push_str("[\n");
+                    acc.push("[".to_string());
                     for (i, addr) in native_stack.addresses.into_iter().enumerate() {
                         if native_stack.len <= i.try_into().unwrap() {
                             break;
                         }
                         // The 18 includes the '0x' prefix for hex addresses
-                        let cvtd = format!("{:3}: {:#018x},\n", i, addr);
-                        scratch_string.push_str(&cvtd);
+                        let cvtd = format!("{:3}: {:#018x},", i, addr);
+                        acc.push(cvtd);
                     }
-                    scratch_string.push(']');
+                    acc.push("]".to_string());
                 }
             };
-            scratch_string
+            acc.join("\n")
         };
         let ustack_rep = format_native_stack(self.ustack);
         let kstack_rep = format_native_stack(self.kstack);
@@ -179,14 +179,18 @@ pub struct SymbolizedAggregatedSample {
 impl fmt::Display for SymbolizedAggregatedSample {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let format_symbolized_stack = |symbolized_stack: &Vec<String>| -> String {
-            let mut scratch_string: String = String::new();
-            scratch_string.push_str("[\n");
-            for (i, symbol) in symbolized_stack.iter().enumerate() {
-                let cvtd = format!("{:3}: {},\n", i, symbol);
-                scratch_string.push_str(&cvtd);
+            let mut acc: Vec<String> = vec![];
+            if symbolized_stack.len() == 0 {
+                acc.push("NONE".to_string());
+            } else {
+                acc.push("[".to_string());
+                for (i, symbol) in symbolized_stack.iter().enumerate() {
+                    let cvtd = format!("{:3}: {},", i, symbol);
+                    acc.push(cvtd);
+                }
+                acc.push("]".to_string());
             }
-            scratch_string.push(']');
-            scratch_string
+            acc.join("\n")
         };
         let ustack_rep = format_symbolized_stack(&self.ustack);
         let kstack_rep = format_symbolized_stack(&self.kstack);
@@ -1282,12 +1286,10 @@ mod tests {
             addresses: ustack,
             len: ureplace.len() as u64,
         });
-        println!("ustack_data: {:?}", ustack_data);
         let kstack_data = Some(native_stack_t {
             addresses: kstack,
             len: kreplace.len() as u64,
         });
-        println!("kstack_data: {:?}", kstack_data);
 
         let sample = RawAggregatedSample {
             pid: 128821,
@@ -1298,6 +1300,42 @@ mod tests {
         insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
         ---
         "RawAggregatedSample:\npid: 128821\nustack: [\n  0: 0x00007f7c91c82314,\n  1: 0x00007f7c91c4ff93,\n  2: 0x00007f7c91c5d8ae,\n  3: 0x00007f7c91c4d2c3,\n  4: 0x00007f7c91c45400,\n  5: 0x00007f7c91c10933,\n  6: 0x00007f7c91c38153,\n  7: 0x00007f7c91c331d9,\n  8: 0x00007f7c91dfa501,\n  9: 0x00007f7c91c16b05,\n 10: 0x00007f7c91e22038,\n 11: 0x00007f7c91e23fc6,\n]\nkstack: [\n  0: 0xffffffff8749ae51,\n  1: 0xffffffffc04c4804,\n  2: 0xffffffff874ddfd0,\n  3: 0xffffffff874e0843,\n  4: 0xffffffff874e0b8a,\n  5: 0xffffffff8727f600,\n  6: 0xffffffff8727f8a7,\n  7: 0xffffffff87e0116e,\n]\ncount: 42"
+        "###);
+    }
+
+    #[test]
+    fn display_symbolized_aggregated_sample() {
+        let ustack_data: Vec<_> = ["ufunc3", "ufunc2", "ufunc1"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let kstack_data: Vec<_> = ["kfunc2", "kfunc1"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let sample = SymbolizedAggregatedSample {
+            pid: 1234567,
+            ustack: ustack_data,
+            kstack: kstack_data.clone(),
+            count: 128,
+        };
+        insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
+        ---
+        "SymbolizedAggregatedSample:\npid: 1234567\nustack: [\n  0: ufunc3,\n  1: ufunc2,\n  2: ufunc1,\n]\nkstack: [\n  0: kfunc2,\n  1: kfunc1,\n]\ncount: 128"
+        "###);
+
+        let ustack_data: Vec<String> = vec![];
+
+        let sample = SymbolizedAggregatedSample {
+            pid: 98765,
+            ustack: ustack_data,
+            kstack: kstack_data.clone(),
+            count: 1001,
+        };
+        insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
+        ---
+        "SymbolizedAggregatedSample:\npid: 98765\nustack: NONE\nkstack: [\n  0: kfunc2,\n  1: kfunc1,\n]\ncount: 1001"
         "###);
     }
 }
