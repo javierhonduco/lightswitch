@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::debug;
+use tracing::{debug, span, Level};
 
 use crate::bpf::profiler_bindings::native_stack_t;
 use crate::ksym::KsymIter;
@@ -18,12 +18,14 @@ pub fn symbolize_profile(
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<BuildId, ObjectFileInfo>,
 ) -> SymbolizedAggregatedProfile {
+    let _span = span!(Level::DEBUG, "symbolize_profile").entered();
     let mut r = SymbolizedAggregatedProfile::new();
     let addresses_per_sample = fetch_symbols_for_profile(profile, procs, objs);
 
     let ksyms: Vec<crate::ksym::Ksym> = KsymIter::from_kallsyms().collect();
 
     for sample in profile {
+        debug!("--- raw sample:\n{}", sample);
         let mut symbolized_sample: SymbolizedAggregatedSample = SymbolizedAggregatedSample {
             pid: sample.pid,
             count: sample.count,
@@ -59,6 +61,7 @@ pub fn symbolize_profile(
                 symbolized_sample.kstack.push(le_symbol.symbol_name);
             }
         };
+        // debug!("--- symbolized sample: {}", symbolized_sample);
 
         r.push(symbolized_sample);
     }

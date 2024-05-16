@@ -223,18 +223,64 @@ fn main() -> Result<(), Box<dyn Error>> {
             let kstack = kstack.join(";");
             let count: String = sample.count.to_string();
 
-            let process_name = match procfs::process::Process::new(sample.pid) {
+            let (process_name, thread_name) = match procfs::process::Process::new(sample.pid) {
+                // We successfully looked up the PID in procfs (we don't yet
+                // know if it's a PID/PGID/main thread or a TID/non-main thread)
                 Ok(p) => match p.stat() {
-                    Ok(stat) => stat.comm,
-                    Err(_) => "<could not fetch proc stat".to_string(),
+                    // Successfully got the pid/tid stat info
+                    Ok(stat) => {
+                        // Differentiate between PID/PGID/main thread or TID/non-main thread
+                        if stat.pid == stat.pgrp {
+                            // NOTE:
+                            // This is the main thread for the PID/PGID
+                            // If stat.pid() == stat.pgrp() for this process,
+                            // this is a stack for the main thread
+                            // of the pid, and stat.comm is the name of the
+                            // process binary file, so use:
+                            // process_name = stat.comm, and thread_name = "main_thread"
+                            (stat.comm, "main_thread".to_string())
+                        } else {
+                            // NOTE:
+                            // This is a non-main thread (TID) of a PID, so we
+                            // have to look up the actual PID/PGID to get the
+                            // process binary name
+                            // As in, stat.comm is the name of the thread, and
+                            // you have to look up the process binary name, so
+                            // use:
+                            // process_name = <derive from stat.pgrp>, and thread_name = stat.comm
+                            //
+                            let process_name = match procfs::process::Process::new(stat.pgrp) {
+                                // We successfully looked up the PID/PGID of the TID in procfs
+                                Ok(p) => match p.stat() {
+                                    // We successfully looked up the PID binary name from stat
+                                    Ok(stat2) => stat2.comm,
+                                    // We were unable to get the PID's binary name from stat
+                                    Err(_) => "<could not fetch process name>".to_string(),
+                                },
+                                // We failed to look up the PID/PGID of the TID in procfs
+                                Err(_) => "<could not fetch process name>".to_string(),
+                            };
+                            (process_name, stat.comm)
+                        }
+                    }
+                    // Was unable to lookup the PID binary or thread name from stat
+                    Err(_) => (
+                        "<could not fetch process name>".to_string(),
+                        "<could not fetch thread name>".to_string(),
+                    ),
                 },
-                Err(_) => "<could not get proc comm>".to_string(),
+                // Completely failed to look up the PID/TID in procfs
+                Err(_) => (
+                    "<could not fetch process name>".to_string(),
+                    "<could not fetch thread name>".to_string(),
+                ),
             };
 
             writeln!(
                 folded,
-                "{:?}{}{} {}",
+                "{};{}{}{} {}",
                 process_name,
+                thread_name,
                 if ustack.trim().is_empty() {
                     "".to_string()
                 } else {
