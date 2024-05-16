@@ -180,7 +180,7 @@ impl fmt::Display for SymbolizedAggregatedSample {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let format_symbolized_stack = |symbolized_stack: &Vec<String>| -> String {
             let mut acc: Vec<String> = vec![];
-            if symbolized_stack.len() == 0 {
+            if symbolized_stack.is_empty() {
                 acc.push("NONE".to_string());
             } else {
                 acc.push("[".to_string());

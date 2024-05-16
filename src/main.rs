@@ -258,20 +258,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     Err(_) => "<could not fetch process name>".to_string(),
                                 },
                                 // We failed to look up the PID/PGID of the TID in procfs
-                                Err(_) => "<could not fetch process info>".to_string(),
+                                Err(_) => "<could not fetch process name>".to_string(),
                             };
                             (process_name, stat.comm)
                         }
                     }
                     // Was unable to lookup the PID binary or thread name from stat
                     Err(_) => (
-                        "<could not fetch proc stat>".to_string(),
+                        "<could not fetch process name>".to_string(),
                         "<could not fetch thread name>".to_string(),
                     ),
                 },
                 // Completely failed to look up the PID/TID in procfs
                 Err(_) => (
-                    "<could not fetch proc comm>".to_string(),
+                    "<could not fetch process name>".to_string(),
                     "<could not fetch thread name>".to_string(),
                 ),
             };
