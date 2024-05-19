@@ -1,37 +1,10 @@
-use std::os::raw::{c_int, c_ulong};
+use std::os::raw::c_int;
 
 use anyhow::{anyhow, Result};
 use errno::errno;
-use libc::{self, pid_t};
 
 use perf_event_open_sys as sys;
 use perf_event_open_sys::bindings::perf_event_attr;
-
-// This crate bindings have been generated in a x86 machine, including
-// the syscall number. Turns out different architectures have different
-// syscall numbers. Will open an issue upstream, but meanwhile, let's
-// hardcode the syscall number for arm64
-#[cfg(any(target_arch = "arm64", target_arch = "aarch64"))]
-unsafe fn perf_event_open(
-    attrs: *mut perf_event_attr,
-    pid: pid_t,
-    cpu: c_int,
-    group_fd: c_int,
-    flags: c_ulong,
-) -> c_int {
-    libc::syscall(241u32 as libc::c_long, attrs, pid, cpu, group_fd, flags) as c_int
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-unsafe fn perf_event_open(
-    attrs: *mut perf_event_attr,
-    pid: pid_t,
-    cpu: c_int,
-    group_fd: c_int,
-    flags: c_ulong,
-) -> c_int {
-    sys::perf_event_open(attrs, pid, cpu, group_fd, flags) as c_int
-}
 
 /// # Safety
 pub unsafe fn setup_perf_event(cpu: i32, sample_freq: u64) -> Result<c_int> {
@@ -45,15 +18,15 @@ pub unsafe fn setup_perf_event(cpu: i32, sample_freq: u64) -> Result<c_int> {
     attrs.set_disabled(1);
     attrs.set_freq(1);
 
-    let fd = perf_event_open(
+    let ret = sys::perf_event_open(
         &mut attrs, -1, /* pid */
         cpu, -1, /* group_fd */
         0,  /* flags */
-    );
+    ) as c_int;
 
-    if fd < 0 {
+    if ret < 0 {
         return Err(anyhow!("setup_perf_event failed with errno {}", errno()));
     }
 
-    Ok(fd)
+    Ok(ret)
 }
