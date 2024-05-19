@@ -37,7 +37,7 @@ DEFINE_COUNTER(error_unsupported_frame_pointer_action);
 DEFINE_COUNTER(error_unsupported_cfa_register);
 DEFINE_COUNTER(error_catchall);
 DEFINE_COUNTER(error_should_never_happen);
-DEFINE_COUNTER(error_pc_not_covered);
+DEFINE_COUNTER(error_bp_should_be_zero_for_bottom_frame);
 DEFINE_COUNTER(error_mapping_not_found);
 DEFINE_COUNTER(error_mapping_does_not_contain_pc);
 DEFINE_COUNTER(error_chunk_not_found);
