@@ -50,7 +50,8 @@ impl Add for unwinder_stats_t {
             error_catchall: self.error_catchall + other.error_catchall,
             error_should_never_happen: self.error_should_never_happen
                 + other.error_should_never_happen,
-            error_pc_not_covered: self.error_pc_not_covered + other.error_pc_not_covered,
+            error_bp_should_be_zero_for_bottom_frame: self.error_bp_should_be_zero_for_bottom_frame
+                + other.error_bp_should_be_zero_for_bottom_frame,
             error_binary_search_exausted_iterations: self.error_binary_search_exausted_iterations
                 + other.error_binary_search_exausted_iterations,
             error_chunk_not_found: self.error_chunk_not_found + other.error_chunk_not_found,

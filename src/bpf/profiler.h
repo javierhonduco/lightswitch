@@ -78,7 +78,7 @@ struct unwinder_stats_t {
   u64 error_unsupported_cfa_register;
   u64 error_catchall;
   u64 error_should_never_happen;
-  u64 error_pc_not_covered;
+  u64 error_bp_should_be_zero_for_bottom_frame;
   u64 error_mapping_not_found;
   u64 error_mapping_does_not_contain_pc;
   u64 error_chunk_not_found;

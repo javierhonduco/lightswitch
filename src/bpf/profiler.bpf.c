@@ -302,6 +302,7 @@ SEC("perf_event")
 int dwarf_unwind(struct bpf_perf_event_data *ctx) {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   int per_process_id = pid_tgid >> 32;
+  int per_thread_id = pid_tgid;
 
   bool reached_bottom_of_stack = false;
   u64 zero = 0;
@@ -530,22 +531,24 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     //
     // From 3.4.1 Initial Stack and Register State
     // > %rbp The content of this register is unspecified at process
-    // > initialization time, > but the user code should mark the deepest
-    // > stack frame by setting the frame > pointer to zero.
+    // > initialization time, but the user code should mark the deepest
+    // > stack frame by setting the frame pointer to zero.
+    //
+    // Note: the initial register state only applies to processes not to threads.
     //
     // https://refspecs.linuxbase.org/elf/x86_64-abi-0.99.pdf
 
-    if (unwind_state->bp == 0) {
-      LOG("======= reached main! =======");
-      add_stack(ctx, pid_tgid, unwind_state);
-      bump_unwind_success_dwarf();
-    } else {
-      LOG("[error] Could not find unwind table and rbp != 0 (%llx), pc: %llx. Bug / Node.js?",
-          unwind_state->bp, unwind_state->ip);
-      // request_refresh_process_info(ctx, user_pid);
-      bump_unwind_error_pc_not_covered();
+    bool main_thread = per_process_id == per_thread_id;
+    if (main_thread && unwind_state->bp != 0) {
+      LOG("[error] Expected rbp to be 0 but found %llx, pc: %llx (Node.js is not well supported yet)", unwind_state->bp, unwind_state->ip);
+      bump_unwind_error_bp_should_be_zero_for_bottom_frame();
     }
+
+    LOG("======= reached bottom frame! =======");
+    add_stack(ctx, pid_tgid, unwind_state);
+    bump_unwind_success_dwarf();
     return 0;
+
   } else if (unwind_state->stack.len < MAX_STACK_DEPTH &&
              unwind_state->tail_calls < MAX_TAIL_CALLS) {
     LOG("Continuing walking the stack in a tail call, current tail %d",
