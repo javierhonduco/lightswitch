@@ -58,7 +58,7 @@ pub struct ObjectFileInfo {
     pub load_offset: u64,
     pub load_vaddr: u64,
     pub is_dyn: bool,
-    pub main_bin: bool,
+    pub main_exec: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -735,10 +735,10 @@ impl Profiler<'_> {
                 panic!("build id should not be none for file backed mappings");
             }
 
-            let my_lock = self.object_files.lock().unwrap();
+            let object_files = self.object_files.lock().unwrap();
 
             // We might know about a mapping that failed to open for some reason.
-            let object_file_info = my_lock.get(&mapping.build_id.clone().unwrap());
+            let object_file_info = object_files.get(&mapping.build_id.clone().unwrap());
             if object_file_info.is_none() {
                 warn!("mapping not found");
                 continue;
@@ -746,19 +746,20 @@ impl Profiler<'_> {
             let object_file_info = object_file_info.unwrap();
             let obj_path = object_file_info.path.clone();
 
+            // TODO: rework this logic as it's quite kludgy at the moment and this is broken with
+            // some loaders. Particularly, Rust statically linked with musl does not work. We must
+            // ensure everything works with ASLR enabled loading as well.
             let mut load_address = 0;
-            // Hopefully this is the main object
-            // TODO: make this work with ASLR + static
-            if object_file_info.main_bin {
+            if object_file_info.main_exec {
                 if object_file_info.is_dyn {
-                    load_address = mapping.load_address; // mapping.start_addr - mapping.offset - object_file_info.elf_load.0;
+                    load_address = mapping.load_address;
                 }
             } else {
-                load_address = mapping.load_address; //mapping.start_addr - object_file_info.elf_load.0;
+                load_address = mapping.load_address;
             }
 
             // Avoid deadlock
-            std::mem::drop(my_lock);
+            std::mem::drop(object_files);
 
             let build_id = mapping.build_id.clone().unwrap();
             match self
@@ -1042,7 +1043,7 @@ impl Profiler<'_> {
         let mut mappings = vec![];
         let object_files_clone = self.object_files.clone();
 
-        for (i, map) in maps.iter().enumerate() {
+        for map in maps.iter() {
             if !map.perms.contains(procfs::process::MMPermissions::EXECUTE) {
                 continue;
             }
@@ -1091,11 +1092,12 @@ impl Profiler<'_> {
                         unwinder,
                     });
 
-                    let mut my_lock = object_files_clone.lock().expect("lock");
+                    let mut object_files = object_files_clone.lock().expect("lock object_files");
+                    let main_exec = object_files.is_empty();
 
                     match object_file.elf_load() {
                         Ok(elf_load) => {
-                            my_lock.insert(
+                            object_files.insert(
                                 build_id,
                                 ObjectFileInfo {
                                     path: abs_path,
@@ -1103,7 +1105,7 @@ impl Profiler<'_> {
                                     load_offset: elf_load.offset,
                                     load_vaddr: elf_load.vaddr,
                                     is_dyn: object_file.is_dynamic(),
-                                    main_bin: i < 3,
+                                    main_exec,
                                 },
                             );
                         }
