@@ -89,6 +89,18 @@ pub struct NativeUnwindState {
     shard_index: u64,
 }
 
+impl Default for NativeUnwindState {
+    fn default() -> Self {
+        Self {
+            dirty: false,
+            last_persisted: Instant::now() - Duration::from_secs(1_000), // old enough to trigger it the first time
+            live_shard: Vec::with_capacity(SHARD_CAPACITY),
+            build_id_to_executable_id: HashMap::new(),
+            shard_index: 0,
+        }
+    }
+}
+
 pub struct Profiler<'bpf> {
     // Prevent the links from being removed
     _links: Vec<Link>,
@@ -255,17 +267,7 @@ impl Profiler<'_> {
         let tracers_chan_send = Arc::new(Mutex::new(sender));
         let tracers_chan_receive = Arc::new(Mutex::new(receiver));
 
-        let live_shard = Vec::with_capacity(SHARD_CAPACITY);
-        let build_id_to_executable_id = HashMap::new();
-        let shard_index = 0;
-
-        let native_unwind_state = NativeUnwindState {
-            dirty: false,
-            last_persisted: Instant::now() - Duration::from_secs(1_000), // old enough to trigger it the first time
-            live_shard,
-            build_id_to_executable_id,
-            shard_index,
-        };
+        let native_unwind_state = NativeUnwindState::default();
 
         let (sender, receiver) = mpsc::channel();
         let profile_send: Arc<Mutex<mpsc::Sender<_>>> = Arc::new(Mutex::new(sender));
@@ -482,7 +484,7 @@ impl Profiler<'_> {
     }
 
     /// Clears a BPF map in a iterator-stable way.
-    pub fn clear_map(&mut self, name: &str) {
+    pub fn clear_map(&self, name: &str) {
         let map = self.bpf.object().map(name).expect("map exists");
         let mut total_entries = 0;
         let mut failures = 0;
@@ -535,7 +537,7 @@ impl Profiler<'_> {
         }
     }
 
-    pub fn clear_stats_map(&mut self) {
+    pub fn clear_stats_map(&self) {
         let key = 0_u32.to_le_bytes();
         let default = unwinder_stats_t::default();
         let value = unsafe { plain::as_bytes(&default) };
@@ -563,6 +565,7 @@ impl Profiler<'_> {
         self.clear_stats_map();
         self.clear_map("stacks");
         self.clear_map("aggregated_stacks");
+        self.clear_map("rate_limits");
     }
 
     pub fn collect_profile(&mut self) -> RawAggregatedProfile {
@@ -873,11 +876,17 @@ impl Profiler<'_> {
                 if self.native_unwind_state.shard_index >= MAX_SHARDS {
                     warn!("used all the shards, wiping state");
 
-                    self.native_unwind_state.live_shard.truncate(0);
-                    self.native_unwind_state.shard_index = 0;
+                    // TODO: Avoid resetting the state too often.
+                    self.native_unwind_state = NativeUnwindState::default();
 
-                    // TODO: clear BPF maps but ensure this doesn't happen too often.
-                    self.native_unwind_state.build_id_to_executable_id = HashMap::new();
+                    self.clear_stats_map();
+                    // With the current implementation of the unwind information reset, we might
+                    // wipe stacks that we would like to read from userspace. We could fix this by
+                    // resetting after a profiling session is done.
+                    self.clear_map("stacks");
+                    self.clear_map("aggregated_stacks");
+                    self.clear_map("unwind_info_chunks");
+                    self.clear_map("exec_mappings");
 
                     // The next call to this method will continue populating the needed data.
                     return;
@@ -1018,11 +1027,13 @@ impl Profiler<'_> {
     }
 
     fn event_new_proc(&mut self, pid: i32) {
-        if self.process_is_known(pid) {
+        if !self.should_profile(pid) {
             return;
         }
 
-        if !self.should_profile(pid) {
+        if self.process_is_known(pid) {
+            // We hit this when we had to reset the state of the BPF maps but we know about this process.
+            self.add_unwind_info(pid);
             return;
         }
 
