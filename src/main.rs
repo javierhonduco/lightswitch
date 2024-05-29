@@ -83,6 +83,14 @@ enum LoggingLevel {
     Error,
 }
 
+#[derive(clap::ValueEnum, Debug, Clone, Default)]
+enum ProfileFormat {
+    #[default]
+    FlameGraph,
+    /// Do not produce a profile. Used for kernel tests.
+    None,
+}
+
 #[derive(Parser, Debug)]
 struct Cli {
     /// Specific PIDs to profile
@@ -93,13 +101,13 @@ struct Cli {
     tids: Vec<i32>,
     /// Show unwind info for given binary
     #[arg(long, value_name = "PATH_TO_BINARY",
-        conflicts_with_all = ["pids", "tids", "show_info", "duration", "sample_freq", "flamegraph_file"]
+        conflicts_with_all = ["pids", "tids", "show_info", "duration", "sample_freq", "profile_name"]
     )]
     show_unwind_info: Option<String>,
     /// Show build ID for given binary
     #[arg(long, value_name = "PATH_TO_BINARY",
         conflicts_with_all = ["pids", "tids", "duration",
-            "sample_freq", "flamegraph_file"]
+            "sample_freq", "profile_name"]
     )]
     show_info: Option<String>,
     /// How long this agent will run in seconds
@@ -123,8 +131,12 @@ struct Cli {
     )]
     sample_freq: u16,
     /// Output file for Flame Graph in SVG format
+    #[arg(long, default_value_t, value_enum)]
+    profile_format: ProfileFormat,
+    /// Name for the generated profile.
+    // TODO: change suffix depending on the format.
     #[arg(long, default_value = "flame.svg")]
-    flamegraph_file: PathBuf,
+    profile_name: PathBuf,
 }
 
 /// Exit the main thread if any thread panics. We prefer this behaviour because pretty much every
@@ -297,16 +309,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    let mut options: flamegraph::Options<'_> = flamegraph::Options::default();
-    let data = folded.as_bytes();
-    let flame_path = args.flamegraph_file;
-    let f = File::create(flame_path).unwrap();
-    match flamegraph::from_reader(&mut options, data, f) {
-        Ok(_) => {
-            eprintln!("Profile successfully written to disk");
+    match args.profile_format {
+        ProfileFormat::FlameGraph => {
+            let mut options: flamegraph::Options<'_> = flamegraph::Options::default();
+            let data = folded.as_bytes();
+            let f = File::create(args.profile_name).unwrap();
+            match flamegraph::from_reader(&mut options, data, f) {
+                Ok(_) => {
+                    eprintln!("Profile successfully written to disk");
+                }
+                Err(e) => {
+                    error!("Failed generate profile: {:?}", e);
+                }
+            }
         }
-        Err(e) => {
-            error!("Failed generate profile: {:?}", e);
+        ProfileFormat::None => {
+            // Do nothing
         }
     }
 
@@ -335,7 +353,7 @@ mod tests {
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
         insta::assert_yaml_snapshot!(actual, @r###"
         ---
-        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n  -D, --duration <DURATION>\n          How long this agent will run in seconds [default: 18446744073709551615]\n      --libbpf-logs\n          Enable libbpf logs. This includes the BPF verifier output\n      --bpf-logging\n          Enable BPF programs logging\n      --logging <LOGGING>\n          Set lightswitch's logging level [default: info] [possible values: trace, debug, info, warn, error]\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz [default: 19]\n      --flamegraph-file <FLAMEGRAPH_FILE>\n          Output file for Flame Graph in SVG format [default: flame.svg]\n  -h, --help\n          Print help\n"
+        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-logs\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n\n          Possible values:\n          - flame-graph\n          - none:        Do not produce a profile. Used for kernel tests\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n          \n          [default: flame.svg]\n\n  -h, --help\n          Print help (see a summary with '-h')\n"
         "###);
     }
 
