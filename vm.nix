@@ -1,5 +1,6 @@
 { pkgs }:
-{
+let
+
   kernel_5_15 = pkgs.stdenv.mkDerivation {
     name = "download-kernel-5.15";
     src = pkgs.fetchurl {
@@ -78,6 +79,48 @@
     '';
   };
 
+  vmtest-create-config = lightswitch: pkgs.stdenv.mkDerivation {
+    name = "vmtest-dump-config";
+    dontUnpack = true;
+
+    src = pkgs.writeText "vmtest.toml" ''
+      [[target]]
+      name = "Fedora 5.15"
+      kernel = "${kernel_5_15}/bzImage"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --profile-format=none"
+
+      [[target]]
+      name = "Fedora 6.0"
+      kernel = "${kernel_6_0}/bzImage"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --profile-format=none"
+
+      [[target]]
+      name = "Fedora 6.2"
+      kernel = "${kernel_6_2}/bzImage"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --profile-format=none"
+
+      [[target]]
+      name = "Fedora 6.6"
+      kernel = "${kernel_6_6}/bzImage"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --profile-format=none"
+
+      [[target]]
+      name = "Upstream 6.8.7"
+      kernel = "${kernel_6_8_7}/bzImage"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --profile-format=none"
+
+      [[target]]
+      name = "Upstream v6.9-rc5"
+      kernel = "${kernel_6_9_rc5}/bzImage"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --profile-format=none"
+    '';
+    nativeBuildInputs = [ ];
+    installPhase = ''
+      mkdir -p $out
+      cp -r $src $out/vmtest.toml
+    '';
+  };
+
   vmtest = pkgs.rustPlatform.buildRustPackage {
     name = "vmtest";
     src = pkgs.fetchFromGitHub {
@@ -101,4 +144,10 @@
       platforms = platforms.linux;
     };
   };
+in
+{
+  run-vmtest = lightswitch:
+    pkgs.writeShellScriptBin "run-vmtests" ''
+      ${vmtest}/bin/vmtest --config ${vmtest-create-config lightswitch}/vmtest.toml
+    '';
 }
