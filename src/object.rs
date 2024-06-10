@@ -3,7 +3,7 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
-use data_encoding::HEXUPPER;
+use data_encoding::HEXLOWER;
 use memmap2;
 use ring::digest::{Context, Digest, SHA256};
 
@@ -15,6 +15,8 @@ use object::FileKind;
 use object::Object;
 use object::ObjectKind;
 use object::ObjectSection;
+
+pub type ExecutableId = u64;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum BuildId {
@@ -32,6 +34,7 @@ pub struct ElfLoad {
 pub struct ObjectFile<'a> {
     leaked_mmap_ptr: *const memmap2::Mmap,
     object: object::File<'a>,
+    code_hash: Digest,
 }
 
 impl Drop for ObjectFile<'_> {
@@ -49,13 +52,26 @@ impl ObjectFile<'_> {
         let mmap = Box::new(mmap);
         let leaked = Box::leak(mmap);
         let object = object::File::parse(&**leaked)?;
+        let Some(code_hash) = code_hash(&object) else {
+            return Err(anyhow!("code hash is None"));
+        };
 
         Ok(ObjectFile {
             leaked_mmap_ptr: leaked as *const memmap2::Mmap,
             object,
+            code_hash,
         })
     }
 
+    /// Returns an identifier for the executable using the first 8 bytes of the Sha256 of the code section.
+    pub fn id(&self) -> Result<ExecutableId> {
+        let mut buffer = [0; 8];
+        let _ = self.code_hash.as_ref().read(&mut buffer)?;
+        Ok(u64::from_ne_bytes(buffer))
+    }
+
+    /// Returns the executable build ID if present. If no GNU build ID and no Go build ID
+    /// are found it returns the hash of the text section.
     pub fn build_id(&self) -> anyhow::Result<BuildId> {
         let object = &self.object;
         let build_id = object.build_id()?;
@@ -85,18 +101,8 @@ impl ObjectFile<'_> {
             }
         }
 
-        // No build id (rust, some other libraries).
-        for section in object.sections() {
-            if section.name().unwrap() == ".text" {
-                if let Ok(section) = section.data() {
-                    return Ok(BuildId::Sha256(
-                        HEXUPPER.encode(sha256_digest(section).as_ref()),
-                    ));
-                }
-            }
-        }
-
-        unreachable!("A build id should always be returned");
+        // No build id (Rust, some compilers and Linux distributions).
+        return Ok(BuildId::Sha256(HEXLOWER.encode(self.code_hash.as_ref())));
     }
 
     pub fn is_dynamic(&self) -> bool {
@@ -158,6 +164,18 @@ impl ObjectFile<'_> {
 
         Err(anyhow!("no segments found"))
     }
+}
+
+pub fn code_hash(object: &object::File) -> Option<Digest> {
+    for section in object.sections() {
+        if section.name().unwrap() == ".text" {
+            if let Ok(section) = section.data() {
+                return Some(sha256_digest(section));
+            }
+        }
+    }
+
+    None
 }
 
 fn sha256_digest<R: Read>(mut reader: R) -> Digest {

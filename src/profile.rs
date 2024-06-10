@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::{debug, span, Level};
+use tracing::{debug, error, span, Level};
 
 use crate::bpf::profiler_bindings::native_stack_t;
 use crate::ksym::KsymIter;
-use crate::object::BuildId;
+use crate::object::ExecutableId;
 use crate::profiler::ExecutableMapping;
 use crate::profiler::ObjectFileInfo;
 use crate::profiler::ProcessInfo;
@@ -16,7 +16,7 @@ use crate::usym::symbolize_native_stack_blaze;
 pub fn symbolize_profile(
     profile: &RawAggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
-    objs: &HashMap<BuildId, ObjectFileInfo>,
+    objs: &HashMap<ExecutableId, ObjectFileInfo>,
 ) -> SymbolizedAggregatedProfile {
     let _span = span!(Level::DEBUG, "symbolize_profile").entered();
     let mut r = SymbolizedAggregatedProfile::new();
@@ -61,8 +61,6 @@ pub fn symbolize_profile(
                 symbolized_sample.kstack.push(le_symbol.symbol_name);
             }
         };
-        // debug!("--- symbolized sample: {}", symbolized_sample);
-
         r.push(symbolized_sample);
     }
 
@@ -82,7 +80,7 @@ fn find_mapping(mappings: &[ExecutableMapping], addr: u64) -> Option<ExecutableM
 fn fetch_symbols_for_profile(
     profile: &RawAggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
-    objs: &HashMap<BuildId, ObjectFileInfo>,
+    objs: &HashMap<ExecutableId, ObjectFileInfo>,
 ) -> HashMap<PathBuf, HashMap<u64, Vec<String>>> {
     let mut addresses_per_sample: HashMap<PathBuf, HashMap<u64, Vec<String>>> = HashMap::new();
 
@@ -104,28 +102,21 @@ fn fetch_symbols_for_profile(
                 continue; //return Err(anyhow!("could not find mapping"));
             };
 
-            match &mapping.build_id {
-                Some(build_id) => {
-                    match objs.get(build_id) {
-                        Some(obj) => {
-                            // We need the normalized address for normal object files
-                            // and might need the absolute addresses for JITs
-                            let normalized_addr = addr - mapping.start_addr + mapping.offset
-                                - obj.load_offset
-                                + obj.load_vaddr;
+            match objs.get(&mapping.executable_id) {
+                Some(obj) => {
+                    // We need the normalized address for normal object files
+                    // and might need the absolute addresses for JITs
+                    let normalized_addr = addr - mapping.start_addr + mapping.offset
+                        - obj.load_offset
+                        + obj.load_vaddr;
 
-                            let key = obj.path.clone();
-                            let addrs = addresses_per_sample.entry(key).or_default();
-                            addrs.insert(normalized_addr, vec!["<default>".to_string()]);
-                            // <- default value is a bit janky
-                        }
-                        None => {
-                            println!("\t\t - [no build id found]");
-                        }
-                    }
+                    let key = obj.path.clone();
+                    let addrs = addresses_per_sample.entry(key).or_default();
+                    addrs.insert(normalized_addr, vec!["<default>".to_string()]);
+                    // <- default value is a bit janky
                 }
                 None => {
-                    println!("\t\t - mapping is not backed by a file, could be a JIT segment");
+                    error!("executable with id {} not found", mapping.executable_id);
                 }
             }
         }
@@ -146,7 +137,7 @@ fn fetch_symbols_for_profile(
 fn symbolize_native_stack(
     addresses_per_sample: &HashMap<PathBuf, HashMap<u64, Vec<String>>>,
     procs: &HashMap<i32, ProcessInfo>,
-    objs: &HashMap<BuildId, ObjectFileInfo>,
+    objs: &HashMap<ExecutableId, ObjectFileInfo>,
     pid: i32,
     native_stack: &native_stack_t,
 ) -> Vec<String> {
@@ -168,39 +159,31 @@ fn symbolize_native_stack(
         };
 
         // finally
-        match &mapping.build_id {
-            Some(build_id) => match objs.get(build_id) {
-                Some(obj) => {
-                    let failed_to_fetch_symbol =
-                        vec!["<failed to fetch symbol for addr>".to_string()];
-                    let failed_to_symbolize = vec!["<failed to symbolize>".to_string()];
+        match objs.get(&mapping.executable_id) {
+            Some(obj) => {
+                let failed_to_fetch_symbol = vec!["<failed to fetch symbol for addr>".to_string()];
+                let failed_to_symbolize = vec!["<failed to symbolize>".to_string()];
 
-                    let normalized_addr = addr - mapping.start_addr + mapping.offset
-                        - obj.load_offset
-                        + obj.load_vaddr;
+                let normalized_addr =
+                    addr - mapping.start_addr + mapping.offset - obj.load_offset + obj.load_vaddr;
 
-                    let func_names = match addresses_per_sample.get(&obj.path) {
-                        Some(value) => match value.get(&normalized_addr) {
-                            Some(v) => v,
-                            None => &failed_to_fetch_symbol,
-                        },
-                        None => &failed_to_symbolize,
-                    };
+                let func_names = match addresses_per_sample.get(&obj.path) {
+                    Some(value) => match value.get(&normalized_addr) {
+                        Some(v) => v,
+                        None => &failed_to_fetch_symbol,
+                    },
+                    None => &failed_to_symbolize,
+                };
 
-                    for func_name in func_names {
-                        r.push(func_name.clone());
-                    }
+                for func_name in func_names {
+                    r.push(func_name.clone());
                 }
-                None => {
-                    debug!("\t\t - [no build id found]");
-                }
-            },
+            }
             None => {
-                debug!("\t\t - mapping is not backed by a file, could be a JIT segment");
+                debug!("build id not found");
             }
         }
     }
 
     r
-    // Ok(())
 }

@@ -121,23 +121,30 @@ mod tests {
             ..Default::default()
         };
 
-        let map =
-            MapHandle::create(MapType::LpmTrie, Some("lpm_test_map"), 16, 32, 1024, &opts).unwrap();
+        let map = MapHandle::create(
+            MapType::LpmTrie,
+            Some("lpm_test_map"),
+            std::mem::size_of::<exec_mappings_key>() as u32,
+            std::mem::size_of::<mapping_t>() as u32,
+            1024,
+            &opts,
+        )
+        .unwrap();
 
         let mapping1 = mapping_t {
             executable_id: 1111,
-            type_: 1,
             load_address: 1111,
             begin: 0x7f7428ea8000,
             end: 0x7f7428f50000,
+            type_: 1,
         };
 
         let mapping2 = mapping_t {
             executable_id: 2222,
-            type_: 2,
             load_address: 2222,
             begin: 0x7f7428f85000,
             end: 0x7f74290e5000,
+            type_: 2,
         };
 
         assert!(mapping1.begin < mapping1.end);
