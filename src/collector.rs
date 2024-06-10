@@ -47,7 +47,7 @@ impl Collector {
                     load_offset: v.load_offset,
                     load_vaddr: v.load_vaddr,
                     is_dyn: v.is_dyn,
-                    main_exec: v.main_exec,
+                    references: 0, // The reference count does not matter here.
                 },
             );
         }

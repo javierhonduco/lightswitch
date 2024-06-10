@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
@@ -58,7 +59,7 @@ pub struct ObjectFileInfo {
     pub load_offset: u64,
     pub load_vaddr: u64,
     pub is_dyn: bool,
-    pub main_exec: bool,
+    pub references: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -79,7 +80,33 @@ pub struct ExecutableMapping {
     pub offset: u64,
     pub load_address: u64,
     pub unwinder: Unwinder,
+    pub main_exec: bool,
+    pub unmapped: bool,
     // Add (inode, ctime) and whether the file is in the root namespace
+}
+
+impl ExecutableMapping {
+    fn mark_as_deleted(&mut self, object_files: &mut HashMap<BuildId, ObjectFileInfo>) {
+        // Avoid decrementing the reference count logic more than once if called multiple times.
+        if self.unmapped {
+            return;
+        }
+
+        self.unmapped = true;
+
+        let Some(ref build_id) = self.build_id else {
+            return;
+        };
+
+        if let Some(el) = object_files.get_mut(build_id) {
+            el.references -= 1;
+            debug_assert!(
+                el.references >= 0,
+                "Reference count for {:?} is negative ",
+                el.path
+            );
+        }
+    }
 }
 pub struct NativeUnwindState {
     dirty: bool,
@@ -411,7 +438,7 @@ impl Profiler<'_> {
 
             match read {
                 Ok(TracerEvent::Munmap(pid, start_address)) => {
-                    self.handle_unmap(pid, start_address);
+                    self.handle_munmap(pid, start_address);
                 }
                 Ok(TracerEvent::ProcessExit(pid)) => {
                     self.handle_process_exit(pid);
@@ -428,6 +455,13 @@ impl Profiler<'_> {
             if let Ok(event) = read {
                 if event.type_ == event_type_EVENT_NEW_PROCESS {
                     self.event_new_proc(event.pid);
+                    // Ensure we only remove the rate limits only if the above works.
+                    // This is probably suited for a batched operation.
+                    // let _ = self
+                    //    .bpf
+                    //    .maps()
+                    //    .rate_limits()
+                    //    .delete(unsafe { plain::as_bytes(&event) });
                 } else {
                     error!("unknown event type {}", event.type_);
                 }
@@ -447,12 +481,16 @@ impl Profiler<'_> {
     }
 
     pub fn handle_process_exit(&self, pid: i32) {
+        // TODO: remove ratelimits for this process.
         let mut procs = self.procs.lock().expect("lock");
-
         match procs.get_mut(&pid) {
             Some(proc_info) => {
                 debug!("marking process {} as exited", pid);
                 proc_info.status = ProcessStatus::Exited;
+                for mapping in &mut proc_info.mappings {
+                    let mut object_files = self.object_files.lock().expect("lock");
+                    mapping.mark_as_deleted(&mut object_files);
+                }
             }
             None => {
                 debug!("could not find process {} while marking as exited", pid);
@@ -460,25 +498,26 @@ impl Profiler<'_> {
         }
     }
 
-    pub fn handle_unmap(&self, pid: i32, start_address: u64) {
-        let procs = self.procs.lock().expect("lock");
+    pub fn handle_munmap(&self, pid: i32, start_address: u64) {
+        let mut procs = self.procs.lock().expect("lock");
 
-        match procs.get(&pid) {
+        match procs.get_mut(&pid) {
             Some(proc_info) => {
-                for mapping in &proc_info.mappings {
+                for mapping in &mut proc_info.mappings {
                     if mapping.start_addr <= start_address && start_address <= mapping.end_addr {
-                        debug!("found memory mapping {:x} for {} while handling munmap, not doing anything", start_address, pid);
-                        return;
+                        debug!("found memory mapping starting at {:x} for pid {} while handling munmap", start_address, pid);
+                        let mut object_files = self.object_files.lock().expect("lock");
+                        mapping.mark_as_deleted(&mut object_files);
                     }
                 }
 
                 debug!(
-                    "could not find memory mapping {:x} for {} while handling munmap",
+                    "could not find memory mapping starting at {:x} for pid {} while handling munmap",
                     start_address, pid
                 );
             }
             None => {
-                debug!("could not find {} while handling munmap", pid);
+                debug!("could not find pid {} while handling munmap", pid);
             }
         }
     }
@@ -690,7 +729,6 @@ impl Profiler<'_> {
 
         // Local unwind info state
         let mut mappings = Vec::with_capacity(MAX_MAPPINGS_PER_PROCESS as usize);
-        let mut have_unwind_info = false;
 
         // Get unwind info
         for mapping in self
@@ -753,7 +791,7 @@ impl Profiler<'_> {
             // some loaders. Particularly, Rust statically linked with musl does not work. We must
             // ensure everything works with ASLR enabled loading as well.
             let mut load_address = 0;
-            if object_file_info.main_exec {
+            if mapping.main_exec {
                 if object_file_info.is_dyn {
                     load_address = mapping.load_address;
                 }
@@ -780,11 +818,11 @@ impl Profiler<'_> {
                         executable_id: *executable_id,
                         type_: 0, // normal i think
                     });
-                    debug!("unwind info CACHED for executable");
+                    debug!("unwind info CACHED for executable {:?}", obj_path);
                     continue;
                 }
                 None => {
-                    debug!("unwind info not found for executable");
+                    debug!("unwind info not found for executable {:?}", obj_path);
                 }
             }
 
@@ -847,8 +885,6 @@ impl Profiler<'_> {
                 &found_unwind_info.len(),
                 self.native_unwind_state.build_id_to_executable_id.len(),
             );
-
-            have_unwind_info = !found_unwind_info.is_empty();
 
             let first_pc = found_unwind_info[0].pc;
             let last_pc = found_unwind_info[found_unwind_info.len() - 1].pc;
@@ -992,28 +1028,26 @@ impl Profiler<'_> {
                 .insert(build_id, executable_id as u32);
         } // Added all mappings
 
-        if have_unwind_info {
-            self.native_unwind_state.dirty = true;
+        self.native_unwind_state.dirty = true;
 
-            // Add entry just with the pid to signal processes that we already know about.
-            let key = exec_mappings_key::new(
-                pid.try_into().unwrap(),
-                0x0,
-                32, // pid bits
-            );
-            self.add_bpf_mapping(&key, &mapping_t::default()).unwrap();
+        // Add entry just with the pid to signal processes that we already know about.
+        let key = exec_mappings_key::new(
+            pid.try_into().unwrap(),
+            0x0,
+            32, // pid bits
+        );
+        self.add_bpf_mapping(&key, &mapping_t::default()).unwrap();
 
-            // Add process info
-            for mapping in mappings {
-                for address_range in summarize_address_range(mapping.begin, mapping.end - 1) {
-                    let key = exec_mappings_key::new(
-                        pid.try_into().unwrap(),
-                        address_range.addr,
-                        32 + address_range.prefix_len,
-                    );
+        // Add process info
+        for mapping in mappings {
+            for address_range in summarize_address_range(mapping.begin, mapping.end - 1) {
+                let key = exec_mappings_key::new(
+                    pid.try_into().unwrap(),
+                    address_range.addr,
+                    32 + address_range.prefix_len,
+                );
 
-                    self.add_bpf_mapping(&key, &mapping).unwrap();
-                }
+                self.add_bpf_mapping(&key, &mapping).unwrap();
             }
         }
     }
@@ -1037,7 +1071,7 @@ impl Profiler<'_> {
             return;
         }
 
-        match self.fetch_mapping_info(pid) {
+        match self.add_proc(pid) {
             Ok(()) => {
                 self.add_unwind_info(pid);
             }
@@ -1047,7 +1081,7 @@ impl Profiler<'_> {
         }
     }
 
-    pub fn fetch_mapping_info(&mut self, pid: i32) -> anyhow::Result<()> {
+    pub fn add_proc(&mut self, pid: i32) -> anyhow::Result<()> {
         let proc = procfs::process::Process::new(pid)?;
         let maps = proc.maps()?;
 
@@ -1093,6 +1127,9 @@ impl Profiler<'_> {
                         map.address.0
                     };
 
+                    let mut object_files = object_files_clone.lock().expect("lock object_files");
+                    let main_exec = mappings.is_empty();
+
                     mappings.push(ExecutableMapping {
                         build_id: Some(build_id.clone()),
                         kind: MappingType::FileBacked,
@@ -1101,27 +1138,28 @@ impl Profiler<'_> {
                         offset: map.offset,
                         load_address: load_address(),
                         unwinder,
+                        main_exec,
+                        unmapped: false,
                     });
 
-                    let mut object_files = object_files_clone.lock().expect("lock object_files");
-                    let main_exec = object_files.is_empty();
-
-                    match object_file.elf_load() {
-                        Ok(elf_load) => {
-                            object_files.insert(
-                                build_id,
-                                ObjectFileInfo {
+                    match object_files.entry(build_id) {
+                        Entry::Vacant(entry) => match object_file.elf_load() {
+                            Ok(elf_load) => {
+                                entry.insert(ObjectFileInfo {
                                     path: abs_path,
                                     file,
                                     load_offset: elf_load.offset,
                                     load_vaddr: elf_load.vaddr,
                                     is_dyn: object_file.is_dynamic(),
-                                    main_exec,
-                                },
-                            );
-                        }
-                        Err(e) => {
-                            warn!("elf_load() failed with {:?}", e);
+                                    references: 1,
+                                });
+                            }
+                            Err(e) => {
+                                warn!("elf_load() failed with {:?}", e);
+                            }
+                        },
+                        Entry::Occupied(mut entry) => {
+                            entry.get_mut().references += 1;
                         }
                     }
                 }
@@ -1134,6 +1172,8 @@ impl Profiler<'_> {
                         offset: map.offset,
                         load_address: 0,
                         unwinder: Unwinder::Unknown,
+                        main_exec: false,
+                        unmapped: false,
                     });
                 }
                 procfs::process::MMapPath::Vsyscall
@@ -1148,6 +1188,8 @@ impl Profiler<'_> {
                         offset: map.offset,
                         load_address: 0,
                         unwinder: Unwinder::NativeFramePointers,
+                        main_exec: false,
+                        unmapped: false,
                     });
                 }
                 _ => {}
