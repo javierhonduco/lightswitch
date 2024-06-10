@@ -52,7 +52,7 @@ struct {
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
   __uint(max_entries, 5 * 1000);
-  __type(key, u32);
+  __type(key, u64);
   __type(value, unwind_info_chunks_t);
 } unwind_info_chunks SEC(".maps");
 
@@ -116,9 +116,9 @@ static __always_inline u64 find_offset_for_pc(stack_unwind_table_t *table, u64 p
 // address.
 static __always_inline chunk_info_t*
 find_chunk(mapping_t *mapping, u64 object_relative_pc) {
-  u32 executable_id = mapping->executable_id;
+  u64 executable_id = mapping->executable_id;
 
-  LOG("~about to check chunks, executable_id=%d", executable_id);
+  LOG("~about to check chunks, executable_id=%lld", executable_id);
   // Find the chunk where this unwind table lives.
   // Each chunk maps to exactly one shard.
   unwind_info_chunks_t *chunks =

@@ -1,5 +1,5 @@
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::os::fd::{AsFd, AsRawFd};
@@ -21,7 +21,7 @@ use crate::bpf::profiler_skel::{ProfilerSkel, ProfilerSkelBuilder};
 use crate::bpf::tracers_bindings::*;
 use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
-use crate::object::{BuildId, ObjectFile};
+use crate::object::{BuildId, ExecutableId, ObjectFile};
 use crate::perf_events::setup_perf_event;
 use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
 use crate::util::{get_online_cpus, summarize_address_range};
@@ -72,6 +72,7 @@ pub enum Unwinder {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ExecutableMapping {
+    pub executable_id: ExecutableId,
     // No build id means either JIT or that we could not fetch it. Change this.
     pub build_id: Option<BuildId>,
     pub kind: MappingType,
@@ -86,7 +87,7 @@ pub struct ExecutableMapping {
 }
 
 impl ExecutableMapping {
-    fn mark_as_deleted(&mut self, object_files: &mut HashMap<BuildId, ObjectFileInfo>) {
+    fn mark_as_deleted(&mut self, object_files: &mut HashMap<ExecutableId, ObjectFileInfo>) {
         // Avoid decrementing the reference count logic more than once if called multiple times.
         if self.unmapped {
             return;
@@ -94,11 +95,7 @@ impl ExecutableMapping {
 
         self.unmapped = true;
 
-        let Some(ref build_id) = self.build_id else {
-            return;
-        };
-
-        if let Some(el) = object_files.get_mut(build_id) {
+        if let Some(el) = object_files.get_mut(&self.executable_id) {
             el.references -= 1;
             debug_assert!(
                 el.references >= 0,
@@ -112,7 +109,7 @@ pub struct NativeUnwindState {
     dirty: bool,
     last_persisted: Instant,
     live_shard: Vec<stack_unwind_row_t>,
-    build_id_to_executable_id: HashMap<BuildId, u32>,
+    known_executables: HashSet<ExecutableId>,
     shard_index: u64,
 }
 
@@ -122,7 +119,7 @@ impl Default for NativeUnwindState {
             dirty: false,
             last_persisted: Instant::now() - Duration::from_secs(1_000), // old enough to trigger it the first time
             live_shard: Vec::with_capacity(SHARD_CAPACITY),
-            build_id_to_executable_id: HashMap::new(),
+            known_executables: HashSet::new(),
             shard_index: 0,
         }
     }
@@ -135,7 +132,7 @@ pub struct Profiler<'bpf> {
     tracers: TracersSkel<'bpf>,
     // Profiler state
     procs: Arc<Mutex<HashMap<i32, ProcessInfo>>>,
-    object_files: Arc<Mutex<HashMap<BuildId, ObjectFileInfo>>>,
+    object_files: Arc<Mutex<HashMap<ExecutableId, ObjectFileInfo>>>,
     // Channel for new process events.
     chan_send: Arc<Mutex<mpsc::Sender<Event>>>,
     chan_receive: Arc<Mutex<mpsc::Receiver<Event>>>,
@@ -779,7 +776,7 @@ impl Profiler<'_> {
             let object_files = self.object_files.lock().unwrap();
 
             // We might know about a mapping that failed to open for some reason.
-            let object_file_info = object_files.get(&mapping.build_id.clone().unwrap());
+            let object_file_info = object_files.get(&mapping.executable_id);
             if object_file_info.is_none() {
                 warn!("mapping not found");
                 continue;
@@ -802,20 +799,18 @@ impl Profiler<'_> {
             // Avoid deadlock
             std::mem::drop(object_files);
 
-            let build_id = mapping.build_id.clone().unwrap();
             match self
                 .native_unwind_state
-                .build_id_to_executable_id
-                .get(&build_id)
+                .known_executables
+                .get(&mapping.executable_id)
             {
-                Some(executable_id) => {
-                    // println!("==== in cache");
+                Some(_) => {
                     // == Add mapping
                     mappings.push(mapping_t {
+                        executable_id: mapping.executable_id,
                         load_address,
                         begin: mapping.start_addr,
                         end: mapping.end_addr,
-                        executable_id: *executable_id,
                         type_: 0, // normal i think
                     });
                     debug!("unwind info CACHED for executable {:?}", obj_path);
@@ -833,14 +828,13 @@ impl Profiler<'_> {
                 load_address,
                 begin: mapping.start_addr,
                 end: mapping.end_addr,
-                executable_id: self.native_unwind_state.build_id_to_executable_id.len() as u32,
+                executable_id: mapping.executable_id,
                 type_: 0, // normal i think
             });
 
-            let build_id = mapping.build_id.clone().unwrap();
             // This is not released (see note "deadlock")
             let first_mapping_ = self.object_files.lock().unwrap();
-            let first_mapping = first_mapping_.get(&build_id).unwrap();
+            let first_mapping = first_mapping_.get(&mapping.executable_id).unwrap();
 
             // == Fetch unwind info, so far, this is in mem
             // todo, pass file handle
@@ -883,7 +877,7 @@ impl Profiler<'_> {
                 "======== Unwind rows for executable {}: {} with id {}",
                 obj_path.display(),
                 &found_unwind_info.len(),
-                self.native_unwind_state.build_id_to_executable_id.len(),
+                self.native_unwind_state.known_executables.len(),
             );
 
             let first_pc = found_unwind_info[0].pc;
@@ -1015,17 +1009,15 @@ impl Profiler<'_> {
                 .maps()
                 .unwind_info_chunks()
                 .update(
-                    &(self.native_unwind_state.build_id_to_executable_id.len() as u32)
-                        .to_ne_bytes(),
+                    &mapping.executable_id.to_ne_bytes(),
                     unsafe { plain::as_bytes(&all_chunks) },
                     MapFlags::ANY,
                 )
                 .unwrap();
 
-            let executable_id = self.native_unwind_state.build_id_to_executable_id.len();
             self.native_unwind_state
-                .build_id_to_executable_id
-                .insert(build_id, executable_id as u32);
+                .known_executables
+                .insert(mapping.executable_id);
         } // Added all mappings
 
         self.native_unwind_state.dirty = true;
@@ -1098,8 +1090,8 @@ impl Profiler<'_> {
                     abs_path.push("/root");
                     abs_path.push(path);
 
-                    let file = fs::File::open(path)?;
-                    let object_file = ObjectFile::new(path);
+                    let file = fs::File::open(&abs_path)?;
+                    let object_file = ObjectFile::new(&abs_path);
                     if object_file.is_err() {
                         warn!("object_file failed with {:?}", object_file);
                         continue;
@@ -1118,6 +1110,11 @@ impl Profiler<'_> {
                         continue;
                     };
 
+                    let Ok(executable_id) = object_file.id() else {
+                        debug!("could not get id for object file: {:?}", abs_path);
+                        continue;
+                    };
+
                     let load_address = || {
                         for map2 in maps.iter() {
                             if map2.pathname == map.pathname {
@@ -1131,6 +1128,7 @@ impl Profiler<'_> {
                     let main_exec = mappings.is_empty();
 
                     mappings.push(ExecutableMapping {
+                        executable_id,
                         build_id: Some(build_id.clone()),
                         kind: MappingType::FileBacked,
                         start_addr: map.address.0,
@@ -1142,7 +1140,7 @@ impl Profiler<'_> {
                         unmapped: false,
                     });
 
-                    match object_files.entry(build_id) {
+                    match object_files.entry(executable_id) {
                         Entry::Vacant(entry) => match object_file.elf_load() {
                             Ok(elf_load) => {
                                 entry.insert(ObjectFileInfo {
@@ -1165,6 +1163,7 @@ impl Profiler<'_> {
                 }
                 procfs::process::MMapPath::Anonymous => {
                     mappings.push(ExecutableMapping {
+                        executable_id: 0, // Placeholder for JIT.
                         build_id: None,
                         kind: MappingType::Anonymous,
                         start_addr: map.address.0,
@@ -1181,6 +1180,7 @@ impl Profiler<'_> {
                 | procfs::process::MMapPath::Vsys(_)
                 | procfs::process::MMapPath::Vvar => {
                     mappings.push(ExecutableMapping {
+                        executable_id: 0, // Placeholder for vDSO.
                         build_id: None,
                         kind: MappingType::Vdso,
                         start_addr: map.address.0,

@@ -125,11 +125,11 @@ typedef struct {
 
 // Represents an executable mapping.
 typedef struct {
-  u32 executable_id;
-  u32 type;
+  u64 executable_id;
   u64 load_address;
   u64 begin;
   u64 end;
+  u32 type;
 } mapping_t;
 
 // Key for the longest prefix matching. This is defined
