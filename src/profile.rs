@@ -2,11 +2,12 @@ use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
 use tracing::{debug, error, span, Level};
+use proto::profile::LabelStringOrNumber;
+use proto::profile::Pprof;
 
 use crate::bpf::profiler_bindings::native_stack_t;
 use crate::ksym::KsymIter;
 use crate::object::ExecutableId;
-use crate::profiler::ExecutableMapping;
 use crate::profiler::Frame;
 use crate::profiler::FrameAddress;
 use crate::profiler::ObjectFileInfo;
@@ -16,7 +17,101 @@ use crate::profiler::SymbolizedAggregatedProfile;
 use crate::profiler::SymbolizedAggregatedSample;
 use crate::usym::symbolize_native_stack_blaze;
 
-/// Converts a symbolized aggregated profiles to their folded representation that most flamegraph renderers use.
+pub fn to_proto(
+    profile: SymbolizedAggregatedProfile,
+    procs: &HashMap<i32, ProcessInfo>,
+    objs: &HashMap<ExecutableId, ObjectFileInfo>,
+) -> Pprof {
+    let mut pprof = Pprof::new();
+    // already symbolized
+    // let addresses_per_sample: HashMap<PathBuf, HashMap<u64, Vec<Frame>>> = fetch_symbols_for_profile(&profile, procs, objs);
+    for sample in profile {
+        let pid = sample.pid;
+        let ustack = sample.ustack;
+        //let _kstack = sample.kstack;
+
+        let mut location_ids = Vec::new();
+        for frame in ustack {
+            let addr = frame.virtual_address;
+
+            let Some(info) = procs.get(&pid) else {
+                //r.push("<could not find process>".to_string());
+                continue;
+            };
+
+            let Some(mapping) = info.mappings.find_mapping(addr) else {
+
+                //r.push("<could not find mapping>".to_string());
+                continue;
+            };
+
+            match objs.get(&mapping.executable_id) {
+                Some(obj) => {
+                    let normalized_addr = addr - mapping.start_addr + mapping.offset
+                        - obj.load_offset
+                        + obj.load_vaddr;
+
+                    let build_id = match mapping.build_id {
+                        Some(build_id) => {
+                            format!("{}", build_id)
+                        }
+                        None => "no-build-id".into(),
+                    };
+                    let mapping_id: u64 = pprof.add_mapping(
+                        mapping.executable_id,
+                        mapping.start_addr,
+                        mapping.end_addr,
+                        mapping.offset,
+                        obj.path.to_str().expect("convert path to str"),
+                        &build_id,
+                    );
+
+            /*         let failed_to_fetch_symbol = vec![Frame::with_error(
+                        "<failed to fetch symbol for addr>".to_string(),
+                    )];
+                    let failed_to_symbolize =
+                        vec![Frame::with_error("<failed to symbolize>".to_string())];
+ */
+                    /* if not symbolized
+
+                    let func_names = match addresses_per_sample.get(&obj.path) {
+                        Some(value) => match value.get(&normalized_addr) {
+                            Some(v) => v,
+                            None => &failed_to_fetch_symbol,
+                        },
+                        None => &failed_to_symbolize,
+                    }; */
+
+                    let (line, _) = pprof.add_line(&frame.name);
+                    let location =
+                        pprof.add_location(normalized_addr, mapping_id, vec![line.clone()]);
+                    location_ids.push(location);
+                }
+                None => {
+                    debug!("build id not found");
+                }
+            }
+        }
+
+        let labels = vec![
+            pprof.new_label(
+                "pid",
+                LabelStringOrNumber::Number(pid.into(), "task-tgid".into()),
+            ),
+            pprof.new_label(
+                "pid",
+                LabelStringOrNumber::Number(pid.into(), "task-id".into()),
+            ),
+            pprof.new_label("comm", LabelStringOrNumber::String("fake-comm".into())),
+        ];
+
+        pprof.add_sample(location_ids, sample.count as i64, labels);
+    }
+
+    pprof
+}
+
+/// Converts a collection of symbolized aggregated profiles to their folded representation that most flamegraph renderers use.
 /// Folded stacks look like this:
 ///
 /// > base_frame;other_frame;top_frame 100
@@ -182,17 +277,7 @@ pub fn symbolize_profile(
     r
 }
 
-fn find_mapping(mappings: &[ExecutableMapping], addr: u64) -> Option<ExecutableMapping> {
-    for mapping in mappings {
-        if mapping.start_addr <= addr && addr <= mapping.end_addr {
-            return Some(mapping.clone());
-        }
-    }
-
-    None
-}
-
-fn fetch_symbols_for_profile(
+pub fn fetch_symbols_for_profile(
     profile: &RawAggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
@@ -214,7 +299,7 @@ fn fetch_symbols_for_profile(
                 continue;
             }
 
-            let Some(mapping) = find_mapping(&info.mappings, addr) else {
+            let Some(mapping) = info.mappings.find_mapping(addr) else {
                 continue; //return Err(anyhow!("could not find mapping"));
             };
 
@@ -279,7 +364,7 @@ fn symbolize_native_stack(
             continue;
         };
 
-        let Some(mapping) = find_mapping(&info.mappings, addr) else {
+        let Some(mapping) = info.mappings.find_mapping(addr) else {
             r.push(Frame::with_error("<could not find mapping>".to_string()));
             continue;
         };
