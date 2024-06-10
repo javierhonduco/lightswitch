@@ -41,8 +41,14 @@ SEC("tracepoint/sched/sched_process_exit")
 int tracer_process_exit(void *ctx) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     int per_process_id = pid_tgid >> 32;
+    int per_thread_id = pid_tgid;
 
     if (!process_is_known(per_process_id)) {
+        return 0;
+    }
+
+    // Only report main thread terminating.
+    if (per_process_id != per_thread_id) {
         return 0;
     }
 
@@ -56,6 +62,7 @@ int tracer_process_exit(void *ctx) {
         LOG("[error] failed to send process exit tracer event");
     }
 
+    LOG("[debug] sent process exit tracer event");
     return 0;
 }
 

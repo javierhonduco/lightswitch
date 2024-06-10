@@ -158,7 +158,7 @@ static __always_inline void event_new_process(struct bpf_perf_event_data *ctx, i
 
   bool *is_rate_limited = bpf_map_lookup_elem(&rate_limits, &event);
   if (is_rate_limited != NULL && *is_rate_limited) {
-    LOG("event_new_process was rate limited");
+    LOG("[debug] event_new_process was rate limited");
     return;
   }
 
@@ -166,6 +166,7 @@ static __always_inline void event_new_process(struct bpf_perf_event_data *ctx, i
     bump_unwind_error_sending_new_process_event();
   }
 
+  LOG("[debug] event_new_process event sent");
   bool rate_limited = true;
   bpf_map_update_elem(&rate_limits, &event, &rate_limited, BPF_ANY);
 }
