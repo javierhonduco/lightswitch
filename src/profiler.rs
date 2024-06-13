@@ -166,40 +166,37 @@ const PERF_BUFFER_BYTES: usize = 512 * 1024;
 #[derive(Debug)]
 pub struct RawAggregatedSample {
     pub pid: i32,
+    pub tid: i32,
     pub ustack: Option<native_stack_t>,
     pub kstack: Option<native_stack_t>,
     pub count: u64,
 }
 
 impl fmt::Display for RawAggregatedSample {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         let format_native_stack = |native_stack: Option<native_stack_t>| -> String {
-            let mut acc: Vec<String> = vec![];
+            let mut res: Vec<String> = Vec::new();
             match native_stack {
-                None => acc.push("NONE".to_string()),
                 Some(native_stack) => {
-                    acc.push("[".to_string());
                     for (i, addr) in native_stack.addresses.into_iter().enumerate() {
                         if native_stack.len <= i.try_into().unwrap() {
                             break;
                         }
-                        // The 18 includes the '0x' prefix for hex addresses
-                        let cvtd = format!("{:3}: {:#018x},", i, addr);
-                        acc.push(cvtd);
+                        res.push(format!("{:3}: {:#018x}", i, addr));
                     }
-                    acc.push("]".to_string());
                 }
+                None => res.push("NONE".into()),
             };
-            acc.join("\n")
+            format!("[{}]", res.join(","))
         };
-        let ustack_rep = format_native_stack(self.ustack);
-        let kstack_rep = format_native_stack(self.kstack);
-        let final_rep = write!(
-            f,
-            "RawAggregatedSample:\npid: {}\nustack: {}\nkstack: {}\ncount: {}",
-            self.pid, ustack_rep, kstack_rep, self.count
-        );
-        final_rep
+
+        fmt.debug_struct("RawAggregatedSample")
+            .field("pid", &self.pid)
+            .field("tid", &self.tid)
+            .field("ustack", &format_native_stack(self.ustack))
+            .field("kstack", &format_native_stack(self.kstack))
+            .field("count", &self.count)
+            .finish()
     }
 }
 
@@ -207,35 +204,34 @@ impl fmt::Display for RawAggregatedSample {
 #[allow(dead_code)]
 pub struct SymbolizedAggregatedSample {
     pub pid: i32,
+    pub tid: i32,
     pub ustack: Vec<String>,
     pub kstack: Vec<String>,
     pub count: u64,
 }
 
 impl fmt::Display for SymbolizedAggregatedSample {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         let format_symbolized_stack = |symbolized_stack: &Vec<String>| -> String {
-            let mut acc: Vec<String> = vec![];
+            let mut res = vec![];
             if symbolized_stack.is_empty() {
-                acc.push("NONE".to_string());
+                res.push("NONE".to_string());
             } else {
-                acc.push("[".to_string());
                 for (i, symbol) in symbolized_stack.iter().enumerate() {
-                    let cvtd = format!("{:3}: {},", i, symbol);
-                    acc.push(cvtd);
+                    res.push(format!("{:3}: {}", i, symbol));
                 }
-                acc.push("]".to_string());
             }
-            acc.join("\n")
+            res.join("\n");
+            format!("[{}]", res.join(","))
         };
-        let ustack_rep = format_symbolized_stack(&self.ustack);
-        let kstack_rep = format_symbolized_stack(&self.kstack);
-        let final_rep = write!(
-            f,
-            "SymbolizedAggregatedSample:\npid: {}\nustack: {}\nkstack: {}\ncount: {}",
-            self.pid, ustack_rep, kstack_rep, self.count
-        );
-        final_rep
+
+        fmt.debug_struct("SymbolizedAggregatedSample")
+            .field("pid", &self.pid)
+            .field("tid", &self.tid)
+            .field("ustack", &format_symbolized_stack(&self.ustack))
+            .field("kstack", &format_symbolized_stack(&self.kstack))
+            .field("count", &self.count)
+            .finish()
     }
 }
 
@@ -656,6 +652,7 @@ impl Profiler<'_> {
 
                     let raw_sample = RawAggregatedSample {
                         pid: key.pid,
+                        tid: key.task_id,
                         ustack: result_ustack,
                         kstack: result_kstack,
                         count: *count,
@@ -1270,7 +1267,6 @@ mod tests {
 
     #[test]
     fn display_raw_aggregated_sample() {
-        // let addrs = [0; MAX_STACK_SIZE];
         let addrs = [0; 127];
 
         // User stack but no kernel stack
@@ -1285,25 +1281,27 @@ mod tests {
 
         let sample = RawAggregatedSample {
             pid: 1234,
+            tid: 1235,
             ustack: ustack_data,
             kstack: None,
             count: 1,
         };
         insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
         ---
-        "RawAggregatedSample:\npid: 1234\nustack: [\n  0: 0x000000000000ffff,\n  1: 0x00000000deadbeef,\n]\nkstack: NONE\ncount: 1"
+        "RawAggregatedSample { pid: 1234, tid: 1235, ustack: \"[  0: 0x000000000000ffff,  1: 0x00000000deadbeef]\", kstack: \"[NONE]\", count: 1 }"
         "###);
 
         // No user or kernel stacks
         let sample = RawAggregatedSample {
             pid: 1234,
+            tid: 1235,
             ustack: None,
             kstack: None,
             count: 1,
         };
         insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
         ---
-        "RawAggregatedSample:\npid: 1234\nustack: NONE\nkstack: NONE\ncount: 1"
+        "RawAggregatedSample { pid: 1234, tid: 1235, ustack: \"[NONE]\", kstack: \"[NONE]\", count: 1 }"
         "###);
 
         // user and kernel stacks
@@ -1348,13 +1346,14 @@ mod tests {
 
         let sample = RawAggregatedSample {
             pid: 128821,
+            tid: 128822,
             ustack: ustack_data,
             kstack: kstack_data,
             count: 42,
         };
         insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
         ---
-        "RawAggregatedSample:\npid: 128821\nustack: [\n  0: 0x00007f7c91c82314,\n  1: 0x00007f7c91c4ff93,\n  2: 0x00007f7c91c5d8ae,\n  3: 0x00007f7c91c4d2c3,\n  4: 0x00007f7c91c45400,\n  5: 0x00007f7c91c10933,\n  6: 0x00007f7c91c38153,\n  7: 0x00007f7c91c331d9,\n  8: 0x00007f7c91dfa501,\n  9: 0x00007f7c91c16b05,\n 10: 0x00007f7c91e22038,\n 11: 0x00007f7c91e23fc6,\n]\nkstack: [\n  0: 0xffffffff8749ae51,\n  1: 0xffffffffc04c4804,\n  2: 0xffffffff874ddfd0,\n  3: 0xffffffff874e0843,\n  4: 0xffffffff874e0b8a,\n  5: 0xffffffff8727f600,\n  6: 0xffffffff8727f8a7,\n  7: 0xffffffff87e0116e,\n]\ncount: 42"
+        "RawAggregatedSample { pid: 128821, tid: 128822, ustack: \"[  0: 0x00007f7c91c82314,  1: 0x00007f7c91c4ff93,  2: 0x00007f7c91c5d8ae,  3: 0x00007f7c91c4d2c3,  4: 0x00007f7c91c45400,  5: 0x00007f7c91c10933,  6: 0x00007f7c91c38153,  7: 0x00007f7c91c331d9,  8: 0x00007f7c91dfa501,  9: 0x00007f7c91c16b05, 10: 0x00007f7c91e22038, 11: 0x00007f7c91e23fc6]\", kstack: \"[  0: 0xffffffff8749ae51,  1: 0xffffffffc04c4804,  2: 0xffffffff874ddfd0,  3: 0xffffffff874e0843,  4: 0xffffffff874e0b8a,  5: 0xffffffff8727f600,  6: 0xffffffff8727f8a7,  7: 0xffffffff87e0116e]\", count: 42 }"
         "###);
     }
 
@@ -1371,26 +1370,28 @@ mod tests {
 
         let sample = SymbolizedAggregatedSample {
             pid: 1234567,
+            tid: 1234568,
             ustack: ustack_data,
             kstack: kstack_data.clone(),
             count: 128,
         };
         insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
         ---
-        "SymbolizedAggregatedSample:\npid: 1234567\nustack: [\n  0: ufunc3,\n  1: ufunc2,\n  2: ufunc1,\n]\nkstack: [\n  0: kfunc2,\n  1: kfunc1,\n]\ncount: 128"
+        "SymbolizedAggregatedSample { pid: 1234567, tid: 1234568, ustack: \"[  0: ufunc3,  1: ufunc2,  2: ufunc1]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 128 }"
         "###);
 
         let ustack_data: Vec<String> = vec![];
 
         let sample = SymbolizedAggregatedSample {
             pid: 98765,
+            tid: 98766,
             ustack: ustack_data,
             kstack: kstack_data.clone(),
             count: 1001,
         };
         insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
         ---
-        "SymbolizedAggregatedSample:\npid: 98765\nustack: NONE\nkstack: [\n  0: kfunc2,\n  1: kfunc1,\n]\ncount: 1001"
+        "SymbolizedAggregatedSample { pid: 98765, tid: 98766, ustack: \"[NONE]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 1001 }"
         "###);
     }
 }
