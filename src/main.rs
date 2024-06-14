@@ -223,6 +223,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .clone()
                 .into_iter()
                 .rev()
+                .map(|e| e.to_string())
                 .collect::<Vec<String>>();
             let ustack = ustack.join(";");
             let kstack = sample

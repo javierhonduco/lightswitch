@@ -8,9 +8,11 @@ use blazesym::symbolize::Sym;
 use blazesym::symbolize::Symbolized;
 use blazesym::symbolize::Symbolizer;
 
+use crate::profiler::Frame;
+
 const ADDR2LINE_BIN: &str = "/usr/bin/addr2line";
 
-pub fn symbolize_native_stack_blaze(addrs: Vec<u64>, object_path: &PathBuf) -> Vec<Vec<String>> {
+pub fn symbolize_native_stack_blaze(addrs: Vec<u64>, object_path: &PathBuf) -> Vec<Vec<Frame>> {
     let mut res = Vec::new();
 
     let src = Source::Elf(Elf::new(object_path));
@@ -20,7 +22,10 @@ pub fn symbolize_native_stack_blaze(addrs: Vec<u64>, object_path: &PathBuf) -> V
         Err(e) => {
             res.resize(
                 addrs.len(),
-                vec![format!("<blazesym: failed to symbolize due to {}", e)],
+                vec![Frame::with_error(format!(
+                    "<blazesym: failed to symbolize due to {}",
+                    e
+                ))],
             );
             return res;
         }
@@ -32,20 +37,32 @@ pub fn symbolize_native_stack_blaze(addrs: Vec<u64>, object_path: &PathBuf) -> V
         match symbol {
             Symbolized::Sym(Sym {
                 name,
-                addr: _,
+                addr,
                 offset: _,
                 code_info: _,
                 inlined,
                 ..
             }) => {
-                symbols.push(name.to_string());
+                symbols.push(Frame {
+                    address: addr,
+                    name: name.to_string(),
+                    inline: false,
+                });
 
                 for frame in inlined.iter() {
-                    symbols.push(format!("{} (inlined)", frame.name));
+                    symbols.push(Frame {
+                        address: addr,
+                        name: frame.name.to_string(),
+                        inline: true,
+                    });
                 }
             }
             Symbolized::Unknown(r) => {
-                symbols.push(format!("<blazesym: unknown symbol due to {}>", r));
+                symbols.push(Frame {
+                    address: 0x1111,
+                    name: format!("<blazesym: unknown symbol due to {}>", r),
+                    inline: false,
+                });
             }
         }
 
