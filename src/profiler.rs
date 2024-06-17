@@ -52,7 +52,6 @@ pub struct ProcessInfo {
     pub mappings: Vec<ExecutableMapping>,
 }
 
-#[allow(dead_code)]
 pub struct ObjectFileInfo {
     pub file: fs::File,
     pub path: PathBuf,
@@ -70,7 +69,6 @@ pub enum Unwinder {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ExecutableMapping {
     pub executable_id: ExecutableId,
     // No build id means either JIT or that we could not fetch it. Change this.
@@ -162,7 +160,6 @@ const MAX_CHUNKS: usize = MAX_UNWIND_TABLE_CHUNKS as usize;
 // TODO: should make this configurable via a command line argument in future
 const PERF_BUFFER_BYTES: usize = 512 * 1024;
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct RawAggregatedSample {
     pub pid: i32,
@@ -200,19 +197,42 @@ impl fmt::Display for RawAggregatedSample {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Frame {
+    pub address: u64,
+    pub name: String,
+    pub inline: bool,
+}
+
+impl fmt::Display for Frame {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        let inline_str = if self.inline { "[inlined] " } else { "" };
+        write!(fmt, "{}{}", inline_str, self.name)
+    }
+}
+
+impl Frame {
+    pub fn with_error(msg: String) -> Self {
+        Self {
+            address: 0xBAD,
+            name: msg,
+            inline: false,
+        }
+    }
+}
+
 #[derive(Default, Debug)]
-#[allow(dead_code)]
 pub struct SymbolizedAggregatedSample {
     pub pid: i32,
     pub tid: i32,
-    pub ustack: Vec<String>,
-    pub kstack: Vec<String>,
+    pub ustack: Vec<Frame>,
+    pub kstack: Vec<Frame>,
     pub count: u64,
 }
 
 impl fmt::Display for SymbolizedAggregatedSample {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        let format_symbolized_stack = |symbolized_stack: &Vec<String>| -> String {
+        let format_symbolized_stack = |symbolized_stack: &Vec<Frame>| -> String {
             let mut res = vec![];
             if symbolized_stack.is_empty() {
                 res.push("NONE".to_string());
@@ -1361,11 +1381,19 @@ mod tests {
     fn display_symbolized_aggregated_sample() {
         let ustack_data: Vec<_> = ["ufunc3", "ufunc2", "ufunc1"]
             .into_iter()
-            .map(|s| s.to_string())
+            .map(|s| Frame {
+                address: 0x0,
+                name: s.to_string(),
+                inline: false,
+            })
             .collect();
         let kstack_data: Vec<_> = ["kfunc2", "kfunc1"]
             .into_iter()
-            .map(|s| s.to_string())
+            .map(|s| Frame {
+                address: 0x0,
+                name: s.to_string(),
+                inline: false,
+            })
             .collect();
 
         let sample = SymbolizedAggregatedSample {
@@ -1380,7 +1408,7 @@ mod tests {
         "SymbolizedAggregatedSample { pid: 1234567, tid: 1234568, ustack: \"[  0: ufunc3,  1: ufunc2,  2: ufunc1]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 128 }"
         "###);
 
-        let ustack_data: Vec<String> = vec![];
+        let ustack_data = vec![];
 
         let sample = SymbolizedAggregatedSample {
             pid: 98765,

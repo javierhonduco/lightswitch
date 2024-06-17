@@ -6,6 +6,7 @@ use crate::bpf::profiler_bindings::native_stack_t;
 use crate::ksym::KsymIter;
 use crate::object::ExecutableId;
 use crate::profiler::ExecutableMapping;
+use crate::profiler::Frame;
 use crate::profiler::ObjectFileInfo;
 use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
@@ -22,7 +23,7 @@ pub fn symbolize_profile(
     let mut r = SymbolizedAggregatedProfile::new();
     let addresses_per_sample = fetch_symbols_for_profile(profile, procs, objs);
 
-    let ksyms: Vec<crate::ksym::Ksym> = KsymIter::from_kallsyms().collect();
+    let ksyms = KsymIter::from_kallsyms().collect::<Vec<_>>();
 
     for sample in profile {
         debug!("--- raw sample:\n{}", sample);
@@ -58,7 +59,11 @@ pub fn symbolize_profile(
                         }
                     }
                 };
-                symbolized_sample.kstack.push(le_symbol.symbol_name);
+                symbolized_sample.kstack.push(Frame {
+                    name: le_symbol.symbol_name,
+                    address: addr,
+                    inline: false,
+                });
             }
         };
         r.push(symbolized_sample);
@@ -81,8 +86,8 @@ fn fetch_symbols_for_profile(
     profile: &RawAggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
-) -> HashMap<PathBuf, HashMap<u64, Vec<String>>> {
-    let mut addresses_per_sample: HashMap<PathBuf, HashMap<u64, Vec<String>>> = HashMap::new();
+) -> HashMap<PathBuf, HashMap<u64, Vec<Frame>>> {
+    let mut addresses_per_sample: HashMap<PathBuf, HashMap<u64, Vec<Frame>>> = HashMap::new();
 
     for sample in profile {
         let Some(native_stack) = sample.ustack else {
@@ -110,10 +115,10 @@ fn fetch_symbols_for_profile(
                         - obj.load_offset
                         + obj.load_vaddr;
 
-                    let key = obj.path.clone();
-                    let addrs = addresses_per_sample.entry(key).or_default();
-                    addrs.insert(normalized_addr, vec!["<default>".to_string()]);
-                    // <- default value is a bit janky
+                    addresses_per_sample
+                        .entry(obj.path.clone())
+                        .or_default()
+                        .insert(normalized_addr, vec![]);
                 }
                 None => {
                     error!("executable with id {} not found", mapping.executable_id);
@@ -135,12 +140,12 @@ fn fetch_symbols_for_profile(
 }
 
 fn symbolize_native_stack(
-    addresses_per_sample: &HashMap<PathBuf, HashMap<u64, Vec<String>>>,
+    addresses_per_sample: &HashMap<PathBuf, HashMap<u64, Vec<Frame>>>,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
     pid: i32,
     native_stack: &native_stack_t,
-) -> Vec<String> {
+) -> Vec<Frame> {
     let mut r = Vec::new();
 
     for (i, addr) in native_stack.addresses.into_iter().enumerate() {
@@ -149,25 +154,28 @@ fn symbolize_native_stack(
         }
 
         let Some(info) = procs.get(&pid) else {
-            r.push("<could not find process>".to_string());
+            r.push(Frame::with_error("<could not find process>".to_string()));
             continue;
         };
 
         let Some(mapping) = find_mapping(&info.mappings, addr) else {
-            r.push("<could not find mapping>".to_string());
+            r.push(Frame::with_error("<could not find mapping>".to_string()));
             continue;
         };
 
         // finally
         match objs.get(&mapping.executable_id) {
             Some(obj) => {
-                let failed_to_fetch_symbol = vec!["<failed to fetch symbol for addr>".to_string()];
-                let failed_to_symbolize = vec!["<failed to symbolize>".to_string()];
+                let failed_to_fetch_symbol = vec![Frame::with_error(
+                    "<failed to fetch symbol for addr>".to_string(),
+                )];
+                let failed_to_symbolize =
+                    vec![Frame::with_error("<failed to symbolize>".to_string())];
 
                 let normalized_addr =
                     addr - mapping.start_addr + mapping.offset - obj.load_offset + obj.load_vaddr;
 
-                let func_names = match addresses_per_sample.get(&obj.path) {
+                let frames = match addresses_per_sample.get(&obj.path) {
                     Some(value) => match value.get(&normalized_addr) {
                         Some(v) => v,
                         None => &failed_to_fetch_symbol,
@@ -175,12 +183,12 @@ fn symbolize_native_stack(
                     None => &failed_to_symbolize,
                 };
 
-                for func_name in func_names {
-                    r.push(func_name.clone());
+                for frame in frames {
+                    r.push(frame.clone());
                 }
             }
             None => {
-                debug!("build id not found");
+                debug!("executable id not found");
             }
         }
     }
