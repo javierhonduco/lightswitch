@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::path::PathBuf;
 use tracing::{debug, error, span, Level};
 
@@ -13,6 +14,115 @@ use crate::profiler::RawAggregatedProfile;
 use crate::profiler::SymbolizedAggregatedProfile;
 use crate::profiler::SymbolizedAggregatedSample;
 use crate::usym::symbolize_native_stack_blaze;
+
+/// Converts a collection of symbolized aggregated profiles to their folded representation that most flamegraph renderers use.
+/// Folded stacks look like this:
+///
+/// > base_frame;other_frame;top_frame 100
+/// > another_base_frame;other_frame;top_frame 300
+///
+/// The frame names are separated by semicolons and the count is at the end separated with a space. We insert some synthetic
+/// frames to quickly identify the thread and process names and other pieces of metadata.
+pub fn fold_profiles(profiles: Vec<SymbolizedAggregatedProfile>) -> String {
+    let mut folded = String::new();
+
+    for profile in profiles {
+        for sample in profile {
+            let ustack = sample
+                .ustack
+                .clone()
+                .into_iter()
+                .rev()
+                .map(|e| e.to_string())
+                .collect::<Vec<String>>();
+            let ustack = ustack.join(";");
+            let kstack = sample
+                .kstack
+                .clone()
+                .into_iter()
+                .rev()
+                .map(|e| format!("kernel: {}", e))
+                .collect::<Vec<String>>();
+            let kstack = kstack.join(";");
+            let count: String = sample.count.to_string();
+
+            // Getting the meatadata for the stack. This will be abstracted in the future in a common module.
+            let (process_name, thread_name) = match procfs::process::Process::new(sample.pid) {
+                // We successfully looked up the PID in procfs (we don't yet
+                // know if it's a PID/PGID/main thread or a TID/non-main thread)
+                Ok(p) => match p.stat() {
+                    // Successfully got the pid/tid stat info
+                    Ok(stat) => {
+                        // Differentiate between PID/PGID/main thread or TID/non-main thread
+                        if stat.pid == stat.pgrp {
+                            // NOTE:
+                            // This is the main thread for the PID/PGID
+                            // If stat.pid() == stat.pgrp() for this process,
+                            // this is a stack for the main thread
+                            // of the pid, and stat.comm is the name of the
+                            // process binary file, so use:
+                            // process_name = stat.comm, and thread_name = "main_thread"
+                            (stat.comm, "main_thread".to_string())
+                        } else {
+                            // NOTE:
+                            // This is a non-main thread (TID) of a PID, so we
+                            // have to look up the actual PID/PGID to get the
+                            // process binary name
+                            // As in, stat.comm is the name of the thread, and
+                            // you have to look up the process binary name, so
+                            // use:
+                            // process_name = <derive from stat.pgrp>, and thread_name = stat.comm
+                            //
+                            let process_name = match procfs::process::Process::new(stat.pgrp) {
+                                // We successfully looked up the PID/PGID of the TID in procfs
+                                Ok(p) => match p.stat() {
+                                    // We successfully looked up the PID binary name from stat
+                                    Ok(stat2) => stat2.comm,
+                                    // We were unable to get the PID's binary name from stat
+                                    Err(_) => "<could not fetch process name>".to_string(),
+                                },
+                                // We failed to look up the PID/PGID of the TID in procfs
+                                Err(_) => "<could not fetch process name>".to_string(),
+                            };
+                            (process_name, stat.comm)
+                        }
+                    }
+                    // Was unable to lookup the PID binary or thread name from stat
+                    Err(_) => (
+                        "<could not fetch process name>".to_string(),
+                        "<could not fetch thread name>".to_string(),
+                    ),
+                },
+                // Completely failed to look up the PID/TID in procfs
+                Err(_) => (
+                    "<could not fetch process name>".to_string(),
+                    "<could not fetch thread name>".to_string(),
+                ),
+            };
+
+            writeln!(
+                folded,
+                "{};{}{}{} {}",
+                process_name,
+                thread_name,
+                if ustack.trim().is_empty() {
+                    "".to_string()
+                } else {
+                    format!(";{}", ustack)
+                },
+                if kstack.trim().is_empty() {
+                    "".to_string()
+                } else {
+                    format!(";{}", kstack)
+                },
+                count
+            )
+            .unwrap();
+        }
+    }
+
+    folded
+}
 
 pub fn symbolize_profile(
     profile: &RawAggregatedProfile,
