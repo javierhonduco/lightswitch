@@ -3,6 +3,11 @@ name = "lightswitch"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+members = [
+    "lightswitch-proto",
+]
+
 [dependencies]
 gimli = "0.30.0"
 object = "0.36.0"
@@ -27,12 +32,16 @@ chrono = "0.4.38"
 inferno = "0.11.19"
 primal = "0.3.3"
 nix = { version = "0.29.0", features = ["user"] }
+prost = "0.12" # Needed to encode protocol buffers to bytes.
+reqwest = { version = "0.12", features = ["blocking"] }
+lightswitch-proto = { path = "./lightswitch-proto"}
 
 [dev-dependencies]
 assert_cmd = { version = "2.0.14" }
 insta = { version = "1.39.0", features = ["yaml"] }
 rstest = "0.21.0"
 tempdir = "0.3.7"
+rand = "0.8.5"
 
 [build-dependencies]
 bindgen = "0.69.4"
