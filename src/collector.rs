@@ -3,11 +3,9 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, span, Level};
 
 use crate::object::ExecutableId;
-use crate::profile::symbolize_profile;
-use crate::profiler::ObjectFileInfo;
 use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
-use crate::profiler::SymbolizedAggregatedProfile;
+use crate::profiler::{ObjectFileInfo, RawAggregatedSample};
 
 pub struct Collector {
     profiles: Vec<RawAggregatedProfile>,
@@ -53,14 +51,35 @@ impl Collector {
         }
     }
 
-    pub fn finish(&self) -> Vec<SymbolizedAggregatedProfile> {
+    pub fn finish(
+        &self,
+    ) -> (
+        RawAggregatedProfile,
+        &HashMap<i32, ProcessInfo>,
+        &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
         let _span: span::EnteredSpan = span!(Level::DEBUG, "symbolize_profiles").entered();
 
-        debug!("Collector::finish {}", self.profiles.len());
-        let mut r = Vec::new();
+        let mut samples_count = HashMap::new();
         for profile in &self.profiles {
-            r.push(symbolize_profile(profile, &self.procs, &self.objs));
+            for sample in profile {
+                let sample_without_count = RawAggregatedSample {
+                    count: 0,
+                    ..*sample
+                };
+                *samples_count.entry(sample_without_count).or_insert(0) += sample.count
+            }
         }
-        r
+
+        debug!("found {} unique samples", samples_count.len());
+        let profile = samples_count
+            .iter()
+            .map(|(sample, count)| RawAggregatedSample {
+                count: *count,
+                ..*sample
+            })
+            .collect();
+
+        (profile, &self.procs, &self.objs)
     }
 }
