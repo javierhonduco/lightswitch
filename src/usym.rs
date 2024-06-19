@@ -7,21 +7,32 @@ use blazesym::symbolize::Source;
 use blazesym::symbolize::Sym;
 use blazesym::symbolize::Symbolized;
 use blazesym::symbolize::Symbolizer;
+use tracing::error;
 
 use crate::profiler::Frame;
+use crate::profiler::FrameAddress;
 
 const ADDR2LINE_BIN: &str = "/usr/bin/addr2line";
 
-pub fn symbolize_native_stack_blaze(addrs: Vec<u64>, object_path: &PathBuf) -> Vec<Vec<Frame>> {
+pub fn symbolize_native_stack_blaze(
+    address_pairs: Vec<FrameAddress>,
+    object_path: &PathBuf,
+) -> Vec<Vec<Frame>> {
+    let virtual_addresses = address_pairs.iter().map(|e| e.virtual_address);
+    let offsets = address_pairs
+        .iter()
+        .map(|e| e.file_offset)
+        .collect::<Vec<_>>();
+
     let mut res = Vec::new();
 
     let src = Source::Elf(Elf::new(object_path));
     let symbolizer = Symbolizer::new();
-    let syms = match symbolizer.symbolize(&src, Input::VirtOffset(&addrs)) {
+    let syms = match symbolizer.symbolize(&src, Input::VirtOffset(&offsets)) {
         Ok(symbolized) => symbolized,
         Err(e) => {
             res.resize(
-                addrs.len(),
+                offsets.len(),
                 vec![Frame::with_error(format!(
                     "<blazesym: failed to symbolize due to {}",
                     e
@@ -31,7 +42,11 @@ pub fn symbolize_native_stack_blaze(addrs: Vec<u64>, object_path: &PathBuf) -> V
         }
     };
 
-    for symbol in syms {
+    if syms.len() != virtual_addresses.len() {
+        error!("symbols.len() != virtual_addresses.len() this should not happen");
+    }
+
+    for (symbol, vaddr) in syms.iter().zip(virtual_addresses) {
         let mut symbols = Vec::new();
 
         match symbol {
@@ -44,14 +59,16 @@ pub fn symbolize_native_stack_blaze(addrs: Vec<u64>, object_path: &PathBuf) -> V
                 ..
             }) => {
                 symbols.push(Frame {
-                    address: addr,
+                    virtual_address: vaddr,
+                    file_offset: Some(*addr),
                     name: name.to_string(),
                     inline: false,
                 });
 
                 for frame in inlined.iter() {
                     symbols.push(Frame {
-                        address: addr,
+                        virtual_address: vaddr,
+                        file_offset: Some(*addr),
                         name: frame.name.to_string(),
                         inline: true,
                     });
@@ -59,7 +76,8 @@ pub fn symbolize_native_stack_blaze(addrs: Vec<u64>, object_path: &PathBuf) -> V
             }
             Symbolized::Unknown(r) => {
                 symbols.push(Frame {
-                    address: 0x1111,
+                    virtual_address: 0x1111,
+                    file_offset: None,
                     name: format!("<blazesym: unknown symbol due to {}>", r),
                     inline: false,
                 });
