@@ -3,6 +3,7 @@ extern crate bindgen;
 use std::env;
 use std::path::PathBuf;
 
+use bindgen::callbacks::{DeriveInfo, ParseCallbacks};
 use glob::glob;
 use libbpf_cargo::SkeletonBuilder;
 use std::path::Path;
@@ -15,6 +16,19 @@ const TRACERS_BPF_HEADER: &str = "./src/bpf/tracers.h";
 const TRACERS_BPF_SOURCE: &str = "./src/bpf/tracers.bpf.c";
 const TRACERS_SKELETON: &str = "./src/bpf/tracers_skel.rs";
 
+#[derive(Debug)]
+struct CustomParseCallbacks;
+
+impl ParseCallbacks for CustomParseCallbacks {
+    fn add_derives(&self, derive_info: &DeriveInfo) -> Vec<String> {
+        if derive_info.name == "native_stack_t" {
+            vec!["Hash".into(), "Eq".into(), "PartialEq".into()]
+        } else {
+            vec![]
+        }
+    }
+}
+
 fn main() {
     // Inform cargo of when to re build
     for path in glob("src/bpf/*[hc]").unwrap().flatten() {
@@ -24,6 +38,7 @@ fn main() {
     // Main native profiler.
     let bindings = bindgen::Builder::default()
         .derive_default(true)
+        .parse_callbacks(Box::new(CustomParseCallbacks))
         .header(PROFILER_BPF_HEADER)
         .generate()
         .expect("Unable to generate bindings");

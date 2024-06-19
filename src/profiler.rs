@@ -160,7 +160,7 @@ const MAX_CHUNKS: usize = MAX_UNWIND_TABLE_CHUNKS as usize;
 // TODO: should make this configurable via a command line argument in future
 const PERF_BUFFER_BYTES: usize = 512 * 1024;
 
-#[derive(Debug)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct RawAggregatedSample {
     pub pid: i32,
     pub tid: i32,

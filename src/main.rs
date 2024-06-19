@@ -17,7 +17,8 @@ use tracing_subscriber::FmtSubscriber;
 
 use lightswitch::collector::Collector;
 use lightswitch::object::ObjectFile;
-use lightswitch::profile::fold_profiles;
+use lightswitch::profile::fold_profile;
+use lightswitch::profile::symbolize_profile;
 use lightswitch::profiler::Profiler;
 use lightswitch::unwind_info::in_memory_unwind_info;
 use lightswitch::unwind_info::remove_redundant;
@@ -213,11 +214,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     p.profile_pids(args.pids);
     p.run(collector.clone());
 
-    let profiles = collector.lock().unwrap().finish();
+    let collector = collector.lock().unwrap();
+    let (raw_profile, procs, objs) = collector.finish();
+    let symbolized_profile = symbolize_profile(&raw_profile, procs, objs);
 
     match args.profile_format {
         ProfileFormat::FlameGraph => {
-            let folded = fold_profiles(profiles);
+            let folded = fold_profile(symbolized_profile);
             let mut options: flamegraph::Options<'_> = flamegraph::Options::default();
             let data = folded.as_bytes();
             let f = File::create(args.profile_name).unwrap();
