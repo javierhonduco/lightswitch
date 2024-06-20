@@ -10,13 +10,13 @@ use std::time::Duration;
 use clap::Parser;
 use inferno::flamegraph;
 use lightswitch::collector::AggregatorCollector;
+use lightswitch::collector::StreamingCollector;
 use nix::unistd::Uid;
 use primal::is_prime;
 use prost::Message;
 use tracing::{error, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
-use lightswitch::collector::StreamingCollector;
 
 use lightswitch::object::ObjectFile;
 use lightswitch::profile::symbolize_profile;
@@ -220,7 +220,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // TODO: change collector based on symbolizer type and whether continuous or one shot
-    let collector = match args.sender {ProfileSender::LocalDisk => AggregatorCollector::new(), ProfileSender::Remote => StreamingCollector::new() };
+    let collector = match args.sender {
+        ProfileSender::LocalDisk => AggregatorCollector::new(),
+        ProfileSender::Remote => StreamingCollector::new(),
+    };
 
     let mut p: Profiler<'_> = Profiler::new(
         args.libbpf_logs,
@@ -234,10 +237,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let collector = collector.lock().unwrap();
     let (raw_profile, procs, objs) = collector.finish();
 
+    // If we need to send the profile to the backend we are done.
     if args.sender == ProfileSender::Remote {
         return Ok(());
     }
 
+    // Otherwise let's symbolize the profile and write it to disk.
     let symbolized_profile = symbolize_profile(&raw_profile, procs, objs);
 
     match args.profile_format {
@@ -260,7 +265,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             let proto = to_proto(symbolized_profile, procs, objs);
             proto.validate().unwrap();
             proto.profile().encode(&mut buffer).unwrap();
-            let mut pprof_file = File::create(args.profile_name.unwrap_or_else(|| "profile.pb".into())).unwrap();
+            let mut pprof_file =
+                File::create(args.profile_name.unwrap_or_else(|| "profile.pb".into())).unwrap();
 
             match pprof_file.write_all(&buffer) {
                 Ok(_) => {

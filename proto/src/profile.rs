@@ -54,16 +54,70 @@ impl Pprof {
         }
     }
 
-    /// TODO: add more validations
+    /// Run some validations to ensure that the profile is semantically correct.
     pub fn validate(&self) -> Result<()> {
+        let validate_line = |line: &pprof::Line| {
+            let function_id = line.function_id;
+            if function_id == 0 {
+                return Err(anyhow!("Found a null function_id (id=0)"));
+            }
+
+            let maybe_function = self.functions.get(function_id as usize - 1);
+            match maybe_function {
+                Some(function) => {
+                    if function.id == 0 {
+                        return Err(anyhow!("Found a null function (id=0)"));
+                    }
+
+                    let function_id = function.name;
+                    self.string_table.get(function_id as usize).ok_or(anyhow!(
+                        "Could not find function name with id {}",
+                        function_id
+                    ))?;
+                }
+                None => {
+                    return Err(anyhow!("Function with id {} not found", function_id));
+                }
+            }
+            Ok(())
+        };
+
+        let validate_location = |location: &pprof::Location| {
+            let mapping_id = location.mapping_id;
+            if mapping_id == 0 {
+                return Err(anyhow!("Found a null mapping (id=0)"));
+            }
+            let maybe_mapping = self.mappings.get(mapping_id as usize - 1);
+            match maybe_mapping {
+                Some(mapping) => {
+                    if mapping.id == 0 {
+                        return Err(anyhow!("Found a null mapping (id=0)"));
+                    }
+                }
+                None => {
+                    return Err(anyhow!("Mapping with id {} not found", mapping_id));
+                }
+            }
+
+            for line in &location.line {
+                validate_line(line)?;
+            }
+
+            Ok(())
+        };
+
         for sample in &self.samples {
             for location_id in &sample.location_id {
                 if *location_id == 0 {
                     return Err(anyhow!("Found a null location (id=0)"));
                 }
 
-                if self.locations.get(*location_id as usize - 1).is_none() {
-                    return Err(anyhow!("Location with id {} not found", location_id));
+                let maybe_location = self.locations.get(*location_id as usize - 1);
+                match maybe_location {
+                    Some(location) => validate_location(location)?,
+                    None => {
+                        return Err(anyhow!("Location with id {} not found", location_id));
+                    }
                 }
             }
         }
@@ -401,14 +455,8 @@ mod tests {
 
             pprof.add_sample(location_ids, count, vec![]);
         }
-        pprof.validate().unwrap(); // @nocommit
+
+        assert!(pprof.validate().is_ok());
         pprof.profile();
-
-        /*         let mut buffer = Vec::new(); // TODO: do this in streaming
-        let pprof_profile = pprof.profile();
-
-        pprof_profile.encode(&mut buffer).unwrap();
-        let mut pprof_file: File = File::create("profile.pb").unwrap();
-        pprof_file.write_all(&buffer).unwrap(); */
     }
 }

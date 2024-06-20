@@ -1,7 +1,7 @@
+use prost::Message;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, span, Level};
-use prost::Message;
 
 use crate::object::ExecutableId;
 use crate::profile::{symbolize_profile, to_proto};

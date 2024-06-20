@@ -1,9 +1,9 @@
+use proto::profile::LabelStringOrNumber;
+use proto::profile::Pprof;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
 use tracing::{debug, error, span, Level};
-use proto::profile::LabelStringOrNumber;
-use proto::profile::Pprof;
 
 use crate::bpf::profiler_bindings::native_stack_t;
 use crate::ksym::KsymIter;
@@ -40,7 +40,6 @@ pub fn to_proto(
             };
 
             let Some(mapping) = info.mappings.find_mapping(addr) else {
-
                 //r.push("<could not find mapping>".to_string());
                 continue;
             };
@@ -66,12 +65,12 @@ pub fn to_proto(
                         &build_id,
                     );
 
-            /*         let failed_to_fetch_symbol = vec![Frame::with_error(
-                        "<failed to fetch symbol for addr>".to_string(),
-                    )];
-                    let failed_to_symbolize =
-                        vec![Frame::with_error("<failed to symbolize>".to_string())];
- */
+                    /*         let failed_to_fetch_symbol = vec![Frame::with_error(
+                                           "<failed to fetch symbol for addr>".to_string(),
+                                       )];
+                                       let failed_to_symbolize =
+                                           vec![Frame::with_error("<failed to symbolize>".to_string())];
+                    */
                     /* if not symbolized
 
                     let func_names = match addresses_per_sample.get(&obj.path) {
