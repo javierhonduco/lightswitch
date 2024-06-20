@@ -8,6 +8,7 @@ use crate::ksym::KsymIter;
 use crate::object::ExecutableId;
 use crate::profiler::ExecutableMapping;
 use crate::profiler::Frame;
+use crate::profiler::FrameAddress;
 use crate::profiler::ObjectFileInfo;
 use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
@@ -169,7 +170,8 @@ pub fn symbolize_profile(
                 };
                 symbolized_sample.kstack.push(Frame {
                     name: le_symbol.symbol_name,
-                    address: addr,
+                    virtual_address: addr,
+                    file_offset: None,
                     inline: false,
                 });
             }
@@ -194,8 +196,9 @@ fn fetch_symbols_for_profile(
     profile: &RawAggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
-) -> HashMap<PathBuf, HashMap<u64, Vec<Frame>>> {
-    let mut addresses_per_sample: HashMap<PathBuf, HashMap<u64, Vec<Frame>>> = HashMap::new();
+) -> HashMap<PathBuf, HashMap<FrameAddress, Vec<Frame>>> {
+    let mut addresses_per_sample: HashMap<PathBuf, HashMap<FrameAddress, Vec<Frame>>> =
+        HashMap::new();
 
     for sample in profile {
         let Some(native_stack) = sample.ustack else {
@@ -226,7 +229,13 @@ fn fetch_symbols_for_profile(
                     addresses_per_sample
                         .entry(obj.path.clone())
                         .or_default()
-                        .insert(normalized_addr, vec![]);
+                        .insert(
+                            FrameAddress {
+                                virtual_address: addr,
+                                file_offset: normalized_addr,
+                            },
+                            vec![],
+                        );
                 }
                 None => {
                     error!("executable with id {} not found", mapping.executable_id);
@@ -237,10 +246,14 @@ fn fetch_symbols_for_profile(
 
     // second pass, symbolize
     for (path, addr_to_symbol_mapping) in addresses_per_sample.iter_mut() {
-        let addresses = addr_to_symbol_mapping.iter().map(|a| *a.0).collect();
-        let symbols = symbolize_native_stack_blaze(addresses, path);
-        for (a, symbol) in addr_to_symbol_mapping.clone().iter_mut().zip(symbols) {
-            addr_to_symbol_mapping.insert(*a.0, symbol);
+        let frame_addresses = addr_to_symbol_mapping.iter().map(|(a, _)| *a).collect();
+        let symbolized_frames = symbolize_native_stack_blaze(frame_addresses, path);
+        for ((frame_address, _), symbolized_frame) in addr_to_symbol_mapping
+            .clone()
+            .iter_mut()
+            .zip(symbolized_frames)
+        {
+            addr_to_symbol_mapping.insert(*frame_address, symbolized_frame);
         }
     }
 
@@ -248,7 +261,7 @@ fn fetch_symbols_for_profile(
 }
 
 fn symbolize_native_stack(
-    addresses_per_sample: &HashMap<PathBuf, HashMap<u64, Vec<Frame>>>,
+    addresses_per_sample: &HashMap<PathBuf, HashMap<FrameAddress, Vec<Frame>>>,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
     pid: i32,
@@ -284,7 +297,10 @@ fn symbolize_native_stack(
                     addr - mapping.start_addr + mapping.offset - obj.load_offset + obj.load_vaddr;
 
                 let frames = match addresses_per_sample.get(&obj.path) {
-                    Some(value) => match value.get(&normalized_addr) {
+                    Some(value) => match value.get(&FrameAddress {
+                        virtual_address: addr,
+                        file_offset: normalized_addr,
+                    }) {
                         Some(v) => v,
                         None => &failed_to_fetch_symbol,
                     },

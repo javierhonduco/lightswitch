@@ -197,9 +197,20 @@ impl fmt::Display for RawAggregatedSample {
     }
 }
 
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+pub struct FrameAddress {
+    /// Address from the process, as collected from the BPF program.
+    pub virtual_address: u64,
+    /// The offset in the object file after converting the virtual_address its relative position.
+    pub file_offset: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct Frame {
-    pub address: u64,
+    /// Address from the process, as collected from the BPF program.
+    pub virtual_address: u64,
+    /// The offset in the object file after converting the virtual_address its relative position.
+    pub file_offset: Option<u64>,
     pub name: String,
     pub inline: bool,
 }
@@ -214,7 +225,8 @@ impl fmt::Display for Frame {
 impl Frame {
     pub fn with_error(msg: String) -> Self {
         Self {
-            address: 0xBAD,
+            virtual_address: 0xBAD,
+            file_offset: None,
             name: msg,
             inline: false,
         }
@@ -1382,7 +1394,8 @@ mod tests {
         let ustack_data: Vec<_> = ["ufunc3", "ufunc2", "ufunc1"]
             .into_iter()
             .map(|s| Frame {
-                address: 0x0,
+                virtual_address: 0x0,
+                file_offset: None,
                 name: s.to_string(),
                 inline: false,
             })
@@ -1390,7 +1403,8 @@ mod tests {
         let kstack_data: Vec<_> = ["kfunc2", "kfunc1"]
             .into_iter()
             .map(|s| Frame {
-                address: 0x0,
+                virtual_address: 0x0,
+                file_offset: None,
                 name: s.to_string(),
                 inline: false,
             })
