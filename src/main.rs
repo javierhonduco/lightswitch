@@ -9,13 +9,14 @@ use std::time::Duration;
 
 use clap::Parser;
 use inferno::flamegraph;
-use lightswitch::collector::LocalSymbolizerCollector;
+use lightswitch::collector::AggregatorCollector;
 use nix::unistd::Uid;
 use primal::is_prime;
 use prost::Message;
 use tracing::{error, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
+use lightswitch::collector::StreamingCollector;
 
 use lightswitch::object::ObjectFile;
 use lightswitch::profile::symbolize_profile;
@@ -94,6 +95,13 @@ enum ProfileFormat {
     None,
 }
 
+#[derive(PartialEq, clap::ValueEnum, Debug, Clone, Default)]
+enum ProfileSender {
+    #[default]
+    LocalDisk,
+    Remote,
+}
+
 #[derive(Parser, Debug)]
 struct Cli {
     /// Specific PIDs to profile
@@ -139,6 +147,9 @@ struct Cli {
     /// Name for the generated profile.
     #[arg(long)]
     profile_name: Option<PathBuf>,
+    /// Where to store the profile. If remote is chosen [...].
+    #[arg(long, default_value_t, value_enum)]
+    sender: ProfileSender,
 }
 
 /// Exit the main thread if any thread panics. We prefer this behaviour because pretty much every
@@ -155,6 +166,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     panic_thread_hook();
 
     let args = Cli::parse();
+    // TODO:
+    // if remote is chosen, the filename should not be used
+    // if remote is chosen, pprof is the default
+    // PATH_TO_BINARY is duplicated?
 
     if let Some(path) = args.show_unwind_info {
         let mut unwind_info = in_memory_unwind_info(&path).unwrap();
@@ -205,7 +220,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // TODO: change collector based on symbolizer type and whether continuous or one shot
-    let collector = LocalSymbolizerCollector::new();
+    let collector = match args.sender {ProfileSender::LocalDisk => AggregatorCollector::new(), ProfileSender::Remote => StreamingCollector::new() };
 
     let mut p: Profiler<'_> = Profiler::new(
         args.libbpf_logs,
@@ -218,6 +233,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let collector = collector.lock().unwrap();
     let (raw_profile, procs, objs) = collector.finish();
+
+    if args.sender == ProfileSender::Remote {
+        return Ok(());
+    }
+
     let symbolized_profile = symbolize_profile(&raw_profile, procs, objs);
 
     match args.profile_format {
@@ -281,7 +301,7 @@ mod tests {
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
         insta::assert_yaml_snapshot!(actual, @r###"
         ---
-        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-logs\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n\n          Possible values:\n          - flame-graph\n          - pprof\n          - none:        Do not produce a profile. Used for kernel tests\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n          \n          [default: flame.svg]\n\n  -h, --help\n          Print help (see a summary with '-h')\n"
+        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-logs\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n\n          Possible values:\n          - flame-graph\n          - pprof\n          - none:        Do not produce a profile. Used for kernel tests\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to store the profile. If remote is chosen [...]\n          \n          [default: local-disk]\n          [possible values: local-disk, remote]\n\n  -h, --help\n          Print help (see a summary with '-h')\n"
         "###);
     }
 
