@@ -69,7 +69,7 @@
           devShells.default = mkShell {
             nativeBuildInputs = nativeBuildInputs;
             buildInputs = buildInputs ++ [
-              rust-bin.stable.latest.default
+              rust-bin.nightly.latest.default
               # Debugging
               strace
               gdb
