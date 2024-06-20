@@ -39,6 +39,5 @@ bindgen = "0.69.4"
 libbpf-cargo = "0.23.3"
 glob = "0.3.1"
 
-[profile.dev.package]
-insta.opt-level = 3
-similar.opt-level = 3
+[profile.dev.package."*"]
+opt-level = 3
