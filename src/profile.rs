@@ -23,14 +23,30 @@ pub fn to_proto(
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
 ) -> Pprof {
     let mut pprof = Pprof::new();
-    // already symbolized
-    // let addresses_per_sample: HashMap<PathBuf, HashMap<u64, Vec<Frame>>> = fetch_symbols_for_profile(&profile, procs, objs);
+
     for sample in profile {
         let pid = sample.pid;
         let ustack = sample.ustack;
-        //let _kstack = sample.kstack;
-
+        let kstack = sample.kstack;
         let mut location_ids = Vec::new();
+
+        for frame in kstack {
+            let mapping_id: u64 = pprof.add_mapping(
+                0x1000000, // TODO
+                0xFFFFFFFF,
+                0xFFFFFFFF,
+                0x0,
+                "[kernel]",
+                "fake_kernel_build_id", // TODO
+            );
+            println!("{}", frame.name);
+
+            let (line, _) = pprof.add_line(&frame.name);
+            let location =
+                pprof.add_location(frame.virtual_address, mapping_id, vec![line.clone()]);
+            location_ids.push(location);
+        }
+
         for frame in ustack {
             let addr = frame.virtual_address;
 
@@ -65,21 +81,10 @@ pub fn to_proto(
                         &build_id,
                     );
 
-                    /*         let failed_to_fetch_symbol = vec![Frame::with_error(
-                                           "<failed to fetch symbol for addr>".to_string(),
-                                       )];
-                                       let failed_to_symbolize =
-                                           vec![Frame::with_error("<failed to symbolize>".to_string())];
-                    */
-                    /* if not symbolized
-
-                    let func_names = match addresses_per_sample.get(&obj.path) {
-                        Some(value) => match value.get(&normalized_addr) {
-                            Some(v) => v,
-                            None => &failed_to_fetch_symbol,
-                        },
-                        None => &failed_to_symbolize,
-                    }; */
+                    // @nocommit
+                    if normalized_addr != frame.file_offset.unwrap() {
+                        //panic!("oh no"); ??SD?FDSFDSF?DS?F?SDF wtf
+                    }
 
                     let (line, _) = pprof.add_line(&frame.name);
                     let location =
