@@ -350,6 +350,7 @@ impl Profiler<'_> {
     pub fn profile_pids(&mut self, pids: Vec<i32>) {
         for pid in pids {
             self.filter_pids.insert(pid, true);
+            self.event_new_proc(pid);
         }
     }
 
