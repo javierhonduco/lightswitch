@@ -20,6 +20,12 @@ $ cargo test
 $ nix run .#vmtest
 ```
 
+### Running `lightswitch`
+
+```
+$ cargo build && sudo target/debug/lightswitch
+```
+
 ### Sending contributions
 
 We welcome contributions of any kind! Please add as much context as possible so we can help you with the issue you are experiencing. It might be useful to read the [design goals](). If your contribution is in the form of code, please add all the relevant context in the commit message as well as in the pull request covering the following
