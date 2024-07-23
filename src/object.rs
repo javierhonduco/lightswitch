@@ -1,3 +1,6 @@
+use std::fmt;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
@@ -28,6 +31,22 @@ pub enum BuildId {
 pub struct ElfLoad {
     pub offset: u64,
     pub vaddr: u64,
+}
+
+impl Display for BuildId {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            BuildId::Gnu(build_id) => {
+                write!(f, "gnu-{}", build_id)
+            }
+            BuildId::Go(build_id) => {
+                write!(f, "go-{}", build_id)
+            }
+            BuildId::Sha256(build_id) => {
+                write!(f, "sha256-{}", build_id)
+            }
+        }
+    }
 }
 
 #[derive(Debug)]

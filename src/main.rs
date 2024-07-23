@@ -1,24 +1,26 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::IsTerminal;
+use std::io::Write;
 use std::ops::RangeInclusive;
 use std::panic;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use clap::Parser;
-
 use inferno::flamegraph;
+use lightswitch::collector::{AggregatorCollector, Collector, NullCollector, StreamingCollector};
 use nix::unistd::Uid;
 use primal::is_prime;
+use prost::Message;
 use tracing::{error, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
-use lightswitch::collector::Collector;
 use lightswitch::object::ObjectFile;
-use lightswitch::profile::fold_profile;
 use lightswitch::profile::symbolize_profile;
+use lightswitch::profile::{fold_profile, to_proto};
 use lightswitch::profiler::Profiler;
 use lightswitch::unwind_info::in_memory_unwind_info;
 use lightswitch::unwind_info::remove_redundant;
@@ -26,6 +28,7 @@ use lightswitch::unwind_info::remove_unnecesary_markers;
 use lightswitch::unwind_info::UnwindInfoBuilder;
 
 const SAMPLE_FREQ_RANGE: RangeInclusive<usize> = 1..=1009;
+const PPROF_INGEST_URL: &str = "http://localhost:4567/pprof/new";
 
 fn parse_duration(arg: &str) -> Result<Duration, std::num::ParseIntError> {
     let seconds = arg.parse()?;
@@ -86,10 +89,19 @@ enum LoggingLevel {
 
 #[derive(clap::ValueEnum, Debug, Clone, Default)]
 enum ProfileFormat {
+    None,
     #[default]
     FlameGraph,
-    /// Do not produce a profile. Used for kernel tests.
+    Pprof,
+}
+
+#[derive(PartialEq, clap::ValueEnum, Debug, Clone, Default)]
+enum ProfileSender {
+    /// Discard the profile. Used for kernel tests.
     None,
+    #[default]
+    LocalDisk,
+    Remote,
 }
 
 #[derive(Parser, Debug)]
@@ -135,9 +147,11 @@ struct Cli {
     #[arg(long, default_value_t, value_enum)]
     profile_format: ProfileFormat,
     /// Name for the generated profile.
-    // TODO: change suffix depending on the format.
-    #[arg(long, default_value = "flame.svg")]
-    profile_name: PathBuf,
+    #[arg(long)]
+    profile_name: Option<PathBuf>,
+    /// Where to write the profile.
+    #[arg(long, default_value_t, value_enum)]
+    sender: ProfileSender,
 }
 
 /// Exit the main thread if any thread panics. We prefer this behaviour because pretty much every
@@ -203,7 +217,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         std::process::exit(1);
     }
 
-    let collector = Collector::new();
+    let collector = Arc::new(Mutex::new(match args.sender {
+        ProfileSender::None => Box::new(NullCollector::new()) as Box<dyn Collector + Send>,
+        ProfileSender::LocalDisk => {
+            Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
+        }
+        ProfileSender::Remote => {
+            Box::new(StreamingCollector::new(PPROF_INGEST_URL)) as Box<dyn Collector + Send>
+        }
+    }));
 
     let mut p: Profiler<'_> = Profiler::new(
         args.libbpf_logs,
@@ -216,6 +238,16 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let collector = collector.lock().unwrap();
     let (raw_profile, procs, objs) = collector.finish();
+
+    // If we need to send the profile to the backend there's nothing else to do.
+    match args.sender {
+        ProfileSender::Remote | ProfileSender::None => {
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    // Otherwise let's symbolize the profile and write it to disk.
     let symbolized_profile = symbolize_profile(&raw_profile, procs, objs);
 
     match args.profile_format {
@@ -223,13 +255,30 @@ fn main() -> Result<(), Box<dyn Error>> {
             let folded = fold_profile(symbolized_profile);
             let mut options: flamegraph::Options<'_> = flamegraph::Options::default();
             let data = folded.as_bytes();
-            let f = File::create(args.profile_name).unwrap();
+            let f = File::create(args.profile_name.unwrap_or_else(|| "flame.svg".into())).unwrap();
             match flamegraph::from_reader(&mut options, data, f) {
                 Ok(_) => {
-                    eprintln!("Profile successfully written to disk");
+                    eprintln!("Flamegraph profile successfully written to disk");
                 }
                 Err(e) => {
-                    error!("Failed generate profile: {:?}", e);
+                    error!("Failed generate flamegraph: {:?}", e);
+                }
+            }
+        }
+        ProfileFormat::Pprof => {
+            let mut buffer = Vec::new();
+            let proto = to_proto(symbolized_profile, procs, objs);
+            proto.validate().unwrap();
+            proto.profile().encode(&mut buffer).unwrap();
+            let mut pprof_file =
+                File::create(args.profile_name.unwrap_or_else(|| "profile.pb".into())).unwrap();
+
+            match pprof_file.write_all(&buffer) {
+                Ok(_) => {
+                    eprintln!("Pprof profile successfully written to disk");
+                }
+                Err(e) => {
+                    error!("Failed generate pprof: {:?}", e);
                 }
             }
         }
@@ -263,7 +312,7 @@ mod tests {
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
         insta::assert_yaml_snapshot!(actual, @r###"
         ---
-        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-logs\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n\n          Possible values:\n          - flame-graph\n          - none:        Do not produce a profile. Used for kernel tests\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n          \n          [default: flame.svg]\n\n  -h, --help\n          Print help (see a summary with '-h')\n"
+        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-logs\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n          \n          [default: local-disk]\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n\n  -h, --help\n          Print help (see a summary with '-h')\n"
         "###);
     }
 

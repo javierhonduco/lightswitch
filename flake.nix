@@ -26,6 +26,7 @@
           elfutils' = (pkgs.elfutils.override { enableDebuginfod = false; }).overrideAttrs (attrs: {
             configureFlags = attrs.configureFlags ++ [ "--without-zstd" ];
           });
+          openssl' = (pkgs.openssl.override { static = true; });
           buildInputs = with pkgs; [
             llvmPackages_16.clang
             llvmPackages_16.libcxx
@@ -36,6 +37,8 @@
             zlib.dev
             glibc
             glibc.static
+            protobuf
+            openssl'
           ];
           nativeBuildInputs = with pkgs; [
             pkg-config
@@ -73,7 +76,6 @@
               # Debugging
               strace
               gdb
-              openssl
               # Other tools
               skopeo
               cargo-edit

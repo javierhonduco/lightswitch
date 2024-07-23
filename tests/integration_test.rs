@@ -1,9 +1,10 @@
 use std::io;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lightswitch::collector::Collector;
+use lightswitch::collector::{AggregatorCollector, Collector};
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profiler::Profiler;
 use lightswitch::profiler::SymbolizedAggregatedProfile;
@@ -93,7 +94,9 @@ fn test_integration() {
     build_test_binary("cpp-progs");
     let cpp_proc = TestProcess::new("main_cpp_clang_O1");
 
-    let collector = Collector::new();
+    let collector = Arc::new(Mutex::new(
+        Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
+    ));
     let mut p = Profiler::new(bpf_test_debug, bpf_test_debug, Duration::from_secs(5), 999);
     p.profile_pids(vec![cpp_proc.pid()]);
     p.run(collector.clone());

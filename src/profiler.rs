@@ -49,7 +49,7 @@ pub enum ProcessStatus {
 #[derive(Clone)]
 pub struct ProcessInfo {
     pub status: ProcessStatus,
-    pub mappings: Vec<ExecutableMapping>,
+    pub mappings: ExecutableMappings,
 }
 
 pub struct ObjectFileInfo {
@@ -82,6 +82,21 @@ pub struct ExecutableMapping {
     pub main_exec: bool,
     pub unmapped: bool,
     // Add (inode, ctime) and whether the file is in the root namespace
+}
+
+#[derive(Clone)]
+pub struct ExecutableMappings(Vec<ExecutableMapping>);
+
+impl ExecutableMappings {
+    pub fn for_address(&self, addr: u64) -> Option<ExecutableMapping> {
+        for mapping in &self.0 {
+            if mapping.start_addr <= addr && addr <= mapping.end_addr {
+                return Some(mapping.clone());
+            }
+        }
+
+        None
+    }
 }
 
 impl ExecutableMapping {
@@ -205,7 +220,7 @@ pub struct FrameAddress {
     pub file_offset: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct Frame {
     /// Address from the process, as collected from the BPF program.
     pub virtual_address: u64,
@@ -233,7 +248,7 @@ impl Frame {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Hash, Eq, PartialEq)]
 pub struct SymbolizedAggregatedSample {
     pub pid: i32,
     pub tid: i32,
@@ -362,7 +377,7 @@ impl Profiler<'_> {
             .expect("handle send");
     }
 
-    pub fn run(mut self, collector: Arc<Mutex<Collector>>) {
+    pub fn run(mut self, collector: ThreadSafeCollector) {
         // In this case, we only want to calculate maximum sampling buffer sizes based on the
         // number of online CPUs, NOT possible CPUs, when they differ - which is often.
         let num_cpus = get_online_cpus().expect("get online CPUs").len() as u64;
@@ -513,7 +528,7 @@ impl Profiler<'_> {
             Some(proc_info) => {
                 debug!("marking process {} as exited", pid);
                 proc_info.status = ProcessStatus::Exited;
-                for mapping in &mut proc_info.mappings {
+                for mapping in &mut proc_info.mappings.0 {
                     let mut object_files = self.object_files.lock().expect("lock");
                     mapping.mark_as_deleted(&mut object_files);
                 }
@@ -529,7 +544,7 @@ impl Profiler<'_> {
 
         match procs.get_mut(&pid) {
             Some(proc_info) => {
-                for mapping in &mut proc_info.mappings {
+                for mapping in &mut proc_info.mappings.0 {
                     if mapping.start_addr <= start_address && start_address <= mapping.end_addr {
                         debug!("found memory mapping starting at {:x} for pid {} while handling munmap", start_address, pid);
                         let mut object_files = self.object_files.lock().expect("lock");
@@ -765,6 +780,7 @@ impl Profiler<'_> {
             .get(&pid)
             .unwrap()
             .mappings
+            .0
             .iter()
         {
             if self.native_unwind_state.shard_index > MAX_SHARDS {
@@ -1229,7 +1245,7 @@ impl Profiler<'_> {
         mappings.sort_by_key(|k| k.start_addr.cmp(&k.start_addr));
         let proc_info = ProcessInfo {
             status: ProcessStatus::Running,
-            mappings,
+            mappings: ExecutableMappings(mappings),
         };
         self.procs
             .clone()
