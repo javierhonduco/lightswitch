@@ -21,7 +21,7 @@ use tracing_subscriber::FmtSubscriber;
 use lightswitch::object::ObjectFile;
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::{fold_profile, to_proto};
-use lightswitch::profiler::Profiler;
+use lightswitch::profiler::{Profiler, ProfilerConfig};
 use lightswitch::unwind_info::in_memory_unwind_info;
 use lightswitch::unwind_info::remove_redundant;
 use lightswitch::unwind_info::remove_unnecesary_markers;
@@ -152,6 +152,36 @@ struct Cli {
     /// Where to write the profile.
     #[arg(long, default_value_t, value_enum)]
     sender: ProfileSender,
+    // Print out info on eBPF map sizes
+    #[arg(long, help = "Print eBPF map sizes that can be configured")]
+    mapsize_info: bool,
+    // eBPF map stacks
+    #[arg(long, default_value_t = 100000)]
+    mapsize_stacks: u32,
+    // eBPF map aggregated_stacks
+    #[arg(
+        long,
+        default_value_t = 10000,
+        help = "Derived from constant MAX_AGGREGATED_STACKS_ENTRIES"
+    )]
+    mapsize_aggregated_stacks: u32,
+    // eBPF map unwind_info_chunks
+    #[arg(long, default_value_t = 5000)]
+    mapsize_unwind_info_chunks: u32,
+    // eBPF map unwind_tables
+    #[arg(
+        long,
+        default_value_t = 65,
+        help = "Derived from constant MAX_UNWIND_INFO_SHARDS"
+    )]
+    mapsize_unwind_tables: u32,
+    // eBPF map rate_limits
+    #[arg(
+        long,
+        default_value_t = 5000,
+        help = "Derived from constant MAX_PROCESSES"
+    )]
+    mapsize_rate_limits: u32,
 }
 
 /// Exit the main thread if any thread panics. We prefer this behaviour because pretty much every
@@ -227,12 +257,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }));
 
-    let mut p: Profiler<'_> = Profiler::new(
-        args.libbpf_logs,
+    let profiler_config = ProfilerConfig(
         args.bpf_logging,
         args.duration,
         args.sample_freq,
+        args.mapsize_info,
+        args.mapsize_stacks,
+        args.mapsize_aggregated_stacks,
+        args.mapsize_unwind_info_chunks,
+        args.mapsize_unwind_tables,
+        args.mapsize_rate_limits,
     );
+    let mut p: Profiler<'_> = Profiler::new(profiler_config);
     p.profile_pids(args.pids);
     p.run(collector.clone());
 

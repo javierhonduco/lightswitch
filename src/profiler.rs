@@ -285,34 +285,100 @@ impl fmt::Display for SymbolizedAggregatedSample {
 pub type RawAggregatedProfile = Vec<RawAggregatedSample>;
 pub type SymbolizedAggregatedProfile = Vec<SymbolizedAggregatedSample>;
 
-impl Default for Profiler<'_> {
-    fn default() -> Self {
-        Self::new(false, false, Duration::MAX, 19)
-    }
+pub struct ProfilerConfig {
+    pub libbpf_debug: bool,
+    pub bpf_logging: bool,
+    pub duration: Duration,
+    pub sample_freq: u16,
+    pub mapsize_info: bool,
+    pub mapsize_stacks: u32,
+    pub mapsize_aggregated_stacks: u32,
+    pub mapsize_unwind_info_chunks: u32,
+    pub mapsize_unwind_tables: u32,
+    pub mapsize_rate_limits: u32,
 }
+
+// impl Default for Profiler<'_> {
+//     fn default() -> Self {
+//         Self::new(false, false, Duration::MAX, 19)
+//     }
+// }
 
 impl Profiler<'_> {
     pub fn new(
-        libbpf_debug: bool,
-        bpf_logging: bool,
-        duration: Duration,
-        sample_freq: u16,
+        profiler_config: ProfilerConfig,
+        //         libbpf_debug: bool,
+        //         bpf_logging: bool,
+        //         duration: Duration,
+        //         sample_freq: u16,
+        //         mapsize_info: bool,
+        //         mapsize_stacks: u32,
+        //         mapsize_aggregated_stacks: u32,
+        //         mapsize_unwind_info_chunks: u32,
+        //         mapsize_unwind_tables: u32,
+        //         mapsize_rate_limits: u32,
     ) -> Self {
+        let duration = profiler_config.duration;
+        let sample_freq = profiler_config.sample_freq;
         let mut skel_builder: ProfilerSkelBuilder = ProfilerSkelBuilder::default();
-        skel_builder.obj_builder.debug(libbpf_debug);
+        skel_builder.obj_builder.debug(profiler_config.libbpf_debug);
         let mut open_skel = skel_builder.open().expect("open skel");
+        if profiler_config.mapsize_info {
+            info!("eBPF map size Configuration:");
+            info!("stacks:             {}", profiler_config.mapsize_stacks);
+            info!(
+                "aggregated_stacks:  {}",
+                profiler_config.mapsize_aggregated_stacks
+            );
+            info!(
+                "unwind_info_chunks: {}",
+                profiler_config.mapsize_unwind_info_chunks
+            );
+            info!(
+                "unwind_tables:      {}",
+                profiler_config.mapsize_unwind_tables
+            );
+            info!(
+                "rate_limits:        {}",
+                profiler_config.mapsize_rate_limits
+            );
+        }
+        // mapsize modifications can only be made before the maps are actually loaded
+        // Initialize map sizes with defaults or modifications
+        open_skel
+            .maps()
+            .stacks()
+            .set_max_entries(profiler_config.mapsize_stacks);
+        open_skel
+            .maps()
+            .aggregated_stacks()
+            .set_max_entries(profiler_config.mapsize_aggregated_stacks);
+        open_skel
+            .maps()
+            .unwind_info_chunks()
+            .set_max_entries(profiler_config.mapsize_unwind_info_chunks);
+        open_skel
+            .maps()
+            .unwind_tables()
+            .set_max_entries(profiler_config.mapsize_unwind_tables);
+        open_skel
+            .maps()
+            .rate_limits()
+            .set_max_entries(profiler_config.mapsize_rate_limits);
         open_skel
             .rodata_mut()
             .lightswitch_config
             .verbose_logging
-            .write(bpf_logging);
+            .write(profiler_config.bpf_logging);
         let bpf = open_skel.load().expect("load skel");
         info!("native unwinder BPF program loaded");
         let native_unwinder_maps = bpf.maps();
         let exec_mappings_fd = native_unwinder_maps.exec_mappings().as_fd();
 
         let mut tracers_builder = TracersSkelBuilder::default();
-        tracers_builder.obj_builder.debug(libbpf_debug);
+        tracers_builder
+            .obj_builder
+            .debug(profiler_config.libbpf_debug);
         let open_tracers = tracers_builder.open().expect("open skel");
         open_tracers
             .maps()
@@ -407,7 +473,7 @@ impl Profiler<'_> {
             perf_buffer.poll(Duration::from_millis(100)).expect("poll");
         });
 
-        // Trace events are received here, such memory unmaps.
+        // Trace events are received here, such as memory unmaps.
         let tracers_send = self.tracers_chan_send.clone();
         let tracers_events_perf_buffer =
             PerfBufferBuilder::new(self.tracers.maps().tracer_events())
