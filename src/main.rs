@@ -257,17 +257,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }));
 
-    let profiler_config = ProfilerConfig(
-        args.bpf_logging,
-        args.duration,
-        args.sample_freq,
-        args.mapsize_info,
-        args.mapsize_stacks,
-        args.mapsize_aggregated_stacks,
-        args.mapsize_unwind_info_chunks,
-        args.mapsize_unwind_tables,
-        args.mapsize_rate_limits,
-    );
+    let profiler_config = ProfilerConfig {
+        libbpf_debug: args.libbpf_logs,
+        bpf_logging: args.bpf_logging,
+        duration: args.duration,
+        sample_freq: args.sample_freq,
+        mapsize_info: args.mapsize_info,
+        mapsize_stacks: args.mapsize_stacks,
+        mapsize_aggregated_stacks: args.mapsize_aggregated_stacks,
+        mapsize_unwind_info_chunks: args.mapsize_unwind_info_chunks,
+        mapsize_unwind_tables: args.mapsize_unwind_tables,
+        mapsize_rate_limits: args.mapsize_rate_limits,
+    };
     let mut p: Profiler<'_> = Profiler::new(profiler_config);
     p.profile_pids(args.pids);
     p.run(collector.clone());

@@ -346,25 +346,30 @@ impl Profiler<'_> {
         // mapsize modifications can only be made before the maps are actually loaded
         // Initialize map sizes with defaults or modifications
         open_skel
-            .maps()
+            .maps_mut()
             .stacks()
-            .set_max_entries(profiler_config.mapsize_stacks);
+            .set_max_entries(profiler_config.mapsize_stacks)
+            .expect("Unable to set stacks map max_entries");
         open_skel
-            .maps()
+            .maps_mut()
             .aggregated_stacks()
-            .set_max_entries(profiler_config.mapsize_aggregated_stacks);
+            .set_max_entries(profiler_config.mapsize_aggregated_stacks)
+            .expect("Unable to set aggregated_stacks map max_entries");
         open_skel
-            .maps()
+            .maps_mut()
             .unwind_info_chunks()
-            .set_max_entries(profiler_config.mapsize_unwind_info_chunks);
+            .set_max_entries(profiler_config.mapsize_unwind_info_chunks)
+            .expect("Unable to set unwind_info_chunks map max_entries");
         open_skel
-            .maps()
+            .maps_mut()
             .unwind_tables()
-            .set_max_entries(profiler_config.mapsize_unwind_tables);
+            .set_max_entries(profiler_config.mapsize_unwind_tables)
+            .expect("Unable to set unwind_tables map max_entries");
         open_skel
-            .maps()
+            .maps_mut()
             .rate_limits()
-            .set_max_entries(profiler_config.mapsize_rate_limits);
+            .set_max_entries(profiler_config.mapsize_rate_limits)
+            .expect("Unable to set rate_limits map max_entries");
         open_skel
             .rodata_mut()
             .lightswitch_config
