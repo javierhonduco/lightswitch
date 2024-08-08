@@ -1,3 +1,4 @@
+use core::str;
 use std::error::Error;
 use std::fs::File;
 use std::io::IsTerminal;
@@ -59,6 +60,19 @@ fn sample_freq_in_range(s: &str) -> Result<u16, String> {
         }
     }
     Ok(sample_freq as u16)
+}
+
+// Return a value if it's a power of 2, otherwise Error
+fn value_is_power_of_2(s: &str) -> Result<usize, String> {
+    let value: usize = s
+        .parse()
+        .map_err(|_| format!("`{s}' isn't a valid usize"))?;
+    // Now we have a value, test whether it's a power of 2
+    if (value != 0) && ((value & (value - 1)) == 0) {
+        Ok(value)
+    } else {
+        return Err(format!("{} is not a power of 2", value));
+    }
 }
 
 /// Given a non-prime unsigned int, return the prime number that precedes it
@@ -152,21 +166,36 @@ struct Cli {
     /// Where to write the profile.
     #[arg(long, default_value_t, value_enum)]
     sender: ProfileSender,
+    // Buffer Sizes with defaults
+    #[arg(long, default_value_t = 512 * 1024, value_name = "PERF_BUFFER_BYTES",
+          help="Size of each profiler perf buffer, in bytes (must be a power of 2)",
+          value_parser = value_is_power_of_2)]
+    perf_buffer_bytes: usize,
     // Print out info on eBPF map sizes
-    #[arg(long, help = "Print eBPF map sizes that can be configured")]
+    #[arg(long, help = "Print eBPF map sizes after creation")]
     mapsize_info: bool,
     // eBPF map stacks
-    #[arg(long, default_value_t = 100000)]
+    #[arg(
+        long,
+        default_value_t = 100000,
+        help = "max number of individual \
+        stacks to capture before aggregation"
+    )]
     mapsize_stacks: u32,
     // eBPF map aggregated_stacks
     #[arg(
         long,
         default_value_t = 10000,
-        help = "Derived from constant MAX_AGGREGATED_STACKS_ENTRIES"
+        help = "Derived from constant MAX_AGGREGATED_STACKS_ENTRIES - max \
+                number of unique stacks after aggregation"
     )]
     mapsize_aggregated_stacks: u32,
     // eBPF map unwind_info_chunks
-    #[arg(long, default_value_t = 5000)]
+    #[arg(
+        long,
+        default_value_t = 5000,
+        help = "max number of chunks allowed inside a shard"
+    )]
     mapsize_unwind_info_chunks: u32,
     // eBPF map unwind_tables
     #[arg(
@@ -258,10 +287,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     }));
 
     let profiler_config = ProfilerConfig {
+        // NOTE the difference in this arg name from the actual config name
         libbpf_debug: args.libbpf_logs,
         bpf_logging: args.bpf_logging,
         duration: args.duration,
         sample_freq: args.sample_freq,
+        perf_buffer_bytes: args.perf_buffer_bytes,
         mapsize_info: args.mapsize_info,
         mapsize_stacks: args.mapsize_stacks,
         mapsize_aggregated_stacks: args.mapsize_aggregated_stacks,
