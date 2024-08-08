@@ -127,7 +127,7 @@ impl AggregatorCollector {
     }
 }
 
-/// Aggregagates the samples in memory, which might be acceptable when profiling for short amounts of time.
+/// Aggregates the samples in memory, which might be acceptable when profiling for short amounts of time.
 impl Collector for AggregatorCollector {
     fn collect(
         &mut self,

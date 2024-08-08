@@ -1,3 +1,4 @@
+use core::str;
 use std::error::Error;
 use std::fs::File;
 use std::io::IsTerminal;
@@ -21,7 +22,7 @@ use tracing_subscriber::FmtSubscriber;
 use lightswitch::object::ObjectFile;
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::{fold_profile, to_pprof};
-use lightswitch::profiler::Profiler;
+use lightswitch::profiler::{Profiler, ProfilerConfig};
 use lightswitch::unwind_info::in_memory_unwind_info;
 use lightswitch::unwind_info::remove_redundant;
 use lightswitch::unwind_info::remove_unnecesary_markers;
@@ -59,6 +60,20 @@ fn sample_freq_in_range(s: &str) -> Result<u16, String> {
         }
     }
     Ok(sample_freq as u16)
+}
+
+// Return a value if it's a power of 2, otherwise Error
+fn value_is_power_of_two(s: &str) -> Result<usize, String> {
+    let value: usize = s
+        .parse()
+        .map_err(|_| format!("`{s}' isn't a valid usize"))?;
+    // Now we have a value, test whether it's a power of 2
+    // NOTE: Neither 0 nor 1 are a power of 2, so rule them out
+    if (value != 0) && (value != 1) && ((value & (value - 1)) == 0) {
+        Ok(value)
+    } else {
+        Err(format!("{} is not a power of 2", value))
+    }
 }
 
 /// Given a non-prime unsigned int, return the prime number that precedes it
@@ -152,6 +167,51 @@ struct Cli {
     /// Where to write the profile.
     #[arg(long, default_value_t, value_enum)]
     sender: ProfileSender,
+    // Buffer Sizes with defaults
+    #[arg(long, default_value_t = 512 * 1024, value_name = "PERF_BUFFER_BYTES",
+          help="Size of each profiler perf buffer, in bytes (must be a power of 2)",
+          value_parser = value_is_power_of_two)]
+    perf_buffer_bytes: usize,
+    // Print out info on eBPF map sizes
+    #[arg(long, help = "Print eBPF map sizes after creation")]
+    mapsize_info: bool,
+    // eBPF map stacks
+    #[arg(
+        long,
+        default_value_t = 100000,
+        help = "max number of individual \
+        stacks to capture before aggregation"
+    )]
+    mapsize_stacks: u32,
+    // eBPF map aggregated_stacks
+    #[arg(
+        long,
+        default_value_t = 10000,
+        help = "Derived from constant MAX_AGGREGATED_STACKS_ENTRIES - max \
+                number of unique stacks after aggregation"
+    )]
+    mapsize_aggregated_stacks: u32,
+    // eBPF map unwind_info_chunks
+    #[arg(
+        long,
+        default_value_t = 5000,
+        help = "max number of chunks allowed inside a shard"
+    )]
+    mapsize_unwind_info_chunks: u32,
+    // eBPF map unwind_tables
+    #[arg(
+        long,
+        default_value_t = 65,
+        help = "Derived from constant MAX_UNWIND_INFO_SHARDS"
+    )]
+    mapsize_unwind_tables: u32,
+    // eBPF map rate_limits
+    #[arg(
+        long,
+        default_value_t = 5000,
+        help = "Derived from constant MAX_PROCESSES"
+    )]
+    mapsize_rate_limits: u32,
 }
 
 /// Exit the main thread if any thread panics. We prefer this behaviour because pretty much every
@@ -227,12 +287,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }));
 
-    let mut p: Profiler<'_> = Profiler::new(
-        args.libbpf_logs,
-        args.bpf_logging,
-        args.duration,
-        args.sample_freq,
-    );
+    let profiler_config = ProfilerConfig {
+        // NOTE the difference in this arg name from the actual config name
+        libbpf_debug: args.libbpf_logs,
+        bpf_logging: args.bpf_logging,
+        duration: args.duration,
+        sample_freq: args.sample_freq,
+        perf_buffer_bytes: args.perf_buffer_bytes,
+        mapsize_info: args.mapsize_info,
+        mapsize_stacks: args.mapsize_stacks,
+        mapsize_aggregated_stacks: args.mapsize_aggregated_stacks,
+        mapsize_unwind_info_chunks: args.mapsize_unwind_info_chunks,
+        mapsize_unwind_tables: args.mapsize_unwind_tables,
+        mapsize_rate_limits: args.mapsize_rate_limits,
+    };
+    let mut p: Profiler<'_> = Profiler::new(profiler_config);
     p.profile_pids(args.pids);
     p.run(collector.clone());
 
@@ -295,7 +364,9 @@ mod tests {
     use super::*;
     use assert_cmd::Command;
     use clap::Parser;
+    use rand::distributions::{Distribution, Uniform};
     use rstest::rstest;
+    use std::collections::HashSet;
 
     #[test]
     fn verify_cli() {
@@ -312,7 +383,7 @@ mod tests {
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
         insta::assert_yaml_snapshot!(actual, @r###"
         ---
-        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-logs\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n          \n          [default: local-disk]\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n\n  -h, --help\n          Print help (see a summary with '-h')\n"
+        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-logs\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n          \n          [default: local-disk]\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-stacks <MAPSIZE_STACKS>\n          max number of individual stacks to capture before aggregation\n          \n          [default: 100000]\n\n      --mapsize-aggregated-stacks <MAPSIZE_AGGREGATED_STACKS>\n          Derived from constant MAX_AGGREGATED_STACKS_ENTRIES - max number of unique stacks after aggregation\n          \n          [default: 10000]\n\n      --mapsize-unwind-info-chunks <MAPSIZE_UNWIND_INFO_CHUNKS>\n          max number of chunks allowed inside a shard\n          \n          [default: 5000]\n\n      --mapsize-unwind-tables <MAPSIZE_UNWIND_TABLES>\n          Derived from constant MAX_UNWIND_INFO_SHARDS\n          \n          [default: 65]\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          Derived from constant MAX_PROCESSES\n          \n          [default: 5000]\n\n  -h, --help\n          Print help (see a summary with '-h')\n"
         "###);
     }
 
@@ -382,6 +453,44 @@ mod tests {
                 let actual_message = err.to_string();
                 assert!(actual_message.contains(expected_msg.as_str()));
             }
+        }
+    }
+
+    #[rstest]
+    fn should_be_powers_of_two() {
+        let mut test_uint_strings: Vec<String> = vec![];
+        for shift in 1..63 {
+            let val: usize = 2 << shift;
+            let val_str = val.to_string();
+            test_uint_strings.push(val_str);
+        }
+        for val_string in test_uint_strings {
+            assert!(value_is_power_of_two(val_string.as_str()).is_ok())
+        }
+    }
+
+    #[rstest]
+    fn should_not_be_powers_of_two() {
+        let mut test_uint_stringset: HashSet<String> = HashSet::new();
+        // usizes that ARE powers of two, for later exclusion
+        for shift in 0..63 {
+            let val: usize = 2 << shift;
+            let val_string = val.to_string();
+            test_uint_stringset.insert(val_string);
+        }
+        // Now, for a random sampling of 500000 integers in the range of usize,
+        // excluding any that are known to be powers of 2
+        let between = Uniform::from(0..=usize::MAX);
+        let mut rng = rand::thread_rng();
+        for _ in 0..500000 {
+            let usize_int: usize = between.sample(&mut rng);
+            let usize_int_string = usize_int.to_string();
+            if test_uint_stringset.contains(&usize_int_string) {
+                println!("{}", usize_int_string);
+                continue;
+            }
+            let result = value_is_power_of_two(usize_int_string.as_str());
+            assert!(result.is_err());
         }
     }
 }
