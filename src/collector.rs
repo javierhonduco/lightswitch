@@ -5,7 +5,7 @@ use std::time::Duration;
 use tracing::{debug, span, Level};
 
 use crate::object::ExecutableId;
-use crate::profile::{symbolize_profile, to_proto};
+use crate::profile::{symbolize_profile, to_pprof};
 use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
 use crate::profiler::{ObjectFileInfo, RawAggregatedSample};
@@ -90,7 +90,7 @@ impl Collector for StreamingCollector {
         let _span = span!(Level::DEBUG, "StreamingCollector.finish").entered();
 
         let symbolized_profile = symbolize_profile(&profile, procs, objs);
-        let pprof_builder = to_proto(symbolized_profile, procs, objs);
+        let pprof_builder = to_pprof(symbolized_profile, procs, objs);
         let pprof = pprof_builder.profile();
 
         let client_builder = reqwest::blocking::Client::builder().timeout(self.timeout);

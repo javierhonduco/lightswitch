@@ -21,7 +21,7 @@ use tracing_subscriber::FmtSubscriber;
 
 use lightswitch::object::ObjectFile;
 use lightswitch::profile::symbolize_profile;
-use lightswitch::profile::{fold_profile, to_proto};
+use lightswitch::profile::{fold_profile, to_pprof};
 use lightswitch::profiler::{Profiler, ProfilerConfig};
 use lightswitch::unwind_info::in_memory_unwind_info;
 use lightswitch::unwind_info::remove_redundant;
@@ -336,7 +336,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         ProfileFormat::Pprof => {
             let mut buffer = Vec::new();
-            let proto = to_proto(symbolized_profile, procs, objs);
+            let proto = to_pprof(symbolized_profile, procs, objs);
             proto.validate().unwrap();
             proto.profile().encode(&mut buffer).unwrap();
             let mut pprof_file =

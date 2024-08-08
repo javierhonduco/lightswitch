@@ -19,15 +19,15 @@ use crate::profiler::SymbolizedAggregatedSample;
 use crate::usym::symbolize_native_stack_blaze;
 
 /// Converts a given symbolized profile to Google's pprof.
-pub fn to_proto(
+pub fn to_pprof(
     profile: SymbolizedAggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
 ) -> PprofBuilder {
+    // TODO: pass right duration and frequency.
     let mut pprof = PprofBuilder::new(Duration::from_secs(5), 27);
 
     for sample in profile {
-        let pid = sample.pid;
         let ustack = sample.ustack;
         let kstack = sample.kstack;
         let mut location_ids = Vec::new();
@@ -51,7 +51,7 @@ pub fn to_proto(
         for uframe in ustack {
             let addr = uframe.virtual_address;
 
-            let Some(info) = procs.get(&pid) else {
+            let Some(info) = procs.get(&sample.pid) else {
                 // r.push("<could not find process>".to_string());
                 continue;
             };
@@ -98,12 +98,13 @@ pub fn to_proto(
         let labels = vec![
             pprof.new_label(
                 "pid",
-                LabelStringOrNumber::Number(pid.into(), "task-tgid".into()),
+                LabelStringOrNumber::Number(sample.pid.into(), "task-tgid".into()),
             ),
             pprof.new_label(
                 "pid",
-                LabelStringOrNumber::Number(pid.into(), "task-id".into()),
+                LabelStringOrNumber::Number(sample.tid.into(), "task-id".into()),
             ),
+            // TODO: add real thread name / comm.
             pprof.new_label("comm", LabelStringOrNumber::String("fake-comm".into())),
         ];
 
