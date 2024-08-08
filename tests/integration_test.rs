@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use lightswitch::collector::{AggregatorCollector, Collector};
 use lightswitch::profile::symbolize_profile;
-use lightswitch::profiler::Profiler;
 use lightswitch::profiler::SymbolizedAggregatedProfile;
+use lightswitch::profiler::{Profiler, ProfilerConfig};
 
 /// Find the `nix` binary either in the $PATH or in the below hardcoded location.
 fn nix_bin() -> String {
@@ -97,7 +97,21 @@ fn test_integration() {
     let collector = Arc::new(Mutex::new(
         Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
     ));
-    let mut p = Profiler::new(bpf_test_debug, bpf_test_debug, Duration::from_secs(5), 999);
+
+    let profiler_config = ProfilerConfig {
+        libbpf_debug: bpf_test_debug,     // changed from default
+        bpf_logging: bpf_test_debug,      // changed from default
+        duration: Duration::from_secs(5), // changed from default
+        sample_freq: 999,                 // changed from default
+        perf_buffer_bytes: 512 * 1024,
+        mapsize_info: false,
+        mapsize_stacks: 100000,
+        mapsize_aggregated_stacks: 10000,
+        mapsize_unwind_info_chunks: 5000,
+        mapsize_unwind_tables: 65,
+        mapsize_rate_limits: 5000,
+    };
+    let mut p = Profiler::new(profiler_config);
     p.profile_pids(vec![cpp_proc.pid()]);
     p.run(collector.clone());
     let collector = collector.lock().unwrap();
