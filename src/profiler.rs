@@ -163,7 +163,7 @@ pub struct Profiler<'bpf> {
     duration: Duration,
     // Per-CPU Sampling Frequency of this profile in Hz
     sample_freq: u16,
-    // Size of each perf buffer, in include_bytes!
+    // Size of each perf buffer, in bytes
     perf_buffer_bytes: usize,
     session_duration: Duration,
 }
@@ -297,11 +297,27 @@ pub struct ProfilerConfig {
     pub mapsize_rate_limits: u32,
 }
 
-// impl Default for Profiler<'_> {
-//     fn default() -> Self {
-//         Self::new(false, false, Duration::MAX, 19)
-//     }
-// }
+// Note that we zero out most of the fields in the default ProfilerConfig here,
+// as we're normally going to pass in the defaults from Clap, and we don't want
+// to be in the business of keeping the default values defined in Clap in sync
+// with the defaults defined here.
+impl Default for ProfilerConfig {
+    fn default() -> Self {
+        Self {
+            libbpf_debug: false,
+            bpf_logging: false,
+            duration: Duration::MAX,
+            sample_freq: 0,
+            perf_buffer_bytes: 0,
+            mapsize_info: false,
+            mapsize_stacks: 0,
+            mapsize_aggregated_stacks: 0,
+            mapsize_unwind_info_chunks: 0,
+            mapsize_unwind_tables: 0,
+            mapsize_rate_limits: 0,
+        }
+    }
+}
 
 impl Profiler<'_> {
     pub fn new(profiler_config: ProfilerConfig) -> Self {

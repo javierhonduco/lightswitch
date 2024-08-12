@@ -458,7 +458,7 @@ mod tests {
 
     #[rstest]
     fn should_be_powers_of_two() {
-        let mut test_uint_strings: Vec<String> = vec![];
+        let mut test_uint_strings = vec![];
         for shift in 1..63 {
             let val: usize = 2 << shift;
             let val_str = val.to_string();
@@ -486,7 +486,7 @@ mod tests {
             let usize_int: usize = between.sample(&mut rng);
             let usize_int_string = usize_int.to_string();
             if test_uint_stringset.contains(&usize_int_string) {
-                println!("{}", usize_int_string);
+                // We know this is a power of 2, already tested separately, skip
                 continue;
             }
             let result = value_is_power_of_two(usize_int_string.as_str());
