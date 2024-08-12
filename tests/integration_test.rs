@@ -4,6 +4,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crossbeam_channel::bounded;
+
 use lightswitch::collector::{AggregatorCollector, Collector};
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profiler::SymbolizedAggregatedProfile;
@@ -111,7 +113,8 @@ fn test_integration() {
         mapsize_unwind_tables: 65,
         mapsize_rate_limits: 5000,
     };
-    let mut p = Profiler::new(profiler_config);
+    let (_stop_signal_send, stop_signal_receive) = bounded(1);
+    let mut p = Profiler::new(profiler_config, stop_signal_receive);
     p.profile_pids(vec![cpp_proc.pid()]);
     p.run(collector.clone());
     let collector = collector.lock().unwrap();
