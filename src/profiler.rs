@@ -4,9 +4,12 @@ use std::fmt;
 use std::fs;
 use std::os::fd::{AsFd, AsRawFd};
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
+
+use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
+
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::anyhow;
 use libbpf_rs::num_possible_cpus;
@@ -120,7 +123,6 @@ impl ExecutableMapping {
 }
 pub struct NativeUnwindState {
     dirty: bool,
-    last_persisted: Instant,
     live_shard: Vec<stack_unwind_row_t>,
     known_executables: HashSet<ExecutableId>,
     shard_index: u64,
@@ -130,7 +132,6 @@ impl Default for NativeUnwindState {
     fn default() -> Self {
         Self {
             dirty: false,
-            last_persisted: Instant::now() - Duration::from_secs(1_000), // old enough to trigger it the first time
             live_shard: Vec::with_capacity(SHARD_CAPACITY),
             known_executables: HashSet::new(),
             shard_index: 0,
@@ -147,18 +148,20 @@ pub struct Profiler<'bpf> {
     procs: Arc<Mutex<HashMap<i32, ProcessInfo>>>,
     object_files: Arc<Mutex<HashMap<ExecutableId, ObjectFileInfo>>>,
     // Channel for new process events.
-    chan_send: Arc<Mutex<mpsc::Sender<Event>>>,
-    chan_receive: Arc<Mutex<mpsc::Receiver<Event>>>,
-    // Channel for munmaps events.
-    tracers_chan_send: Arc<Mutex<mpsc::Sender<TracerEvent>>>,
-    tracers_chan_receive: Arc<Mutex<mpsc::Receiver<TracerEvent>>>,
+    new_proc_chan_send: Arc<Sender<Event>>,
+    new_proc_chan_receive: Arc<Receiver<Event>>,
+    // Channel for tracer events such as munmaps and process exits.
+    tracers_chan_send: Arc<Sender<TracerEvent>>,
+    tracers_chan_receive: Arc<Receiver<TracerEvent>>,
+    // Profiler stop channel.
+    stop_chan_receive: Receiver<()>,
     // Native unwinding state
     native_unwind_state: NativeUnwindState,
     // Debug options
     filter_pids: HashMap<i32, bool>,
     // Profile channel
-    profile_send: Arc<Mutex<mpsc::Sender<RawAggregatedProfile>>>,
-    profile_receive: Arc<Mutex<mpsc::Receiver<RawAggregatedProfile>>>,
+    profile_send: Arc<Sender<RawAggregatedProfile>>,
+    profile_receive: Arc<Receiver<RawAggregatedProfile>>,
     // Duration of this profile
     duration: Duration,
     // Per-CPU Sampling Frequency of this profile in Hz
@@ -287,7 +290,9 @@ pub type SymbolizedAggregatedProfile = Vec<SymbolizedAggregatedSample>;
 
 impl Default for Profiler<'_> {
     fn default() -> Self {
-        Self::new(false, false, Duration::MAX, 19)
+        let (_stop_signal_send, stop_signal_receive) = bounded(1);
+
+        Self::new(false, false, Duration::MAX, 19, stop_signal_receive)
     }
 }
 
@@ -297,6 +302,7 @@ impl Profiler<'_> {
         bpf_logging: bool,
         duration: Duration,
         sample_freq: u16,
+        stop_signal_receive: Receiver<()>,
     ) -> Self {
         let mut skel_builder: ProfilerSkelBuilder = ProfilerSkelBuilder::default();
         skel_builder.obj_builder.debug(libbpf_debug);
@@ -326,19 +332,19 @@ impl Profiler<'_> {
         let procs = Arc::new(Mutex::new(HashMap::new()));
         let object_files = Arc::new(Mutex::new(HashMap::new()));
 
-        let (sender, receiver) = mpsc::channel();
-        let chan_send = Arc::new(Mutex::new(sender));
-        let chan_receive = Arc::new(Mutex::new(receiver));
+        let (sender, receiver) = unbounded();
+        let chan_send = Arc::new(sender);
+        let chan_receive = Arc::new(receiver);
 
-        let (sender, receiver) = mpsc::channel();
-        let tracers_chan_send = Arc::new(Mutex::new(sender));
-        let tracers_chan_receive = Arc::new(Mutex::new(receiver));
+        let (sender, receiver) = unbounded();
+        let tracers_chan_send = Arc::new(sender);
+        let tracers_chan_receive = Arc::new(receiver);
 
         let native_unwind_state = NativeUnwindState::default();
 
-        let (sender, receiver) = mpsc::channel();
-        let profile_send: Arc<Mutex<mpsc::Sender<_>>> = Arc::new(Mutex::new(sender));
-        let profile_receive = Arc::new(Mutex::new(receiver));
+        let (sender, receiver) = unbounded();
+        let profile_send = Arc::new(sender);
+        let profile_receive = Arc::new(receiver);
 
         let filter_pids = HashMap::new();
 
@@ -348,10 +354,11 @@ impl Profiler<'_> {
             tracers,
             procs,
             object_files,
-            chan_send,
-            chan_receive,
+            new_proc_chan_send: chan_send,
+            new_proc_chan_receive: chan_receive,
             tracers_chan_send,
             tracers_chan_receive,
+            stop_chan_receive: stop_signal_receive,
             native_unwind_state,
             filter_pids,
             profile_send,
@@ -370,11 +377,7 @@ impl Profiler<'_> {
     }
 
     pub fn send_profile(&mut self, profile: RawAggregatedProfile) {
-        self.profile_send
-            .lock()
-            .expect("sender lock")
-            .send(profile)
-            .expect("handle send");
+        self.profile_send.send(profile).expect("handle send");
     }
 
     pub fn run(mut self, collector: ThreadSafeCollector) {
@@ -393,7 +396,7 @@ impl Profiler<'_> {
         self.tracers.attach().expect("attach tracers");
 
         // New process events.
-        let chan_send = self.chan_send.clone();
+        let chan_send = self.new_proc_chan_send.clone();
         let perf_buffer = PerfBufferBuilder::new(self.bpf.maps().events())
             .pages(PERF_BUFFER_BYTES / page_size::get())
             .sample_cb(move |_cpu: i32, data: &[u8]| {
@@ -416,8 +419,6 @@ impl Profiler<'_> {
                     let mut event = tracer_event_t::default();
                     plain::copy_from_bytes(&mut event, data).expect("serde tracers event");
                     tracers_send
-                        .lock()
-                        .expect("sender lock")
                         .send(TracerEvent::from(event))
                         .expect("handle event send");
                 })
@@ -439,7 +440,7 @@ impl Profiler<'_> {
         let collector = collector.clone();
 
         thread::spawn(move || loop {
-            match profile_receive.lock().unwrap().recv() {
+            match profile_receive.recv() {
                 Ok(profile) => {
                     collector.lock().unwrap().collect(
                         profile,
@@ -453,70 +454,56 @@ impl Profiler<'_> {
             }
         });
 
-        let start_time: Instant = Instant::now();
-        let mut time_since_last_scheduled_collection: Instant = Instant::now();
+        let ticks = tick(self.duration);
+        let persist_ticks = tick(Duration::from_millis(100));
 
         loop {
-            if start_time.elapsed() >= self.duration {
-                debug!("done after running for {:?}", start_time.elapsed());
-                let profile = self.collect_profile();
-                self.send_profile(profile);
-                break;
-            }
-
-            if time_since_last_scheduled_collection.elapsed() >= self.session_duration {
-                debug!("collecting profiles on schedule");
-                let profile = self.collect_profile();
-                self.send_profile(profile);
-                time_since_last_scheduled_collection = Instant::now();
-            }
-
-            let read = self
-                .tracers_chan_receive
-                .lock()
-                .expect("receive lock")
-                .recv_timeout(Duration::from_millis(50));
-
-            match read {
-                Ok(TracerEvent::Munmap(pid, start_address)) => {
-                    self.handle_munmap(pid, start_address);
+            select! {
+                recv(self.stop_chan_receive) -> _ => {
+                    println!("aa ctrl+c");
+                    let profile = self.collect_profile();
+                    self.send_profile(profile);
+                    break;
+                },
+                recv(ticks) -> _ => {
+                    debug!("collecting profiles on schedule");
+                    let profile = self.collect_profile();
+                    self.send_profile(profile);
+                    break;
                 }
-                Ok(TracerEvent::ProcessExit(pid)) => {
-                    self.handle_process_exit(pid);
-                }
-                Err(_) => {}
-            }
-
-            let read = self
-                .chan_receive
-                .lock()
-                .expect("receive lock")
-                .recv_timeout(Duration::from_millis(150));
-
-            if let Ok(event) = read {
-                if event.type_ == event_type_EVENT_NEW_PROCESS {
-                    self.event_new_proc(event.pid);
-                    // Ensure we only remove the rate limits only if the above works.
-                    // This is probably suited for a batched operation.
-                    // let _ = self
-                    //    .bpf
-                    //    .maps()
-                    //    .rate_limits()
-                    //    .delete(unsafe { plain::as_bytes(&event) });
-                } else {
-                    error!("unknown event type {}", event.type_);
-                }
-            }
-
-            let due_to_persist =
-                self.native_unwind_state.last_persisted.elapsed() > Duration::from_millis(100);
-
-            if self.native_unwind_state.dirty
-                && due_to_persist
-                && self.persist_unwind_info(&self.native_unwind_state.live_shard)
-            {
-                self.native_unwind_state.dirty = false;
-                self.native_unwind_state.last_persisted = Instant::now();
+                recv(self.tracers_chan_receive) -> read => {
+                        match read {
+                            Ok(TracerEvent::Munmap(pid, start_address)) => {
+                                self.handle_munmap(pid, start_address);
+                            }
+                            Ok(TracerEvent::ProcessExit(pid)) => {
+                                self.handle_process_exit(pid);
+                            }
+                            Err(_) => {}
+                        }
+                },
+                recv(self.new_proc_chan_receive) -> read => {
+                        if let Ok(event) = read {
+                            if event.type_ == event_type_EVENT_NEW_PROCESS {
+                                self.event_new_proc(event.pid);
+                                // Ensure we only remove the rate limits only if the above works.
+                                // This is probably suited for a batched operation.
+                                // let _ = self
+                                //    .bpf
+                                //    .maps()
+                                //    .rate_limits()
+                                //    .delete(unsafe { plain::as_bytes(&event) });
+                            } else {
+                                error!("unknown event type {}", event.type_);
+                            }
+                        }
+                    },
+                recv(persist_ticks) -> _ => {
+                    if self.native_unwind_state.dirty && self.persist_unwind_info(&self.native_unwind_state.live_shard) {
+                        self.native_unwind_state.dirty = false;
+                    }
+                },
+                default(Duration::from_millis(100)) => {},
             }
         }
     }
@@ -1256,13 +1243,9 @@ impl Profiler<'_> {
         Ok(())
     }
 
-    fn handle_event(sender: &Arc<Mutex<std::sync::mpsc::Sender<Event>>>, data: &[u8]) {
+    fn handle_event(sender: &Arc<Sender<Event>>, data: &[u8]) {
         let event = plain::from_bytes(data).expect("handle event serde");
-        sender
-            .lock()
-            .expect("sender lock")
-            .send(*event)
-            .expect("handle event send");
+        sender.send(*event).expect("handle event send");
     }
 
     fn handle_lost_events(cpu: i32, count: u64) {

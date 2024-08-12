@@ -35,6 +35,9 @@ nix = { version = "0.29.0", features = ["user"] }
 prost = "0.12" # Needed to encode protocol buffers to bytes.
 reqwest = { version = "0.12", features = ["blocking"] }
 lightswitch-proto = { path = "./lightswitch-proto"}
+ctrlc = "3.4.4"
+v = "0.1.0"
+crossbeam-channel = "0.5.13"
 
 [dev-dependencies]
 assert_cmd = { version = "2.0.14" }

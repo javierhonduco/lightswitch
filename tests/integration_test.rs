@@ -4,6 +4,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crossbeam_channel::bounded;
+
 use lightswitch::collector::{AggregatorCollector, Collector};
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profiler::Profiler;
@@ -97,7 +99,14 @@ fn test_integration() {
     let collector = Arc::new(Mutex::new(
         Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
     ));
-    let mut p = Profiler::new(bpf_test_debug, bpf_test_debug, Duration::from_secs(5), 999);
+    let (_stop_signal_send, stop_signal_receive) = bounded(1);
+    let mut p = Profiler::new(
+        bpf_test_debug,
+        bpf_test_debug,
+        Duration::from_secs(5),
+        999,
+        stop_signal_receive,
+    );
     p.profile_pids(vec![cpp_proc.pid()]);
     p.run(collector.clone());
     let collector = collector.lock().unwrap();
