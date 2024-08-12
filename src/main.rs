@@ -9,12 +9,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use clap::Parser;
+use crossbeam_channel::bounded;
 use inferno::flamegraph;
 use lightswitch::collector::{AggregatorCollector, Collector, NullCollector, StreamingCollector};
 use nix::unistd::Uid;
 use primal::is_prime;
 use prost::Message;
-use tracing::{error, Level};
+use tracing::{error, info, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
@@ -227,11 +228,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }));
 
+    let (stop_signal_sender, stop_signal_receive) = bounded(1);
+
+    ctrlc::set_handler(move || {
+        info!("received Ctrl+C, stopping...");
+        let _ = stop_signal_sender.send(());
+    })
+    .expect("Error setting Ctrl-C handler");
+
     let mut p: Profiler<'_> = Profiler::new(
         args.libbpf_logs,
         args.bpf_logging,
         args.duration,
         args.sample_freq,
+        stop_signal_receive,
     );
     p.profile_pids(args.pids);
     p.run(collector.clone());
