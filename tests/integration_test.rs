@@ -101,17 +101,11 @@ fn test_integration() {
     ));
 
     let profiler_config = ProfilerConfig {
-        libbpf_debug: bpf_test_debug,     // changed from default
-        bpf_logging: bpf_test_debug,      // changed from default
-        duration: Duration::from_secs(5), // changed from default
-        sample_freq: 999,                 // changed from default
-        perf_buffer_bytes: 512 * 1024,
-        mapsize_info: false,
-        mapsize_stacks: 100000,
-        mapsize_aggregated_stacks: 10000,
-        mapsize_unwind_info_chunks: 5000,
-        mapsize_unwind_tables: 65,
-        mapsize_rate_limits: 5000,
+        libbpf_debug: bpf_test_debug,
+        bpf_logging: bpf_test_debug,
+        duration: Duration::from_secs(5),
+        sample_freq: 999,
+        ..Default::default()
     };
     let (_stop_signal_send, stop_signal_receive) = bounded(1);
     let mut p = Profiler::new(profiler_config, stop_signal_receive);

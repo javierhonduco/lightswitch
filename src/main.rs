@@ -63,17 +63,28 @@ fn sample_freq_in_range(s: &str) -> Result<u16, String> {
     Ok(sample_freq as u16)
 }
 
-// Return a value if it's a power of 2, otherwise Error
+// Clap value_parser() in the form of: Fn(&str) -> Result<T,E>
+// Convert a &str into a usize, if possible, and return the result if it's a
+// power of 2, otherwise Error
 fn value_is_power_of_two(s: &str) -> Result<usize, String> {
     let value: usize = s
         .parse()
         .map_err(|_| format!("`{s}' isn't a valid usize"))?;
     // Now we have a value, test whether it's a power of 2
-    // NOTE: Neither 0 nor 1 are a power of 2, so rule them out
-    if (value != 0) && (value != 1) && ((value & (value - 1)) == 0) {
+    if is_power_of_two(value) {
         Ok(value)
     } else {
         Err(format!("{} is not a power of 2", value))
+    }
+}
+
+fn is_power_of_two(v: usize) -> bool {
+    // NOTE: Neither 0 nor 1 are a power of 2 (ignoring 2^0 for this use case),
+    //       so rule them out
+    if (v != 0) && (v != 1) && ((v & (v - 1)) == 0) {
+        true
+    } else {
+        false
     }
 }
 
@@ -375,7 +386,7 @@ mod tests {
     use assert_cmd::Command;
     use clap::Parser;
     use rand::distributions::{Distribution, Uniform};
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::collections::HashSet;
 
     #[test]
@@ -466,27 +477,37 @@ mod tests {
         }
     }
 
-    #[rstest]
-    fn should_be_powers_of_two() {
-        let mut test_uint_strings = vec![];
-        for shift in 1..63 {
+    // Powers of 2 in usize range
+    #[fixture]
+    fn power_of_two_usize() -> Vec<usize> {
+        let mut test_usizes = vec![];
+        for shift in 0..63 {
             let val: usize = 2 << shift;
+            test_usizes.push(val);
+        }
+        test_usizes
+    }
+
+    // Powers of 2 represented as Strings
+    #[fixture]
+    fn power_of_two_strings(power_of_two_usize: Vec<usize>) -> Vec<String> {
+        let mut test_uint_strings = vec![];
+        for val in power_of_two_usize {
             let val_str = val.to_string();
             test_uint_strings.push(val_str);
         }
-        for val_string in test_uint_strings {
-            assert!(value_is_power_of_two(val_string.as_str()).is_ok())
-        }
+        test_uint_strings
     }
 
-    #[rstest]
-    fn should_not_be_powers_of_two() {
-        let mut test_uint_stringset: HashSet<String> = HashSet::new();
+    // This fixture produces 5 million random results from the range of usize
+    // integers that are NOT powers of 2
+    #[fixture]
+    fn all_but_power_of_two_usize(power_of_two_usize: Vec<usize>) -> Vec<usize> {
+        let mut test_usize_set: HashSet<usize> = HashSet::new();
+        let mut test_usize_not_p2: Vec<usize> = vec![];
         // usizes that ARE powers of two, for later exclusion
-        for shift in 0..63 {
-            let val: usize = 2 << shift;
-            let val_string = val.to_string();
-            test_uint_stringset.insert(val_string);
+        for val in power_of_two_usize {
+            test_usize_set.insert(val);
         }
         // Now, for a random sampling of 500000 integers in the range of usize,
         // excluding any that are known to be powers of 2
@@ -494,12 +515,54 @@ mod tests {
         let mut rng = rand::thread_rng();
         for _ in 0..500000 {
             let usize_int: usize = between.sample(&mut rng);
-            let usize_int_string = usize_int.to_string();
-            if test_uint_stringset.contains(&usize_int_string) {
+            if test_usize_set.contains(&usize_int) {
                 // We know this is a power of 2, already tested separately, skip
                 continue;
             }
-            let result = value_is_power_of_two(usize_int_string.as_str());
+            test_usize_not_p2.push(usize_int);
+        }
+        test_usize_not_p2
+    }
+
+    // all_but_power_of_two_usize, but as Strings
+    #[fixture]
+    fn all_but_power_of_two_strings(all_but_power_of_two_usize: Vec<usize>) -> Vec<String> {
+        let mut test_uint_strings: Vec<String> = vec![];
+        for val in all_but_power_of_two_usize {
+            let val_str = val.to_string();
+            test_uint_strings.push(val_str);
+        }
+        test_uint_strings
+    }
+
+    // Testing is_power_of_two predicate used by perf_buffer_bytes
+    // value_parser()
+    #[rstest]
+    fn test_should_be_powers_of_two(power_of_two_usize: Vec<usize>) {
+        for val in power_of_two_usize {
+            assert!(is_power_of_two(val))
+        }
+    }
+
+    #[rstest]
+    fn test_should_not_be_powers_of_two(all_but_power_of_two_usize: Vec<usize>) {
+        for val in all_but_power_of_two_usize {
+            assert!(!is_power_of_two(val))
+        }
+    }
+
+    // Testing the value_parser() implementation for perf_buffer_bytes
+    #[rstest]
+    fn args_should_be_powers_of_two(power_of_two_strings: Vec<String>) {
+        for val_string in power_of_two_strings {
+            assert!(value_is_power_of_two(val_string.as_str()).is_ok())
+        }
+    }
+
+    #[rstest]
+    fn args_should_not_be_powers_of_two(all_but_power_of_two_strings: Vec<String>) {
+        for non_p2_string in all_but_power_of_two_strings {
+            let result = value_is_power_of_two(&non_p2_string.as_str());
             assert!(result.is_err());
         }
     }

@@ -300,24 +300,24 @@ pub struct ProfilerConfig {
     pub mapsize_rate_limits: u32,
 }
 
-// Note that we zero out most of the fields in the default ProfilerConfig here,
-// as we're normally going to pass in the defaults from Clap, and we don't want
+// Note that we normally pass in the defaults from Clap, and we don't want
 // to be in the business of keeping the default values defined in Clap in sync
-// with the defaults defined here.
+// with the defaults defined here.  So these are some defaults that will
+// almost always be overridden.
 impl Default for ProfilerConfig {
     fn default() -> Self {
         Self {
             libbpf_debug: false,
             bpf_logging: false,
             duration: Duration::MAX,
-            sample_freq: 0,
-            perf_buffer_bytes: 0,
+            sample_freq: 19,
+            perf_buffer_bytes: 512 * 1024,
             mapsize_info: false,
-            mapsize_stacks: 0,
-            mapsize_aggregated_stacks: 0,
-            mapsize_unwind_info_chunks: 0,
-            mapsize_unwind_tables: 0,
-            mapsize_rate_limits: 0,
+            mapsize_stacks: 100000,
+            mapsize_aggregated_stacks: 10000,
+            mapsize_unwind_info_chunks: 5000,
+            mapsize_unwind_tables: 65,
+            mapsize_rate_limits: 5000,
         }
     }
 }
@@ -501,8 +501,8 @@ impl Profiler<'_> {
             })
             .lost_cb(Self::handle_lost_events)
             .build()
-            // TODO: Instead of unwrap, consume and emit any error - usually
-            // about buffer bytes not being a power of 2
+            // TODO: Instead of unwrap, consume and emit any error, with
+            // .expect() perhaps?
             .unwrap();
 
         let _poll_thread = thread::spawn(move || loop {
@@ -525,8 +525,8 @@ impl Profiler<'_> {
                     warn!("lost {} events from the tracers", lost_count);
                 })
                 .build()
-                // TODO: Instead of unwrap, consume and emit any error - usually
-                // about buffer bytes not being a power of 2
+                // TODO: Instead of unwrap, consume and emit any error, with
+                // .expect() perhaps?
                 .unwrap();
 
         let _tracers_poll_thread = thread::spawn(move || loop {
