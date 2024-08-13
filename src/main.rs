@@ -81,11 +81,7 @@ fn value_is_power_of_two(s: &str) -> Result<usize, String> {
 fn is_power_of_two(v: usize) -> bool {
     // NOTE: Neither 0 nor 1 are a power of 2 (ignoring 2^0 for this use case),
     //       so rule them out
-    if (v != 0) && (v != 1) && ((v & (v - 1)) == 0) {
-        true
-    } else {
-        false
-    }
+    (v != 0) && (v != 1) && ((v & (v - 1)) == 0)
 }
 
 /// Given a non-prime unsigned int, return the prime number that precedes it
