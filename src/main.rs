@@ -323,6 +323,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         mapsize_unwind_tables: args.mapsize_unwind_tables,
         mapsize_rate_limits: args.mapsize_rate_limits,
         exclude_self: args.exclude_self,
+        ..Default::default()
     };
 
     let (stop_signal_sender, stop_signal_receive) = bounded(1);

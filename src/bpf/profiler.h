@@ -16,22 +16,37 @@ _Static_assert(MAX_TAIL_CALLS *MAX_STACK_DEPTH_PER_PROGRAM >= MAX_STACK_DEPTH,
 #define MAX_STACK_COUNTS_ENTRIES 10240
 // Maximum number of processes we are willing to track.
 #define MAX_PROCESSES 5000
-// Binary search iterations for dwarf based stack walking.
-// 2^19 can bisect ~524_288 entries.
-#define MAX_BINARY_SEARCH_DEPTH 19
-// Size of the unwind table.
-// 100k * sizeof(stack_unwind_row_t) = 1.4MB
-#define MAX_UNWIND_TABLE_SIZE 100 * 1000
-_Static_assert(1 << MAX_BINARY_SEARCH_DEPTH >= MAX_UNWIND_TABLE_SIZE,
-               "unwind table is big enough");
+// Maximum number of memory mappings entries we can store in the LPM trie. This is shared across all
+// the processes and assumes an average of 200 entries per process. These are LPM entries that in most
+// cases will be higher than the number of mappings.
+#define MAX_MAPPINGS MAX_PROCESSES * 200
+// Binary search iterations to find unwind information.
+#define MAX_BINARY_SEARCH_DEPTH 17
+// Number of entries in the outer unwind map.
+#define MAX_OUTER_UNWIND_MAP_ENTRIES 500
+
+#define UNWIND_INFO_PAGE_BIT_LEN 16
+#define UNWIND_INFO_PAGE_SIZE (1 << UNWIND_INFO_PAGE_BIT_LEN)
+#define PREVIOUS_PAGE(address) (address - UNWIND_INFO_PAGE_SIZE)
+_Static_assert(MAX_BINARY_SEARCH_DEPTH >= UNWIND_INFO_PAGE_BIT_LEN, "unwind table is big enough");
+#define HIGH_PC_MASK 0x0000FFFFFFFF0000LLU
+#define LOW_PC_MASK  0x000000000000FFFFLLU
+#define HIGH_PC(addr) (addr & HIGH_PC_MASK)
+#define LOW_PC(addr) (addr & LOW_PC_MASK)
+
+#define MAX_EXECUTABLE_TO_PAGE_ENTRIES 500 * 1000
+typedef struct {
+  u64 executable_id;
+  u64 file_offset;
+} page_key_t;
+
+typedef struct {
+  u32 bucket_id;
+  u32 left;
+  u32 size;
+} page_value_t;
 
 #define MAX_AGGREGATED_STACKS_ENTRIES 10000
-
-// Unwind tables bigger than can't fit in the remaining space
-// of the current shard are broken up into chunks up to `MAX_UNWIND_TABLE_SIZE`.
-#define MAX_UNWIND_TABLE_CHUNKS 30
-// Maximum memory mappings per process.
-#define MAX_MAPPINGS_PER_PROCESS 300
 
 // Values for dwarf expressions.
 #define DWARF_EXPRESSION_UNKNOWN 0
@@ -106,21 +121,6 @@ const volatile struct lightswitch_config_t lightswitch_config = {
     }                                                                          \
   })
 
-// Unwind tables are splitted in chunks and each chunk
-// maps to a range of unwind rows within a shard.
-typedef struct {
-  u64 low_pc;
-  u64 high_pc;
-  u64 shard_index;
-  u64 low_index;
-  u64 high_index;
-} chunk_info_t;
-
-// Unwind table shards for an executable mapping.
-typedef struct {
-  chunk_info_t chunks[MAX_UNWIND_TABLE_CHUNKS];
-} unwind_info_chunks_t;
-
 // The addresses of a native stack trace.
 typedef struct {
   u64 len;
@@ -147,22 +147,16 @@ struct exec_mappings_key {
 // Prefix size in bits, excluding the prefix length.
 #define PREFIX_LEN (sizeof(struct exec_mappings_key) - sizeof(u32)) * 8;
 
-// A row in the stack unwinding table for x86_64.
 typedef struct __attribute__((packed)) {
-  u64 pc;
+  u16 pc_low;
   u8 cfa_type;
   u8 rbp_type;
   u16 cfa_offset;
   s16 rbp_offset;
 } stack_unwind_row_t;
 
-_Static_assert(sizeof(stack_unwind_row_t) == 14,
+_Static_assert(sizeof(stack_unwind_row_t) == 8,
                "unwind row has the expected size");
-
-// Unwinding table representation.
-typedef struct {
-  stack_unwind_row_t rows[MAX_UNWIND_TABLE_SIZE];
-} stack_unwind_table_t;
 
 typedef struct {
   unsigned long long addresses[MAX_STACK_DEPTH];

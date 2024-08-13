@@ -34,6 +34,44 @@ struct {
   __type(value, unwind_state_t);
 } heap SEC(".maps");
 
+// Maps to store unwind information. We have an 'outer' map for every
+// bucket size we have. The bucket capacities are defined in userspace
+// and they'll determine how many unwind entries fit in every bucket.
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
+  __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);
+  __type(key, u64);
+  __type(value, u32);
+} outer_map_0 SEC(".maps");
+
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
+  __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);
+  __type(key, u64);
+  __type(value, u32);
+} outer_map_1 SEC(".maps");
+
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
+  __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);
+  __type(key, u64);
+  __type(value, u32);
+} outer_map_2 SEC(".maps");
+
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
+  __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);
+  __type(key, u64);
+  __type(value, u32);
+} outer_map_3 SEC(".maps");
+
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
+  __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);
+  __type(key, u64);
+  __type(value, u32);
+} outer_map_4 SEC(".maps");
+
 struct {
   __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
   __uint(max_entries, 5);
@@ -48,20 +86,12 @@ struct {
   __uint(max_entries, 0);
 } events SEC(".maps");
 
-// Mapping of executable ID to unwind info chunks.
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __uint(max_entries, 5 * 1000);
-  __type(key, u64);
-  __type(value, unwind_info_chunks_t);
-} unwind_info_chunks SEC(".maps");
-
-struct {
-  __uint(type, BPF_MAP_TYPE_HASH);
-  __uint(max_entries, MAX_UNWIND_INFO_SHARDS);
-  __type(key, u64);
-  __type(value, stack_unwind_table_t);
-} unwind_tables SEC(".maps");
+  __uint(max_entries, MAX_EXECUTABLE_TO_PAGE_ENTRIES);
+  __type(key, page_key_t);
+  __type(value, page_value_t);
+} executable_to_page SEC(".maps");
 
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
@@ -73,10 +103,9 @@ struct {
 
 // Binary search the unwind table to find the row index containing the unwind
 // information for a given program counter (pc) relative to the object file.
-static __always_inline u64 find_offset_for_pc(stack_unwind_table_t *table, u64 pc, u64 left,
+static __always_inline u64 find_offset_for_pc(void *inner_map, u16 pc_low, u64 left,
                               u64 right) {
   u64 found = BINARY_SEARCH_DEFAULT;
-
 
   // On kernels ~6.8 and greater the verifier fails with argument list too long. This did not use to
   // happen before and it's probably due to a regression in the way the verifier accounts for the explored
@@ -93,15 +122,13 @@ static __always_inline u64 find_offset_for_pc(stack_unwind_table_t *table, u64 p
     }
 
     u32 mid = (left + right) / 2;
-    // Appease the verifier.
-    if (mid < 0 || mid >= MAX_UNWIND_TABLE_SIZE) {
-      LOG("\t.should never happen, mid: %lu, max: %lu", mid,
-          MAX_UNWIND_TABLE_SIZE);
-      bump_unwind_error_should_never_happen();
-      return BINARY_SEARCH_SHOULD_NEVER_HAPPEN;
+
+    stack_unwind_row_t *row = bpf_map_lookup_elem(inner_map, &mid);
+    if (row == NULL) {
+      return BINARY_SEARCH_DEFAULT;
     }
 
-    if (table->rows[mid].pc <= pc) {
+    if (row->pc_low <= pc_low) {
       found = mid;
       left = mid + 1;
     } else {
@@ -111,40 +138,51 @@ static __always_inline u64 find_offset_for_pc(stack_unwind_table_t *table, u64 p
   return BINARY_SEARCH_EXHAUSTED_ITERATIONS;
 }
 
+void* find_map_for_bucket(u32 bucket_id) {
+  void *outer_map = NULL;
+
+  if (bucket_id == 0) {
+    outer_map = &outer_map_0;
+  } else if (bucket_id == 1) {
+    outer_map = &outer_map_1;
+  } else if (bucket_id == 2) {
+    outer_map = &outer_map_2;
+  } else if (bucket_id == 3) {
+    outer_map = &outer_map_3;
+  } else if (bucket_id == 4) {
+    outer_map = &outer_map_4;
+  }
+
+  return outer_map;
+}
+
 // Finds the shard information for a given pid and program counter. Optionally,
 // and offset can be passed that will be filled in with the mapping's load
 // address.
-static __always_inline chunk_info_t*
-find_chunk(mapping_t *mapping, u64 object_relative_pc) {
-  u64 executable_id = mapping->executable_id;
+static __always_inline void*
+find_page(mapping_t *mapping, u64 object_relative_pc, u64 *left, u64 *right) {
+  page_key_t page_key = {
+    .executable_id = mapping->executable_id,
+    .file_offset = object_relative_pc,
+  };
 
-  LOG("~about to check chunks, executable_id=%lld", executable_id);
-  // Find the chunk where this unwind table lives.
-  // Each chunk maps to exactly one shard.
-  unwind_info_chunks_t *chunks =
-      bpf_map_lookup_elem(&unwind_info_chunks, &executable_id);
-  if (chunks == NULL) {
-    LOG("[error] chunks is null for executable %llu", executable_id);
-    return NULL;
-  }
+  page_value_t *found_page = bpf_map_lookup_elem(&executable_to_page, &page_key);
 
-  for (int i = 0; i < MAX_UNWIND_TABLE_CHUNKS; i++) {
-    if (chunks->chunks[i].low_pc == 0) {
-      LOG("[info] reached last chunk");
-      break;
+  if (found_page != NULL) {
+    void *outer_map = find_map_for_bucket(found_page->bucket_id);
+    if (outer_map == NULL) {
+      return NULL;
     }
 
-    LOG("[debug] checking chunk low %llx adj pc %llx high %llx",
-               chunks->chunks[i].low_pc, object_relative_pc,
-               chunks->chunks[i].high_pc);
-    if (chunks->chunks[i].low_pc <= object_relative_pc &&
-        object_relative_pc <= chunks->chunks[i].high_pc) {
-      LOG("[debug] found chunk");
-      return &chunks->chunks[i];
+    void *inner_map = bpf_map_lookup_elem(outer_map, &mapping->executable_id);
+    if (inner_map != NULL) {
+      *left = found_page->left;
+      *right = found_page->size;
+      return inner_map;
     }
   }
 
-  LOG("[error] could not find chunk");
+  LOG("[error] could not find page");
   bump_unwind_error_chunk_not_found();
   return NULL;
 }
@@ -349,52 +387,56 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     }
 
     u64 object_relative_pc = unwind_state->ip - mapping->load_address;
-    chunk_info_t *chunk_info = find_chunk(mapping, object_relative_pc);
-    if (chunk_info == NULL) {
+    u64 object_relative_pc_high = HIGH_PC(object_relative_pc);
+    u16 object_relative_pc_low = LOW_PC(object_relative_pc);
+
+    u64 left = 0;
+    u64 right = 0;
+    void *inner = find_page(mapping, object_relative_pc_high, &left, &right);
+    if (inner == NULL) {
+      // TODO: add counter
       return 1;
     }
 
-    stack_unwind_table_t *unwind_table =
-        bpf_map_lookup_elem(&unwind_tables, &chunk_info->shard_index);
-    if (unwind_table == NULL) {
-      LOG("unwind table is null :( for shard %llu", chunk_info->shard_index);
-      return 0;
-    }
-
-    LOG("le load address: %llx", mapping->load_address);
-
-    u64 left = chunk_info->low_index;
-    u64 right = chunk_info->high_index;
-    LOG("========== left %llu right %llu (shard index %d)", left, right,
-        chunk_info->shard_index);
-
-    u64 table_idx = find_offset_for_pc(unwind_table, object_relative_pc, left, right);
+    u64 table_idx = find_offset_for_pc(inner, object_relative_pc_low, left, right);
 
     if (table_idx == BINARY_SEARCH_DEFAULT ||
         table_idx == BINARY_SEARCH_SHOULD_NEVER_HAPPEN ||
         table_idx == BINARY_SEARCH_EXHAUSTED_ITERATIONS) {
-      LOG("[error] binary search failed with %llx, pc: %llx", table_idx, unwind_state->ip);
-      if (table_idx == BINARY_SEARCH_EXHAUSTED_ITERATIONS) {
-        bump_unwind_error_binary_search_exausted_iterations();
+
+      bool in_previous_page = false;
+
+      if (table_idx == BINARY_SEARCH_DEFAULT) {
+        left -= 1;
+        stack_unwind_row_t *previous_row = bpf_map_lookup_elem(inner, &left);
+        if (previous_row != NULL && object_relative_pc > PREVIOUS_PAGE(object_relative_pc_high) + previous_row->pc_low) {
+          table_idx = left;
+          in_previous_page = true;
+        }
       }
-      return 1;
+
+      if (!in_previous_page) {
+        LOG("[error] binary search failed with %llx, pc: %llx", table_idx, unwind_state->ip);
+        if (table_idx == BINARY_SEARCH_EXHAUSTED_ITERATIONS) {
+          bump_unwind_error_binary_search_exausted_iterations();
+        }
+        return 1;
+      }
     }
 
     LOG("\t=> table_index: %d", table_idx);
     LOG("\t=> object relative pc: %llx", object_relative_pc);
 
-    // Appease the verifier.
-    if (table_idx < 0 || table_idx >= MAX_UNWIND_TABLE_SIZE) {
-      LOG("\t[error] this should never happen");
-      bump_unwind_error_should_never_happen();
+    stack_unwind_row_t *row = bpf_map_lookup_elem(inner, &table_idx);
+    if (row == NULL) {
       return 1;
     }
 
-    u64 found_pc = unwind_table->rows[table_idx].pc;
-    u8 found_cfa_type = unwind_table->rows[table_idx].cfa_type;
-    u8 found_rbp_type = unwind_table->rows[table_idx].rbp_type;
-    s16 found_cfa_offset = unwind_table->rows[table_idx].cfa_offset;
-    s16 found_rbp_offset = unwind_table->rows[table_idx].rbp_offset;
+    u64 found_pc = object_relative_pc_high + row->pc_low;
+    u8 found_cfa_type = row->cfa_type;
+    u8 found_rbp_type = row->rbp_type;
+    s16 found_cfa_offset = row->cfa_offset;
+    s16 found_rbp_offset = row->rbp_offset;
     LOG("\tcfa type: %d, offset: %d (row pc: %llx)", found_cfa_type,
         found_cfa_offset, found_pc);
 

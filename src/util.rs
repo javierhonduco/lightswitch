@@ -1,5 +1,6 @@
-use anyhow::{Context, Error};
 use std::{fs::File, io::Read};
+
+use anyhow::{Context, Error};
 
 #[derive(Debug, PartialEq)]
 pub struct AddressBlockRange {
@@ -82,6 +83,7 @@ mod tests {
     use tempdir::TempDir;
 
     use libbpf_rs::libbpf_sys;
+    use libbpf_rs::MapCore;
     use libbpf_rs::MapFlags;
     use libbpf_rs::MapHandle;
     use libbpf_rs::MapType;
