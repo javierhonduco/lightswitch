@@ -8,8 +8,8 @@ use crossbeam_channel::bounded;
 
 use lightswitch::collector::{AggregatorCollector, Collector};
 use lightswitch::profile::symbolize_profile;
-use lightswitch::profiler::Profiler;
 use lightswitch::profiler::SymbolizedAggregatedProfile;
+use lightswitch::profiler::{Profiler, ProfilerConfig};
 
 /// Find the `nix` binary either in the $PATH or in the below hardcoded location.
 fn nix_bin() -> String {
@@ -99,14 +99,16 @@ fn test_integration() {
     let collector = Arc::new(Mutex::new(
         Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
     ));
+
+    let profiler_config = ProfilerConfig {
+        libbpf_debug: bpf_test_debug,
+        bpf_logging: bpf_test_debug,
+        duration: Duration::from_secs(5),
+        sample_freq: 999,
+        ..Default::default()
+    };
     let (_stop_signal_send, stop_signal_receive) = bounded(1);
-    let mut p = Profiler::new(
-        bpf_test_debug,
-        bpf_test_debug,
-        Duration::from_secs(5),
-        999,
-        stop_signal_receive,
-    );
+    let mut p = Profiler::new(profiler_config, stop_signal_receive);
     p.profile_pids(vec![cpp_proc.pid()]);
     p.run(collector.clone());
     let collector = collector.lock().unwrap();

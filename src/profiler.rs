@@ -166,6 +166,8 @@ pub struct Profiler<'bpf> {
     duration: Duration,
     // Per-CPU Sampling Frequency of this profile in Hz
     sample_freq: u16,
+    // Size of each perf buffer, in bytes
+    perf_buffer_bytes: usize,
     session_duration: Duration,
 }
 
@@ -173,10 +175,6 @@ pub struct Profiler<'bpf> {
 const MAX_SHARDS: u64 = MAX_UNWIND_INFO_SHARDS as u64;
 const SHARD_CAPACITY: usize = MAX_UNWIND_TABLE_SIZE as usize;
 const MAX_CHUNKS: usize = MAX_UNWIND_TABLE_CHUNKS as usize;
-
-// Make each perf buffer 512 KB
-// TODO: should make this configurable via a command line argument in future
-const PERF_BUFFER_BYTES: usize = 512 * 1024;
 
 #[derive(Debug, Hash, Eq, PartialEq)]
 pub struct RawAggregatedSample {
@@ -288,37 +286,135 @@ impl fmt::Display for SymbolizedAggregatedSample {
 pub type RawAggregatedProfile = Vec<RawAggregatedSample>;
 pub type SymbolizedAggregatedProfile = Vec<SymbolizedAggregatedSample>;
 
+pub struct ProfilerConfig {
+    pub libbpf_debug: bool,
+    pub bpf_logging: bool,
+    pub duration: Duration,
+    pub sample_freq: u16,
+    pub perf_buffer_bytes: usize,
+    pub mapsize_info: bool,
+    pub mapsize_stacks: u32,
+    pub mapsize_aggregated_stacks: u32,
+    pub mapsize_unwind_info_chunks: u32,
+    pub mapsize_unwind_tables: u32,
+    pub mapsize_rate_limits: u32,
+}
+
+// Note that we normally pass in the defaults from Clap, and we don't want
+// to be in the business of keeping the default values defined in Clap in sync
+// with the defaults defined here.  So these are some defaults that will
+// almost always be overridden.
+impl Default for ProfilerConfig {
+    fn default() -> Self {
+        Self {
+            libbpf_debug: false,
+            bpf_logging: false,
+            duration: Duration::MAX,
+            sample_freq: 19,
+            perf_buffer_bytes: 512 * 1024,
+            mapsize_info: false,
+            mapsize_stacks: 100000,
+            mapsize_aggregated_stacks: 10000,
+            mapsize_unwind_info_chunks: 5000,
+            mapsize_unwind_tables: 65,
+            mapsize_rate_limits: 5000,
+        }
+    }
+}
+
 impl Default for Profiler<'_> {
     fn default() -> Self {
         let (_stop_signal_send, stop_signal_receive) = bounded(1);
 
-        Self::new(false, false, Duration::MAX, 19, stop_signal_receive)
+        Self::new(ProfilerConfig::default(), stop_signal_receive)
     }
 }
 
 impl Profiler<'_> {
-    pub fn new(
-        libbpf_debug: bool,
-        bpf_logging: bool,
-        duration: Duration,
-        sample_freq: u16,
-        stop_signal_receive: Receiver<()>,
-    ) -> Self {
+    pub fn new(profiler_config: ProfilerConfig, stop_signal_receive: Receiver<()>) -> Self {
+        let duration = profiler_config.duration;
+        let sample_freq = profiler_config.sample_freq;
+        let perf_buffer_bytes = profiler_config.perf_buffer_bytes;
         let mut skel_builder: ProfilerSkelBuilder = ProfilerSkelBuilder::default();
-        skel_builder.obj_builder.debug(libbpf_debug);
+        skel_builder.obj_builder.debug(profiler_config.libbpf_debug);
         let mut open_skel = skel_builder.open().expect("open skel");
+        // mapsize modifications can only be made before the maps are actually loaded
+        // Initialize map sizes with defaults or modifications
+        open_skel
+            .maps_mut()
+            .stacks()
+            .set_max_entries(profiler_config.mapsize_stacks)
+            .expect("Unable to set stacks map max_entries");
+        open_skel
+            .maps_mut()
+            .aggregated_stacks()
+            .set_max_entries(profiler_config.mapsize_aggregated_stacks)
+            .expect("Unable to set aggregated_stacks map max_entries");
+        open_skel
+            .maps_mut()
+            .unwind_info_chunks()
+            .set_max_entries(profiler_config.mapsize_unwind_info_chunks)
+            .expect("Unable to set unwind_info_chunks map max_entries");
+        open_skel
+            .maps_mut()
+            .unwind_tables()
+            .set_max_entries(profiler_config.mapsize_unwind_tables)
+            .expect("Unable to set unwind_tables map max_entries");
+        open_skel
+            .maps_mut()
+            .rate_limits()
+            .set_max_entries(profiler_config.mapsize_rate_limits)
+            .expect("Unable to set rate_limits map max_entries");
         open_skel
             .rodata_mut()
             .lightswitch_config
             .verbose_logging
-            .write(bpf_logging);
+            .write(profiler_config.bpf_logging);
         let bpf = open_skel.load().expect("load skel");
         info!("native unwinder BPF program loaded");
         let native_unwinder_maps = bpf.maps();
         let exec_mappings_fd = native_unwinder_maps.exec_mappings().as_fd();
 
+        // If mapsize_info requested, pull the max_entries from each map of
+        // interest and print out
+        if profiler_config.mapsize_info {
+            info!("eBPF ACTUAL map size Configuration:");
+            info!(
+                "stacks:             {}",
+                bpf.maps().stacks().info().unwrap().info.max_entries
+            );
+            info!(
+                "aggregated_stacks:  {}",
+                bpf.maps()
+                    .aggregated_stacks()
+                    .info()
+                    .unwrap()
+                    .info
+                    .max_entries
+            );
+            info!(
+                "unwind_info_chunks: {}",
+                bpf.maps()
+                    .unwind_info_chunks()
+                    .info()
+                    .unwrap()
+                    .info
+                    .max_entries
+            );
+            info!(
+                "unwind_tables:      {}",
+                bpf.maps().unwind_tables().info().unwrap().info.max_entries
+            );
+            info!(
+                "rate_limits:        {}",
+                bpf.maps().rate_limits().info().unwrap().info.max_entries
+            );
+        }
+
         let mut tracers_builder = TracersSkelBuilder::default();
-        tracers_builder.obj_builder.debug(libbpf_debug);
+        tracers_builder
+            .obj_builder
+            .debug(profiler_config.libbpf_debug);
         let open_tracers = tracers_builder.open().expect("open skel");
         open_tracers
             .maps()
@@ -365,6 +461,7 @@ impl Profiler<'_> {
             profile_receive,
             duration,
             sample_freq,
+            perf_buffer_bytes,
             session_duration: Duration::from_secs(5),
         }
     }
@@ -398,23 +495,25 @@ impl Profiler<'_> {
         // New process events.
         let chan_send = self.new_proc_chan_send.clone();
         let perf_buffer = PerfBufferBuilder::new(self.bpf.maps().events())
-            .pages(PERF_BUFFER_BYTES / page_size::get())
+            .pages(self.perf_buffer_bytes / page_size::get())
             .sample_cb(move |_cpu: i32, data: &[u8]| {
                 Self::handle_event(&chan_send, data);
             })
             .lost_cb(Self::handle_lost_events)
             .build()
+            // TODO: Instead of unwrap, consume and emit any error, with
+            // .expect() perhaps?
             .unwrap();
 
         let _poll_thread = thread::spawn(move || loop {
             perf_buffer.poll(Duration::from_millis(100)).expect("poll");
         });
 
-        // Trace events are received here, such memory unmaps.
+        // Trace events are received here, such as memory unmaps.
         let tracers_send = self.tracers_chan_send.clone();
         let tracers_events_perf_buffer =
             PerfBufferBuilder::new(self.tracers.maps().tracer_events())
-                .pages(PERF_BUFFER_BYTES / page_size::get())
+                .pages(self.perf_buffer_bytes / page_size::get())
                 .sample_cb(move |_cpu: i32, data: &[u8]| {
                     let mut event = tracer_event_t::default();
                     plain::copy_from_bytes(&mut event, data).expect("serde tracers event");
@@ -426,6 +525,8 @@ impl Profiler<'_> {
                     warn!("lost {} events from the tracers", lost_count);
                 })
                 .build()
+                // TODO: Instead of unwrap, consume and emit any error, with
+                // .expect() perhaps?
                 .unwrap();
 
         let _tracers_poll_thread = thread::spawn(move || loop {
