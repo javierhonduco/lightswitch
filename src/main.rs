@@ -558,7 +558,7 @@ mod tests {
     #[rstest]
     fn args_should_not_be_powers_of_two(all_but_power_of_two_strings: Vec<String>) {
         for non_p2_string in all_but_power_of_two_strings {
-            let result = value_is_power_of_two(&non_p2_string.as_str());
+            let result = value_is_power_of_two(non_p2_string.as_str());
             assert!(result.is_err());
         }
     }
