@@ -1,14 +1,12 @@
+use std::fs::File;
+use std::path::PathBuf;
+
 use anyhow::Result;
 use gimli::{CfaRule, CieOrFde, EhFrame, UnwindContext, UnwindSection};
 use lazy_static::lazy_static;
 use memmap2::Mmap;
 use object::{Object, ObjectSection, Section};
-use std::fs::File;
-use std::path::PathBuf;
 use thiserror::Error;
-
-use crate::bpf::profiler_bindings::stack_unwind_row_t;
-use anyhow::anyhow;
 use tracing::{error, span, Level};
 
 #[repr(u8)]
@@ -41,11 +39,20 @@ enum PltType {
 #[derive(Debug, Default, Copy, Clone)]
 pub struct CompactUnwindRow {
     pub pc: u64,
-    // pub ra: u16,
     pub cfa_type: u8,
     pub rbp_type: u8,
     pub cfa_offset: u16,
     pub rbp_offset: i16,
+}
+
+impl CompactUnwindRow {
+    pub fn end_of_function_marker(last_addr: u64) -> CompactUnwindRow {
+        CompactUnwindRow {
+            pc: last_addr,
+            cfa_type: CfaType::EndFdeMarker as u8,
+            ..Default::default()
+        }
+    }
 }
 
 lazy_static! {
@@ -79,25 +86,19 @@ lazy_static! {
 }
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub enum UnwindInfoError {
     #[error("no eh_frame section found")]
     ErrorNoEhFrameSection,
     #[error("object file could not be parsed")]
     ErrorParsingFile,
     #[error("no text section found")]
     ErrorNoTextSection,
+    #[error("no functions found")]
+    ErrorNoFunctionsFound,
 }
 
 const RBP_X86: gimli::Register = gimli::Register(6);
 const RSP_X86: gimli::Register = gimli::Register(7);
-
-pub fn end_of_function_marker(last_addr: u64) -> CompactUnwindRow {
-    CompactUnwindRow {
-        pc: last_addr,
-        cfa_type: CfaType::EndFdeMarker as u8,
-        ..Default::default()
-    }
-}
 
 pub enum UnwindData {
     // Initial, end addresses
@@ -181,11 +182,11 @@ impl<'a> UnwindInfoBuilder<'a> {
         let object_file = object::File::parse(&self.mmap[..])?;
         let eh_frame_section = object_file
             .section_by_name(".eh_frame")
-            .ok_or(Error::ErrorNoEhFrameSection)?;
+            .ok_or(UnwindInfoError::ErrorNoEhFrameSection)?;
 
         let text = object_file
             .section_by_name(".text")
-            .ok_or(Error::ErrorNoTextSection)?;
+            .ok_or(UnwindInfoError::ErrorNoTextSection)?;
 
         let bases = gimli::BaseAddresses::default()
             .set_eh_frame(eh_frame_section.address())
@@ -329,8 +330,8 @@ impl<'a> UnwindInfoBuilder<'a> {
 }
 
 // Must be sorted.
-pub fn remove_unnecesary_markers(unwind_info: &mut Vec<stack_unwind_row_t>) {
-    let mut last_row: Option<stack_unwind_row_t> = None;
+pub fn remove_unnecesary_markers(unwind_info: &mut Vec<CompactUnwindRow>) {
+    let mut last_row: Option<CompactUnwindRow> = None;
     let mut new_i: usize = 0;
 
     for i in 0..unwind_info.len() {
@@ -363,8 +364,8 @@ pub fn remove_unnecesary_markers(unwind_info: &mut Vec<stack_unwind_row_t>) {
 }
 
 // Must be sorted.
-pub fn remove_redundant(unwind_info: &mut Vec<stack_unwind_row_t>) {
-    let mut last_row: Option<stack_unwind_row_t> = None;
+pub fn remove_redundant(unwind_info: &mut Vec<CompactUnwindRow>) {
+    let mut last_row: Option<CompactUnwindRow> = None;
     let mut new_i: usize = 0;
 
     for i in 0..unwind_info.len() {
@@ -389,8 +390,8 @@ pub fn remove_redundant(unwind_info: &mut Vec<stack_unwind_row_t>) {
     unwind_info.truncate(new_i);
 }
 
-pub fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<stack_unwind_row_t>> {
-    let mut unwind_info: Vec<stack_unwind_row_t> = Vec::new();
+pub fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<CompactUnwindRow>> {
+    let mut unwind_info: Vec<CompactUnwindRow> = Vec::new();
     let mut last_function_end_addr: Option<u64> = None;
     let mut last_row = None;
 
@@ -400,9 +401,9 @@ pub fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<stack_unwind_row_
                 // Add the end addr when we hit a new func
                 match last_function_end_addr {
                     Some(addr) => {
-                        let marker = end_of_function_marker(addr);
+                        let marker = CompactUnwindRow::end_of_function_marker(addr);
 
-                        let row: stack_unwind_row_t = stack_unwind_row_t {
+                        let row = CompactUnwindRow {
                             pc: marker.pc,
                             cfa_offset: marker.cfa_offset,
                             cfa_type: marker.cfa_type,
@@ -418,7 +419,7 @@ pub fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<stack_unwind_row_
                 last_function_end_addr = Some(*end_addr);
             }
             UnwindData::Instruction(compact_row) => {
-                let row = stack_unwind_row_t {
+                let row = CompactUnwindRow {
                     pc: compact_row.pc,
                     cfa_offset: compact_row.cfa_offset,
                     cfa_type: compact_row.cfa_type,
@@ -434,20 +435,12 @@ pub fn in_memory_unwind_info(path: &str) -> anyhow::Result<Vec<stack_unwind_row_
     builder?.process()?;
 
     if last_function_end_addr.is_none() {
-        error!("no last func end addr");
-        return Err(anyhow!("not sure what's going on"));
+        return Err(UnwindInfoError::ErrorNoFunctionsFound.into());
     }
 
     // Add the last marker
-    let marker: CompactUnwindRow = end_of_function_marker(last_function_end_addr.unwrap());
-    let row = stack_unwind_row_t {
-        pc: marker.pc,
-        cfa_offset: marker.cfa_offset,
-        cfa_type: marker.cfa_type,
-        rbp_type: marker.rbp_type,
-        rbp_offset: marker.rbp_offset,
-    };
-    unwind_info.push(row);
+    let marker = CompactUnwindRow::end_of_function_marker(last_function_end_addr.unwrap());
+    unwind_info.push(marker);
 
     Ok(unwind_info)
 }
