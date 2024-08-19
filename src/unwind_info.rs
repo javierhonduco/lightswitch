@@ -176,6 +176,8 @@ impl<'a> UnwindInfoBuilder<'a> {
     }
 
     pub fn process(mut self) -> Result<(), anyhow::Error> {
+        let _span = span!(Level::DEBUG, "processing unwind info").entered();
+
         let object_file = object::File::parse(&self.mmap[..])?;
         let eh_frame_section = object_file
             .section_by_name(".eh_frame")
@@ -229,9 +231,10 @@ impl<'a> UnwindInfoBuilder<'a> {
             }
         }
 
-        let span = span!(Level::DEBUG, "sort pc and fdes").entered();
-        pc_and_fde_offset.sort_by_key(|(pc, _)| *pc);
-        span.exit();
+        {
+            let _span = span!(Level::DEBUG, "sort pc and fdes").entered();
+            pc_and_fde_offset.sort_by_key(|(pc, _)| *pc);
+        }
 
         let mut ctx = Box::new(UnwindContext::new());
         for (_, fde_offset) in pc_and_fde_offset {
@@ -314,16 +317,12 @@ impl<'a> UnwindInfoBuilder<'a> {
                         {
                             compact_row.rbp_type = RbpType::UndefinedReturnAddress as u8;
                         }
-
-                        // print!(", ra {:?}", row.register(fde.cie().return_address_register()));
                     }
                     _ => continue,
                 }
 
                 (self.callback)(&UnwindData::Instruction(compact_row));
             }
-            // start_addresses.push(fde.initial_address() as u32);
-            // end_addresses.push((fde.initial_address() + fde.len()) as u32);
         }
         Ok(())
     }
