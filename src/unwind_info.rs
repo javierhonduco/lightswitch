@@ -175,59 +175,9 @@ impl<'a> UnwindInfoBuilder<'a> {
         })
     }
 
-    pub fn to_vec(path: &str) -> anyhow::Result<Vec<CompactUnwindRow>> {
-        let mut result = Vec::new();
-        let mut last_function_end_addr: Option<u64> = None;
-
-        let builder = UnwindInfoBuilder::with_callback(path, |unwind_data| {
-            match unwind_data {
-                UnwindData::Function(_, end_addr) => {
-                    // Add a function marker for the previous function.
-                    if let Some(addr) = last_function_end_addr {
-                        let marker = end_of_function_marker(addr);
-                        let row = CompactUnwindRow {
-                            pc: marker.pc,
-                            cfa_offset: marker.cfa_offset,
-                            cfa_type: marker.cfa_type,
-                            rbp_type: marker.rbp_type,
-                            rbp_offset: marker.rbp_offset,
-                        };
-                        result.push(row)
-                    }
-                    last_function_end_addr = Some(*end_addr);
-                }
-                UnwindData::Instruction(compact_row) => {
-                    let row = CompactUnwindRow {
-                        pc: compact_row.pc,
-                        cfa_offset: compact_row.cfa_offset,
-                        cfa_type: compact_row.cfa_type,
-                        rbp_type: compact_row.rbp_type,
-                        rbp_offset: compact_row.rbp_offset,
-                    };
-                    result.push(row);
-                }
-            }
-        });
-
-        builder?.process()?;
-
-        // Add marker for the last function.
-        if let Some(last_addr) = last_function_end_addr {
-            let marker = end_of_function_marker(last_addr);
-            let row = CompactUnwindRow {
-                pc: marker.pc,
-                cfa_offset: marker.cfa_offset,
-                cfa_type: marker.cfa_type,
-                rbp_type: marker.rbp_type,
-                rbp_offset: marker.rbp_offset,
-            };
-            result.push(row);
-        }
-
-        Ok(result)
-    }
-
     pub fn process(mut self) -> Result<(), anyhow::Error> {
+        let _span = span!(Level::DEBUG, "processing unwind info").entered();
+
         let object_file = object::File::parse(&self.mmap[..])?;
         let eh_frame_section = object_file
             .section_by_name(".eh_frame")
@@ -281,9 +231,10 @@ impl<'a> UnwindInfoBuilder<'a> {
             }
         }
 
-        let span = span!(Level::DEBUG, "sort pc and fdes").entered();
-        pc_and_fde_offset.sort_by_key(|(pc, _)| *pc);
-        span.exit();
+        {
+            let _span = span!(Level::DEBUG, "sort pc and fdes").entered();
+            pc_and_fde_offset.sort_by_key(|(pc, _)| *pc);
+        }
 
         let mut ctx = Box::new(UnwindContext::new());
         for (_, fde_offset) in pc_and_fde_offset {
@@ -366,16 +317,12 @@ impl<'a> UnwindInfoBuilder<'a> {
                         {
                             compact_row.rbp_type = RbpType::UndefinedReturnAddress as u8;
                         }
-
-                        // print!(", ra {:?}", row.register(fde.cie().return_address_register()));
                     }
                     _ => continue,
                 }
 
                 (self.callback)(&UnwindData::Instruction(compact_row));
             }
-            // start_addresses.push(fde.initial_address() as u32);
-            // end_addresses.push((fde.initial_address() + fde.len()) as u32);
         }
         Ok(())
     }
