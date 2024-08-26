@@ -62,6 +62,8 @@ impl Add for unwinder_stats_t {
                 + other.error_sending_new_process_event,
             error_cfa_offset_did_not_fit: self.error_cfa_offset_did_not_fit
                 + other.error_cfa_offset_did_not_fit,
+            vdso_encountered: self.vdso_encountered + other.vdso_encountered,
+            jit_encountered: self.jit_encountered + other.jit_encountered,
         }
     }
 }
