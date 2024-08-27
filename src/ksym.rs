@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Lines, Read};
 
-pub const KALLSYM_PATH: &str = "/home/nebe/swe/rust/lightswitch/temp/kallsyms3";
+pub const KALLSYM_PATH: &str = "/home/nebe/swe/rust/lightswitch/temp-benchmark/kallsyms3";
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Ksym {
