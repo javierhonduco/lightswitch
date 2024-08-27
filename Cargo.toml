@@ -45,6 +45,7 @@ insta = { version = "1.39.0", features = ["yaml"] }
 rstest = "0.21.0"
 tempdir = "0.3.7"
 rand = "0.8.5"
+criterion = "0.5.1"
 
 [build-dependencies]
 bindgen = "0.69.4"
@@ -53,3 +54,7 @@ glob = "0.3.1"
 
 [profile.dev.package."*"]
 opt-level = 3
+
+[[bench]]
+name ="benchmark"
+harness = false

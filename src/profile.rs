@@ -7,7 +7,7 @@ use std::time::Duration;
 use tracing::{debug, error, span, Level};
 
 use crate::bpf::profiler_bindings::native_stack_t;
-use crate::ksym::KsymIter;
+use crate::ksym::KsymIterNew;
 use crate::object::ExecutableId;
 use crate::profiler::Frame;
 use crate::profiler::FrameAddress;
@@ -230,7 +230,7 @@ pub fn symbolize_profile(
     let mut r = SymbolizedAggregatedProfile::new();
     let addresses_per_sample = fetch_symbols_for_profile(profile, procs, objs);
 
-    let ksyms = KsymIter::from_kallsyms().collect::<Vec<_>>();
+    let ksyms = KsymIterNew::from_kallsyms().collect::<Vec<_>>();
 
     for sample in profile {
         debug!("--- raw sample:\n{}", sample);
