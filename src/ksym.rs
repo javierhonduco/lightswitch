@@ -37,7 +37,7 @@ impl<R: Read> KsymIterNew<R> {
     pub fn new(reader: R) -> Self {
         Self {
             file: BufReader::new(reader),
-            line: String::new()
+            line: String::new(),
         }
     }
 }
@@ -54,29 +54,28 @@ impl<R: Read> Iterator for KsymIterNew<R> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            let buffer  =  &mut self.line;
+            let buffer = &mut self.line;
             buffer.clear();
             match self.file.read_line(buffer) {
                 Ok(bytes_read) => {
-                    if bytes_read == 0
-                    {
+                    if bytes_read == 0 {
                         return None;
                     }
-                    let v: Vec<&str> = buffer.split(' ').collect();
-                    // This list is probably not complete
-                    // https://github.com/torvalds/linux/blob/3d7cb6b0/tools/lib/symbol/kallsyms.c#LL17C1-L18C1
-                    if v[1] == "T" || v[1] == "W" {
-                        let start_addr = u64::from_str_radix(v[0], 16);
-                        let symbol_name = v[2];
 
-                        let current = Ksym {
-                            start_addr: start_addr.unwrap(),
-                            symbol_name: symbol_name.to_string(),
-                        };
-
-                        return Some(current);
-                    } else {
-                        continue;
+                    let mut iter = buffer.split(' ');
+                    if let (Some(addr_str), Some(symbol_type), Some(symbol_name)) =
+                        (iter.next(), iter.next(), iter.next())
+                    {
+                        // This list is probably not complete
+                        // https://github.com/torvalds/linux/blob/3d7cb6b0/tools/lib/symbol/kallsyms.c#LL17C1-L18C1
+                        if symbol_type == "T" || symbol_type == "W" {
+                            if let Ok(start_addr) = u64::from_str_radix(addr_str, 16) {
+                                return Some(Ksym {
+                                    start_addr,
+                                    symbol_name: symbol_name.to_string(),
+                                });
+                            }
+                        }
                     }
                 }
                 _ => {
