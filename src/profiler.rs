@@ -730,7 +730,6 @@ impl Profiler<'_> {
     pub fn clear_maps(&mut self) {
         let _span = span!(Level::DEBUG, "clear_maps").entered();
 
-        self.clear_stats_map();
         self.clear_map("stacks");
         self.clear_map("aggregated_stacks");
         self.clear_map("rate_limits");
@@ -1043,7 +1042,6 @@ impl Profiler<'_> {
                     // TODO: Avoid resetting the state too often.
                     self.native_unwind_state = NativeUnwindState::default();
 
-                    self.clear_stats_map();
                     // With the current implementation of the unwind information reset, we might
                     // wipe stacks that we would like to read from userspace. We could fix this by
                     // resetting after a profiling session is done.

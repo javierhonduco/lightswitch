@@ -85,6 +85,8 @@ struct unwinder_stats_t {
   u64 error_binary_search_exausted_iterations;
   u64 error_sending_new_process_event;
   u64 error_cfa_offset_did_not_fit;
+  u64 vdso_encountered;
+  u64 jit_encountered;
 };
 
 const volatile struct lightswitch_config_t lightswitch_config = {.verbose_logging =

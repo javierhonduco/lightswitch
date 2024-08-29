@@ -44,5 +44,7 @@ DEFINE_COUNTER(error_chunk_not_found);
 DEFINE_COUNTER(error_binary_search_exausted_iterations);
 DEFINE_COUNTER(error_sending_new_process_event);
 DEFINE_COUNTER(error_cfa_offset_did_not_fit);
+DEFINE_COUNTER(vdso_encountered);
+DEFINE_COUNTER(jit_encountered);
 
 #endif
