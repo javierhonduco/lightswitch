@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 
-pub const KALLSYM_PATH: &str = "/home/nebe/swe/rust/lightswitch/temp-benchmark/kallsyms3";
+pub const KALLSYM_PATH: &str = "/proc/kallsyms";
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Ksym {
@@ -53,7 +53,7 @@ impl<R: Read> Iterator for KsymIter<R> {
                             if let Ok(start_addr) = u64::from_str_radix(addr_str, 16) {
                                 return Some(Ksym {
                                     start_addr,
-                                    symbol_name: symbol_name.to_string(),
+                                    symbol_name: symbol_name.trim().to_string(),
                                 });
                             }
                         }
