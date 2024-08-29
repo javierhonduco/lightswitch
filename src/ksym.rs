@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader, Lines, Read};
+use std::io::{BufRead, BufReader, Read};
 
 pub const KALLSYM_PATH: &str = "/home/nebe/swe/rust/lightswitch/temp-benchmark/kallsyms3";
 
@@ -10,13 +10,15 @@ pub struct Ksym {
 }
 
 pub struct KsymIter<R> {
-    iter: Lines<BufReader<R>>,
+    file: BufReader<R>,
+    line: String,
 }
 
 impl<R: Read> KsymIter<R> {
     pub fn new(reader: R) -> Self {
         Self {
-            iter: BufReader::new(reader).lines(),
+            file: BufReader::new(reader),
+            line: String::new(),
         }
     }
 }
@@ -28,28 +30,7 @@ impl KsymIter<File> {
     }
 }
 
-pub struct KsymIterNew<R> {
-    file: BufReader<R>,
-    line: String,
-}
-
-impl<R: Read> KsymIterNew<R> {
-    pub fn new(reader: R) -> Self {
-        Self {
-            file: BufReader::new(reader),
-            line: String::new(),
-        }
-    }
-}
-
-impl KsymIterNew<File> {
-    pub fn from_kallsyms() -> Self {
-        let file = File::open(KALLSYM_PATH).expect("/proc/kallsyms could not be opened");
-        Self::new(file)
-    }
-}
-
-impl<R: Read> Iterator for KsymIterNew<R> {
+impl<R: Read> Iterator for KsymIter<R> {
     type Item = Ksym;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -76,38 +57,6 @@ impl<R: Read> Iterator for KsymIterNew<R> {
                                 });
                             }
                         }
-                    }
-                }
-                _ => {
-                    return None;
-                }
-            }
-        }
-    }
-}
-
-impl<R: Read> Iterator for KsymIter<R> {
-    type Item = Ksym;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            match self.iter.next() {
-                Some(Ok(line)) => {
-                    let v: Vec<&str> = line.split(' ').collect();
-                    // This list is probably not complete
-                    // https://github.com/torvalds/linux/blob/3d7cb6b0/tools/lib/symbol/kallsyms.c#LL17C1-L18C1
-                    if v[1] == "T" || v[1] == "W" {
-                        let start_addr = u64::from_str_radix(v[0], 16);
-                        let symbol_name = v[2];
-
-                        let current = Ksym {
-                            start_addr: start_addr.unwrap(),
-                            symbol_name: symbol_name.to_string(),
-                        };
-
-                        return Some(current);
-                    } else {
-                        continue;
                     }
                 }
                 _ => {
