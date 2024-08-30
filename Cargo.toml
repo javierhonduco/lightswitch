@@ -56,5 +56,5 @@ glob = "0.3.1"
 opt-level = 3
 
 [[bench]]
-name ="benchmark"
+name = "benchmark"
 harness = false
