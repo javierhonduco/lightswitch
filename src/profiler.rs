@@ -81,7 +81,6 @@ pub struct ExecutableMapping {
     pub end_addr: u64,
     pub offset: u64,
     pub load_address: u64,
-    pub unwinder: Unwinder,
     pub main_exec: bool,
     pub unmapped: bool,
     // Add (inode, ctime) and whether the file is in the root namespace
@@ -1225,11 +1224,10 @@ impl Profiler<'_> {
                     let file = fs::File::open(&abs_path)?;
                     let object_file = ObjectFile::new(&abs_path);
                     if object_file.is_err() {
-                        warn!("object_file failed with {:?}", object_file);
+                        warn!("object_file failed with {:?} {:?}", object_file, abs_path);
                         continue;
                     }
                     let object_file = object_file.unwrap();
-                    let unwinder = Unwinder::NativeDwarf;
 
                     // Disable profiling Go applications as they are not properly supported yet.
                     // Among other things, blazesym doesn't support symbolizing Go binaries.
@@ -1267,7 +1265,6 @@ impl Profiler<'_> {
                         end_addr: map.address.1,
                         offset: map.offset,
                         load_address: load_address(),
-                        unwinder,
                         main_exec,
                         unmapped: false,
                     });
@@ -1302,7 +1299,6 @@ impl Profiler<'_> {
                         end_addr: map.address.1,
                         offset: map.offset,
                         load_address: 0,
-                        unwinder: Unwinder::Unknown,
                         main_exec: false,
                         unmapped: false,
                     });
@@ -1319,7 +1315,6 @@ impl Profiler<'_> {
                         end_addr: map.address.1,
                         offset: map.offset,
                         load_address: 0,
-                        unwinder: Unwinder::NativeFramePointers,
                         main_exec: false,
                         unmapped: false,
                     });
