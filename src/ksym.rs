@@ -38,11 +38,11 @@ impl<R: Read> Iterator for KsymIter<R> {
             let buffer = &mut self.line;
             buffer.clear();
             match self.file.read_line(buffer) {
-                Ok(bytes_read) => {
-                    if bytes_read == 0 {
-                        return None;
-                    }
-
+                Ok(0) => {
+                    // End of file
+                    return None;
+                }
+                Ok(_) => {
                     let mut iter = buffer.split(' ');
                     if let (Some(addr_str), Some(symbol_type), Some(symbol_name)) =
                         (iter.next(), iter.next(), iter.next())
@@ -59,7 +59,7 @@ impl<R: Read> Iterator for KsymIter<R> {
                         }
                     }
                 }
-                _ => {
+                Err(_) => {
                     return None;
                 }
             }
