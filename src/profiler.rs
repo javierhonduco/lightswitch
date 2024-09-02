@@ -26,6 +26,7 @@ use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
 use crate::object::{BuildId, ExecutableId, ObjectFile};
 use crate::perf_events::setup_perf_event;
+use crate::unwind_info::CompactUnwindRow;
 use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
 use crate::util::{get_online_cpus, summarize_address_range};
 
@@ -112,6 +113,7 @@ impl ExecutableMapping {
 
         if let Some(el) = object_files.get_mut(&self.executable_id) {
             el.references -= 1;
+
             debug_assert!(
                 el.references >= 0,
                 "Reference count for {:?} is negative ",
@@ -122,7 +124,7 @@ impl ExecutableMapping {
 }
 pub struct NativeUnwindState {
     dirty: bool,
-    live_shard: Vec<stack_unwind_row_t>,
+    live_shard: Vec<CompactUnwindRow>,
     known_executables: HashSet<ExecutableId>,
     shard_index: u64,
 }
@@ -809,15 +811,20 @@ impl Profiler<'_> {
         self.procs.lock().expect("lock").get(&pid).is_some()
     }
 
-    fn persist_unwind_info(&self, live_shard: &Vec<stack_unwind_row_t>) -> bool {
+    fn persist_unwind_info(&self, live_shard: &Vec<CompactUnwindRow>) -> bool {
         let _span = span!(Level::DEBUG, "persist_unwind_info").entered();
+        let mut bpf_unwind_info: Vec<stack_unwind_row_t> =
+            Vec::with_capacity(live_shard.capacity());
+        for row in live_shard {
+            bpf_unwind_info.push(row.into());
+        }
 
         let key = self.native_unwind_state.shard_index.to_ne_bytes();
         let val = unsafe {
             // Probs we need to zero this mem?
             std::slice::from_raw_parts(
-                live_shard.as_ptr() as *const u8,
-                live_shard.capacity() * ::std::mem::size_of::<stack_unwind_row_t>(),
+                bpf_unwind_info.as_ptr() as *const u8,
+                bpf_unwind_info.capacity() * ::std::mem::size_of::<stack_unwind_row_t>(),
             )
         };
 
@@ -978,7 +985,7 @@ impl Profiler<'_> {
             )
             .entered();
 
-            let mut found_unwind_info: Vec<stack_unwind_row_t>;
+            let mut found_unwind_info: Vec<CompactUnwindRow>;
 
             match in_memory_unwind_info(&first_mapping.path.to_string_lossy()) {
                 Ok(unwind_info) => {

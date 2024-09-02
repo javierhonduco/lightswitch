@@ -5,6 +5,8 @@
 use plain::Plain;
 use std::ops::Add;
 
+use crate::unwind_info::CompactUnwindRow;
+
 include!(concat!(env!("OUT_DIR"), "/profiler_bindings.rs"));
 
 unsafe impl Plain for stack_count_key_t {}
@@ -64,6 +66,18 @@ impl Add for unwinder_stats_t {
                 + other.error_cfa_offset_did_not_fit,
             vdso_encountered: self.vdso_encountered + other.vdso_encountered,
             jit_encountered: self.jit_encountered + other.jit_encountered,
+        }
+    }
+}
+
+impl From<&CompactUnwindRow> for stack_unwind_row_t {
+    fn from(row: &CompactUnwindRow) -> Self {
+        stack_unwind_row_t {
+            pc: row.pc,
+            cfa_offset: row.cfa_offset,
+            cfa_type: row.cfa_type,
+            rbp_type: row.rbp_type,
+            rbp_offset: row.rbp_offset,
         }
     }
 }
