@@ -556,22 +556,28 @@ impl Profiler<'_> {
             }
         });
 
-        let ticks = tick(self.duration);
+        let total_duration_tick = tick(self.duration);
+        let session_tick = tick(self.session_duration);
         let persist_ticks = tick(Duration::from_millis(100));
 
         loop {
             select! {
                 recv(self.stop_chan_receive) -> _ => {
-                    println!("aa ctrl+c");
+                    debug!("received ctrl+c");
                     let profile = self.collect_profile();
                     self.send_profile(profile);
                     break;
                 },
-                recv(ticks) -> _ => {
-                    debug!("collecting profiles on schedule");
+                recv(total_duration_tick) -> _ => {
+                    debug!("done profiling");
                     let profile = self.collect_profile();
                     self.send_profile(profile);
                     break;
+                },
+                recv(session_tick) -> _ => {
+                    debug!("collecting profiles on schedule");
+                    let profile = self.collect_profile();
+                    self.send_profile(profile);
                 }
                 recv(self.tracers_chan_receive) -> read => {
                         match read {
