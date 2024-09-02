@@ -141,18 +141,8 @@ impl Collector for AggregatorCollector {
             self.procs.insert(*k, v.clone());
         }
 
-        for (k, v) in objs {
-            self.objs.insert(
-                *k,
-                ObjectFileInfo {
-                    file: std::fs::File::open(v.path.clone()).unwrap(),
-                    path: v.path.clone(),
-                    load_offset: v.load_offset,
-                    load_vaddr: v.load_vaddr,
-                    is_dyn: v.is_dyn,
-                    references: 0, // The reference count does not matter here.
-                },
-            );
+        for (object_id, object_file_info) in objs {
+            self.objs.insert(*object_id, object_file_info.clone());
         }
     }
 
