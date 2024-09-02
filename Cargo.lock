@@ -1288,6 +1288,7 @@ dependencies = [
  "ring",
  "rstest",
  "tempdir",
+ "tempfile",
  "thiserror",
  "tracing",
  "tracing-subscriber",

@@ -2,8 +2,10 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
+use std::fs::File;
 use std::os::fd::{AsFd, AsRawFd};
 use std::path::PathBuf;
+use std::process;
 use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
@@ -65,11 +67,36 @@ pub struct ObjectFileInfo {
     pub references: i64,
 }
 
-#[derive(Debug, Clone)]
-pub enum Unwinder {
-    Unknown,
-    NativeFramePointers,
-    NativeDwarf,
+impl Clone for ObjectFileInfo {
+    fn clone(&self) -> Self {
+        ObjectFileInfo {
+            file: self.open_file_from_procfs_fd(),
+            path: self.path.clone(),
+            load_offset: self.load_offset,
+            load_vaddr: self.load_vaddr,
+            is_dyn: self.is_dyn,
+            references: self.references,
+        }
+    }
+}
+
+impl ObjectFileInfo {
+    /// Files might be removed at any time from the file system and they won't
+    /// be accessible anymore with their path. We work around this by doing the
+    /// following:
+    ///
+    /// - We open object files as soon as we learn about them, that way we increase
+    ///   the reference count of the file in the kernel. Files won't really be deleted
+    ///   until the reference count drops to zero.
+    /// - In order to re-open files even if they've been deleted, we can use the procfs
+    ///   interface, as long as their reference count hasn't reached zero and the kernel
+    ///   hasn't removed the file from the file system and the various caches.
+    fn open_file_from_procfs_fd(&self) -> File {
+        let raw_fd = self.file.as_raw_fd();
+        File::open(format!("/proc/{}/fd/{}", process::id(), raw_fd)).expect(
+            "re-opening the file from procfs will never fail as we have an already opened file",
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1542,5 +1569,36 @@ mod tests {
         ---
         "SymbolizedAggregatedSample { pid: 98765, tid: 98766, ustack: \"[NONE]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 1001 }"
         "###);
+    }
+
+    /// This tests ensures that cloning an `ObjectFileInfo` succeeds to
+    /// open the file even if it's been deleted. This works because we
+    /// always keep at least one open file descriptor to prevent the kernel
+    /// from freeing the resource, effectively removing the file from the
+    /// file system.
+    #[test]
+    fn test_object_file_clone() {
+        use std::fs::remove_file;
+        use std::io::Read;
+
+        let named_tmpfile = tempfile::NamedTempFile::new().unwrap();
+        let file_path = named_tmpfile.path();
+        let file = File::open(file_path).unwrap();
+
+        let object_file_info = ObjectFileInfo {
+            file,
+            path: file_path.to_path_buf(),
+            load_offset: 0,
+            load_vaddr: 0,
+            is_dyn: false,
+            references: 1,
+        };
+
+        remove_file(file_path).unwrap();
+
+        let mut object_file_info_copy = object_file_info.clone();
+        let mut buf = String::new();
+        // This would fail without the procfs hack.
+        object_file_info_copy.file.read_to_string(&mut buf).unwrap();
     }
 }
