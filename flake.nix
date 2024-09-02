@@ -42,7 +42,8 @@
           nativeBuildInputs = with pkgs; [
             pkg-config
           ];
-          craneLib = (crane.mkLib nixpkgs.legacyPackages.${system});
+          rust-toolchain = pkgs.rust-bin.nightly.latest.default;
+          craneLib = (crane.mkLib nixpkgs.legacyPackages.${system}).overrideToolchain rust-toolchain;
           lightswitch = craneLib.buildPackage {
             src = ./.;
             doCheck = false;
@@ -71,7 +72,7 @@
           devShells.default = mkShell {
             nativeBuildInputs = nativeBuildInputs;
             buildInputs = buildInputs ++ [
-              rust-bin.nightly.latest.default
+              rust-toolchain
               # Debugging
               strace
               gdb
