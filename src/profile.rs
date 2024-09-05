@@ -96,6 +96,8 @@ pub fn to_pprof(
             }
         }
 
+        let task_and_process_names = TaskName::for_task(sample.tid).unwrap_or(TaskName::errored());
+
         let labels = vec![
             pprof.new_label(
                 "pid",
@@ -105,8 +107,14 @@ pub fn to_pprof(
                 "pid",
                 LabelStringOrNumber::Number(sample.tid.into(), "task-id".into()),
             ),
-            // TODO: add real thread name / comm.
-            pprof.new_label("comm", LabelStringOrNumber::String("fake-comm".into())),
+            pprof.new_label(
+                "process-name",
+                LabelStringOrNumber::String(task_and_process_names.main_thread),
+            ),
+            pprof.new_label(
+                "thread-name",
+                LabelStringOrNumber::String(task_and_process_names.current_thread),
+            ),
         ];
 
         pprof.add_sample(location_ids, sample.count as i64, labels);
