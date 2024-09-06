@@ -1261,13 +1261,33 @@ impl Profiler<'_> {
                     abs_path.push("/root");
                     abs_path.push(path);
 
-                    let file = fs::File::open(&abs_path)?;
-                    let object_file = ObjectFile::new(&abs_path);
-                    if object_file.is_err() {
-                        warn!("object_file failed with {:?} {:?}", object_file, abs_path);
+                    // We've seen debug info executables that get deleted in Rust applications.
+                    // There are probably other cases, but we'll handle them as we bump into them.
+                    if abs_path.to_str().unwrap().contains("(deleted)") {
                         continue;
                     }
-                    let object_file = object_file.unwrap();
+
+                    // We want to open the file as quickly as possible to minimise the chances of races
+                    // if the file is deleted.
+                    let file = match fs::File::open(&abs_path) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            warn!("failed to open file {} due to {:?}", abs_path.display(), e);
+                            // Rather than returning here, we prefer to be able to profile some
+                            // parts of the binary
+                            continue;
+                        }
+                    };
+
+                    let object_file = match ObjectFile::new(&abs_path) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            warn!("object_file {} failed with {:?}", abs_path.display(), e);
+                            // Rather than returning here, we prefer to be able to profile some
+                            // parts of the binary
+                            continue;
+                        }
+                    };
 
                     // Disable profiling Go applications as they are not properly supported yet.
                     // Among other things, blazesym doesn't support symbolizing Go binaries.
