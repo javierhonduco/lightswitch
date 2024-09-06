@@ -50,7 +50,7 @@
             buildInputs = buildInputs;
             nativeBuildInputs = nativeBuildInputs;
             LIBCLANG_PATH = with pkgs; lib.makeLibraryPath [ llvmPackages_16.libclang ];
-            LD_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [ zlib.static elfutils' ];
+            LIBBPF_SYS_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [ zlib.static elfutils' ];
           };
         in
         with pkgs;
@@ -85,7 +85,7 @@
             ];
 
             LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_16.libclang ];
-            LD_LIBRARY_PATH = lib.makeLibraryPath [ zlib.static elfutils' ];
+            LIBBPF_SYS_LIBRARY_PATH = lib.makeLibraryPath [ zlib.static elfutils' ];
             RUST_GDB = "${gdb}/bin/gdb";
           };
         }
