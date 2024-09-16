@@ -23,8 +23,9 @@ jobs:
         run: nix develop --command echo 0
       - name: Run `cargo build`
         run: nix develop --ignore-environment --command cargo build
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
+      # For when we need a shell session into the workflow
+      # - name: Setup tmate session
+      #   uses: mxschmitt/action-tmate@v3
       - name: Run `cargo clippy`
         # Removing --ignore-environment so this build will work for now
         run: nix develop --command cargo clippy --all-targets -- -D warnings
