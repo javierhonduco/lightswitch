@@ -220,6 +220,12 @@ struct Cli {
         help = "Derived from constant MAX_PROCESSES"
     )]
     mapsize_rate_limits: u32,
+    // Exclude myself from profiling
+    #[arg(
+        long,
+        help = "Do not profile the profiler (myself)"
+    )]
+    exclude_self: bool,
 }
 
 /// Exit the main thread if any thread panics. We prefer this behaviour because pretty much every
@@ -308,6 +314,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         mapsize_unwind_info_chunks: args.mapsize_unwind_info_chunks,
         mapsize_unwind_tables: args.mapsize_unwind_tables,
         mapsize_rate_limits: args.mapsize_rate_limits,
+        exclude_self: args.exclude_self,
     };
 
     let (stop_signal_sender, stop_signal_receive) = bounded(1);

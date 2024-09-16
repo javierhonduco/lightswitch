@@ -197,6 +197,8 @@ pub struct Profiler<'bpf> {
     // Size of each perf buffer, in bytes
     perf_buffer_bytes: usize,
     session_duration: Duration,
+    // Whether this process should be excluded from profiling
+    exclude_self: bool,
 }
 
 // Static config
@@ -1216,6 +1218,10 @@ impl Profiler<'_> {
     }
 
     fn should_profile(&self, pid: i32) -> bool {
+        if self.exclude_self && (pid == self->pid) {
+            return false;
+        }
+
         if self.filter_pids.is_empty() {
             return true;
         }
