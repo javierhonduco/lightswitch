@@ -26,7 +26,8 @@ jobs:
       - name: Setup tmate session
         uses: mxschmitt/action-tmate@v3
       - name: Run `cargo clippy`
-        run: nix develop --ignore-environment --command cargo clippy --all-targets -- -D warnings
+        # Removing --ignore-environment so this build will work for now
+        run: nix develop --command cargo clippy --all-targets -- -D warnings
       - name: Run `cargo test`
         run: nix develop --command cargo test
       - name: Run `cargo fmt`
