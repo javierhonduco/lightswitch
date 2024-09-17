@@ -76,7 +76,9 @@ struct unwinder_stats_t {
   u64 error_unsupported_expression;
   u64 error_unsupported_frame_pointer_action;
   u64 error_unsupported_cfa_register;
-  u64 error_catchall;
+  u64 error_previous_rsp_zero;
+  u64 error_previous_rip_zero;
+  u64 error_previous_rbp_zero;
   u64 error_should_never_happen;
   u64 error_bp_should_be_zero_for_bottom_frame;
   u64 error_mapping_not_found;
@@ -89,8 +91,8 @@ struct unwinder_stats_t {
   u64 jit_encountered;
 };
 
-const volatile struct lightswitch_config_t lightswitch_config = {.verbose_logging =
-                                                               true};
+const volatile struct lightswitch_config_t lightswitch_config = {
+    .verbose_logging = true};
 
 // A different stack produced the same hash.
 #define STACK_COLLISION(err) (err == -EEXIST)
@@ -99,7 +101,7 @@ const volatile struct lightswitch_config_t lightswitch_config = {.verbose_loggin
 
 #define LOG(fmt, ...)                                                          \
   ({                                                                           \
-    if (lightswitch_config.verbose_logging) {                                     \
+    if (lightswitch_config.verbose_logging) {                                  \
       bpf_printk(fmt, ##__VA_ARGS__);                                          \
     }                                                                          \
   })
