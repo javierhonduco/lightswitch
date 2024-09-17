@@ -49,7 +49,9 @@ impl Add for unwinder_stats_t {
                 + other.error_unsupported_frame_pointer_action,
             error_unsupported_cfa_register: self.error_unsupported_cfa_register
                 + other.error_unsupported_cfa_register,
-            error_catchall: self.error_catchall + other.error_catchall,
+            error_previous_rsp_zero: self.error_previous_rsp_zero + other.error_previous_rsp_zero,
+            error_previous_rip_zero: self.error_previous_rip_zero + other.error_previous_rip_zero,
+            error_previous_rbp_zero: self.error_previous_rbp_zero + other.error_previous_rbp_zero,
             error_should_never_happen: self.error_should_never_happen
                 + other.error_should_never_happen,
             error_bp_should_be_zero_for_bottom_frame: self.error_bp_should_be_zero_for_bottom_frame

@@ -470,7 +470,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     // add it, it would be best to add it only during development.
     if (previous_rsp == 0) {
       LOG("[error] previous_rsp should not be zero.");
-      bump_unwind_error_catchall();
+      bump_unwind_error_previous_rsp_zero();
       return 1;
     }
 
@@ -491,7 +491,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
         LOG("[error] previous_rip should not be zero. This can mean that the "
             "read failed, ret=%d while reading @ %llx.",
             err, previous_rip_addr);
-        bump_unwind_error_catchall();
+        bump_unwind_error_previous_rip_zero();
       }
       return 1;
     }
@@ -510,7 +510,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
         LOG("[error] previous_rbp should not be zero. This can mean "
             "that the read has failed %d.",
             ret);
-        bump_unwind_error_catchall();
+        bump_unwind_error_previous_rbp_zero();
         return 1;
       }
     }
