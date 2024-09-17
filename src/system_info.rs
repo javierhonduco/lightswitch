@@ -8,7 +8,7 @@ use std::fs::read_to_string;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
-use tracing::debug;
+use tracing::warn;
 
 const PROCFS_PATH: &str = "/proc";
 const TRACEFS_PATH: &str = "/sys/kernel/debug/tracing";
@@ -25,7 +25,8 @@ pub struct SystemInfo {
     pub tracefs_mount_detected: bool,
     pub tracepoints_support_detected: bool,
     pub perfevents_support_detected: bool,
-    pub bpf_features: Result<BpfFeatures>,
+    pub can_load_trivial_bpf_program: bool,
+    pub available_bpf_features: Option<BpfFeatures>,
 }
 
 fn tracefs_mount_detected() -> bool {
@@ -66,7 +67,7 @@ fn tracepoints_detected() -> bool {
     match get_trace_sched_event_id("sched_process_exec") {
         Ok(event_id) => attrs.config = event_id as u64,
         Err(err) => {
-            debug!("Failed to detect tracepoint support, err={}", err);
+            warn!("Failed to detect tracepoint support, err={}", err);
             return false;
         }
     }
@@ -85,21 +86,30 @@ fn tracepoints_detected() -> bool {
     }
 
     if unsafe { close(result) } != 0 {
-        debug!("Failed to close file descriptor {}", result);
+        warn!("Failed to close file descriptor {}", result);
     }
     return true;
 }
 
 fn perf_events_detected() -> bool {
-    // TODO: Implmeent this
+    // TODO: Implement this
     return false;
 }
 
-fn check_bpf_features() -> Result<BpfFeatures, anyhow::Error> {
+fn check_bpf_features() -> Result<BpfFeatures> {
     let skel_builder = FeaturesSkelBuilder::default();
-    let open_skel = skel_builder.open().expect("Failed to get bpf features");
-    let mut bpf_features = open_skel.load().expect("Failed to get bpf features");
-    bpf_features.attach().expect("Failed to determine features");
+    let open_skel = match skel_builder.open() {
+        Ok(open_skel) => open_skel,
+        Err(_) => return Err(anyhow!("Failed to get available bpf features")),
+    };
+    let mut bpf_features = match open_skel.load() {
+        Ok(bpf_features) => bpf_features,
+        Err(_) => return Err(anyhow!("Failed to get available bpf features")),
+    };
+    match bpf_features.attach() {
+        Ok(_) => {}
+        Err(_) => return Err(anyhow!("Failed to get available bpf features")),
+    };
 
     thread::sleep(Duration::from_millis(50));
 
@@ -117,13 +127,21 @@ fn check_bpf_features() -> Result<BpfFeatures, anyhow::Error> {
 }
 
 pub fn get_system_info() -> Result<SystemInfo> {
+    let available_bpf_features = match check_bpf_features() {
+        Ok(features) => Some(features),
+        Err(err) => {
+            warn!("Failed to detect available BPF features {}", err);
+            None
+        }
+    };
     Ok(SystemInfo {
         os_release: utsname::uname()?.release().to_string_lossy().to_string(),
         procfs_mount_detected: Path::new(PROCFS_PATH).exists(),
         tracefs_mount_detected: tracefs_mount_detected(),
         tracepoints_support_detected: tracepoints_detected(),
         perfevents_support_detected: perf_events_detected(),
-        bpf_features: check_bpf_features(),
+        can_load_trivial_bpf_program: available_bpf_features.is_some(),
+        available_bpf_features: available_bpf_features,
     })
 }
 
@@ -144,10 +162,17 @@ mod tests {
         assert!(system_info.tracefs_mount_detected);
         assert!(system_info.tracepoints_support_detected);
         assert!(!system_info.perfevents_support_detected);
-        assert!(system_info.bpf_features.is_ok());
+        assert!(system_info.can_load_trivial_bpf_program);
+        assert!(system_info.available_bpf_features.is_some());
 
-        let bpf_features = system_info.bpf_features.unwrap();
-        assert!(bpf_features.has_ring_buf);
-        assert!(bpf_features.has_tail_call);
+        match system_info.available_bpf_features {
+            Some(features) => {
+                assert!(features.has_ring_buf);
+                assert!(features.has_tail_call);
+            }
+            None => {
+                assert!(false);
+            }
+        }
     }
 }
