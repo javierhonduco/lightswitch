@@ -5,7 +5,7 @@ let
     name = "download-kernel-5.15";
     src = pkgs.fetchurl {
       url = "https://github.com/javierhonduco/lightswitch-kernels/raw/cfb94e9/bzImage-v5.15-fedora38";
-      hash = "sha256-nq8W72vuNKCgO1OS6aJtAfg7AjHavRZ7WAkP7X6V610=";
+      hash = "sha256-pfQUxfBbDcLwpYFwwMubA4tMw5I60WYb7pKCvkPbgXY";
     };
     dontUnpack = true;
     installPhase = ''
@@ -18,7 +18,7 @@ let
     name = "download-kernel-6.0";
     src = pkgs.fetchurl {
       url = "https://github.com/javierhonduco/lightswitch-kernels/raw/cfb94e9/bzImage-v6.0-fedora38";
-      hash = "sha256-ZBBQ0yVUn+Isd2b+a32oMEbNo8T1v46P3rEtZ+1j9Ic=";
+      hash = "sha256-EgUIm9QUuTFZZp6qYX6YW2PWW63x/whRXajArHqpqfo=";
     };
     dontUnpack = true;
     installPhase = ''
@@ -31,7 +31,7 @@ let
     name = "download-kernel-6.2";
     src = pkgs.fetchurl {
       url = "https://github.com/javierhonduco/lightswitch-kernels/raw/cfb94e9/bzImage-v6.2-fedora38";
-      hash = "sha256-YO2HEIWTuEEJts9JrW3V7UVR7t4J3+8On+tjdELa2m8=";
+      hash = "sha256-FDIkraUFzgJf5rJYQliqS8F7jeO4KWc5OeZDXqu/0uA=";
     };
     dontUnpack = true;
     installPhase = ''
@@ -44,7 +44,7 @@ let
     name = "download-kernel-6.6";
     src = pkgs.fetchurl {
       url = "https://github.com/javierhonduco/lightswitch-kernels/raw/cfb94e9/bzImage-v6.6-fedora38";
-      hash = "sha256-6Fu16SPBITP0sI3lapkckZna6GKBn2hID038itt82jA=";
+      hash = "sha256-9SNl69kpyyPzfxGk8jdPBAXT929a4Ep7vwkerP7SVl8=";
     };
     dontUnpack = true;
     installPhase = ''
