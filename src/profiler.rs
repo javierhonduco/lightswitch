@@ -2,8 +2,10 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
+use std::fs::File;
 use std::os::fd::{AsFd, AsRawFd};
 use std::path::PathBuf;
+use std::process;
 use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
@@ -26,6 +28,7 @@ use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
 use crate::object::{BuildId, ExecutableId, ObjectFile};
 use crate::perf_events::setup_perf_event;
+use crate::unwind_info::CompactUnwindRow;
 use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
 use crate::util::{get_online_cpus, summarize_address_range};
 
@@ -64,11 +67,36 @@ pub struct ObjectFileInfo {
     pub references: i64,
 }
 
-#[derive(Debug, Clone)]
-pub enum Unwinder {
-    Unknown,
-    NativeFramePointers,
-    NativeDwarf,
+impl Clone for ObjectFileInfo {
+    fn clone(&self) -> Self {
+        ObjectFileInfo {
+            file: self.open_file_from_procfs_fd(),
+            path: self.path.clone(),
+            load_offset: self.load_offset,
+            load_vaddr: self.load_vaddr,
+            is_dyn: self.is_dyn,
+            references: self.references,
+        }
+    }
+}
+
+impl ObjectFileInfo {
+    /// Files might be removed at any time from the file system and they won't
+    /// be accessible anymore with their path. We work around this by doing the
+    /// following:
+    ///
+    /// - We open object files as soon as we learn about them, that way we increase
+    ///   the reference count of the file in the kernel. Files won't really be deleted
+    ///   until the reference count drops to zero.
+    /// - In order to re-open files even if they've been deleted, we can use the procfs
+    ///   interface, as long as their reference count hasn't reached zero and the kernel
+    ///   hasn't removed the file from the file system and the various caches.
+    fn open_file_from_procfs_fd(&self) -> File {
+        let raw_fd = self.file.as_raw_fd();
+        File::open(format!("/proc/{}/fd/{}", process::id(), raw_fd)).expect(
+            "re-opening the file from procfs will never fail as we have an already opened file",
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +140,7 @@ impl ExecutableMapping {
 
         if let Some(el) = object_files.get_mut(&self.executable_id) {
             el.references -= 1;
+
             debug_assert!(
                 el.references >= 0,
                 "Reference count for {:?} is negative ",
@@ -122,7 +151,7 @@ impl ExecutableMapping {
 }
 pub struct NativeUnwindState {
     dirty: bool,
-    live_shard: Vec<stack_unwind_row_t>,
+    live_shard: Vec<CompactUnwindRow>,
     known_executables: HashSet<ExecutableId>,
     shard_index: u64,
 }
@@ -554,22 +583,28 @@ impl Profiler<'_> {
             }
         });
 
-        let ticks = tick(self.duration);
+        let total_duration_tick = tick(self.duration);
+        let session_tick = tick(self.session_duration);
         let persist_ticks = tick(Duration::from_millis(100));
 
         loop {
             select! {
                 recv(self.stop_chan_receive) -> _ => {
-                    println!("aa ctrl+c");
+                    debug!("received ctrl+c");
                     let profile = self.collect_profile();
                     self.send_profile(profile);
                     break;
                 },
-                recv(ticks) -> _ => {
-                    debug!("collecting profiles on schedule");
+                recv(total_duration_tick) -> _ => {
+                    debug!("done profiling");
                     let profile = self.collect_profile();
                     self.send_profile(profile);
                     break;
+                },
+                recv(session_tick) -> _ => {
+                    debug!("collecting profiles on schedule");
+                    let profile = self.collect_profile();
+                    self.send_profile(profile);
                 }
                 recv(self.tracers_chan_receive) -> read => {
                         match read {
@@ -809,15 +844,20 @@ impl Profiler<'_> {
         self.procs.lock().expect("lock").get(&pid).is_some()
     }
 
-    fn persist_unwind_info(&self, live_shard: &Vec<stack_unwind_row_t>) -> bool {
+    fn persist_unwind_info(&self, live_shard: &Vec<CompactUnwindRow>) -> bool {
         let _span = span!(Level::DEBUG, "persist_unwind_info").entered();
+        let mut bpf_unwind_info: Vec<stack_unwind_row_t> =
+            Vec::with_capacity(live_shard.capacity());
+        for row in live_shard {
+            bpf_unwind_info.push(row.into());
+        }
 
         let key = self.native_unwind_state.shard_index.to_ne_bytes();
         let val = unsafe {
             // Probs we need to zero this mem?
             std::slice::from_raw_parts(
-                live_shard.as_ptr() as *const u8,
-                live_shard.capacity() * ::std::mem::size_of::<stack_unwind_row_t>(),
+                bpf_unwind_info.as_ptr() as *const u8,
+                bpf_unwind_info.capacity() * ::std::mem::size_of::<stack_unwind_row_t>(),
             )
         };
 
@@ -978,7 +1018,7 @@ impl Profiler<'_> {
             )
             .entered();
 
-            let mut found_unwind_info: Vec<stack_unwind_row_t>;
+            let mut found_unwind_info: Vec<CompactUnwindRow>;
 
             match in_memory_unwind_info(&first_mapping.path.to_string_lossy()) {
                 Ok(unwind_info) => {
@@ -1221,13 +1261,33 @@ impl Profiler<'_> {
                     abs_path.push("/root");
                     abs_path.push(path);
 
-                    let file = fs::File::open(&abs_path)?;
-                    let object_file = ObjectFile::new(&abs_path);
-                    if object_file.is_err() {
-                        warn!("object_file failed with {:?} {:?}", object_file, abs_path);
+                    // We've seen debug info executables that get deleted in Rust applications.
+                    // There are probably other cases, but we'll handle them as we bump into them.
+                    if abs_path.to_str().unwrap().contains("(deleted)") {
                         continue;
                     }
-                    let object_file = object_file.unwrap();
+
+                    // We want to open the file as quickly as possible to minimise the chances of races
+                    // if the file is deleted.
+                    let file = match fs::File::open(&abs_path) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            warn!("failed to open file {} due to {:?}", abs_path.display(), e);
+                            // Rather than returning here, we prefer to be able to profile some
+                            // parts of the binary
+                            continue;
+                        }
+                    };
+
+                    let object_file = match ObjectFile::new(&abs_path) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            warn!("object_file {} failed with {:?}", abs_path.display(), e);
+                            // Rather than returning here, we prefer to be able to profile some
+                            // parts of the binary
+                            continue;
+                        }
+                    };
 
                     // Disable profiling Go applications as they are not properly supported yet.
                     // Among other things, blazesym doesn't support symbolizing Go binaries.
@@ -1529,5 +1589,36 @@ mod tests {
         ---
         "SymbolizedAggregatedSample { pid: 98765, tid: 98766, ustack: \"[NONE]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 1001 }"
         "###);
+    }
+
+    /// This tests ensures that cloning an `ObjectFileInfo` succeeds to
+    /// open the file even if it's been deleted. This works because we
+    /// always keep at least one open file descriptor to prevent the kernel
+    /// from freeing the resource, effectively removing the file from the
+    /// file system.
+    #[test]
+    fn test_object_file_clone() {
+        use std::fs::remove_file;
+        use std::io::Read;
+
+        let named_tmpfile = tempfile::NamedTempFile::new().unwrap();
+        let file_path = named_tmpfile.path();
+        let file = File::open(file_path).unwrap();
+
+        let object_file_info = ObjectFileInfo {
+            file,
+            path: file_path.to_path_buf(),
+            load_offset: 0,
+            load_vaddr: 0,
+            is_dyn: false,
+            references: 1,
+        };
+
+        remove_file(file_path).unwrap();
+
+        let mut object_file_info_copy = object_file_info.clone();
+        let mut buf = String::new();
+        // This would fail without the procfs hack.
+        object_file_info_copy.file.read_to_string(&mut buf).unwrap();
     }
 }

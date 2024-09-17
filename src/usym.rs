@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::process::Command;
 
 use blazesym::symbolize::Elf;
 use blazesym::symbolize::Input;
@@ -11,8 +10,6 @@ use tracing::error;
 
 use crate::profiler::Frame;
 use crate::profiler::FrameAddress;
-
-const ADDR2LINE_BIN: &str = "/usr/bin/addr2line";
 
 pub fn symbolize_native_stack_blaze(
     address_pairs: Vec<FrameAddress>,
@@ -58,14 +55,7 @@ pub fn symbolize_native_stack_blaze(
                 inlined,
                 ..
             }) => {
-                symbols.push(Frame {
-                    virtual_address: vaddr,
-                    file_offset: Some(*addr),
-                    name: name.to_string(),
-                    inline: false,
-                });
-
-                for frame in inlined.iter() {
+                for frame in inlined.iter().rev() {
                     symbols.push(Frame {
                         virtual_address: vaddr,
                         file_offset: Some(*addr),
@@ -73,6 +63,12 @@ pub fn symbolize_native_stack_blaze(
                         inline: true,
                     });
                 }
+                symbols.push(Frame {
+                    virtual_address: vaddr,
+                    file_offset: Some(*addr),
+                    name: name.to_string(),
+                    inline: false,
+                });
             }
             Symbolized::Unknown(r) => {
                 symbols.push(Frame {
@@ -89,28 +85,67 @@ pub fn symbolize_native_stack_blaze(
     res
 }
 
-// addr2line based symbolizer for testing and local dev
-// in the future this should be done in the backend
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
 
-pub fn symbolize_native_stack_addr2line(frames: Vec<u64>, object_path: &PathBuf) -> Vec<String> {
-    // return vec!["heh".to_string()];
-
-    let mut cmd = Command::new(ADDR2LINE_BIN);
-
-    cmd.arg("-f").arg("-e").arg(object_path);
-
-    for uaddr in frames {
-        cmd.arg(format!("{:x}", uaddr - 1));
+    #[test]
+    fn test_blazesym() {
+        assert_eq!(
+            symbolize_native_stack_blaze(
+                vec![
+                    FrameAddress {
+                        virtual_address: 0x0,
+                        file_offset: 0x4012d5 // main with multiple inlined nested calls
+                    },
+                    FrameAddress {
+                        virtual_address: 0x0,
+                        file_offset: 0x401058 // _start
+                    }
+                ],
+                &PathBuf::from_str("tests/testdata/main_cpp_clang_03_with_inlined_3s").unwrap()
+            ),
+            vec![
+                vec![
+                    Frame {
+                        virtual_address: 0,
+                        file_offset: Some(0x4012b0),
+                        name: "top3()".to_string(),
+                        inline: true
+                    },
+                    Frame {
+                        virtual_address: 0,
+                        file_offset: Some(0x4012b0),
+                        name: "c3()".to_string(),
+                        inline: true
+                    },
+                    Frame {
+                        virtual_address: 0,
+                        file_offset: Some(0x4012b0),
+                        name: "b3()".to_string(),
+                        inline: true
+                    },
+                    Frame {
+                        virtual_address: 0,
+                        file_offset: Some(0x4012b0),
+                        name: "a3()".to_string(),
+                        inline: true
+                    },
+                    Frame {
+                        virtual_address: 0,
+                        file_offset: Some(0x4012b0),
+                        name: "main".to_string(),
+                        inline: false
+                    },
+                ],
+                vec![Frame {
+                    virtual_address: 0x0,
+                    file_offset: Some(0x401040), // TODO investigate why this doesn't match the input value
+                    name: "_start".to_string(),
+                    inline: false
+                }]
+            ]
+        );
     }
-
-    let output = cmd.output().expect("addr2line command failed to start");
-
-    if !output.status.success() {
-        println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-        println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
-        return vec!["err: addr2line failed to execute".to_string()];
-    }
-    let raw_out = String::from_utf8_lossy(&output.stdout);
-    let func_name = raw_out.split('\n').collect::<Vec<_>>();
-    vec![func_name.first().unwrap().to_string()]
 }
