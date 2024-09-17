@@ -2,8 +2,8 @@ name: ci
 on:
   pull_request:
   push:
-    branches:
-      - main
+      branches:
+        - main
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
@@ -13,25 +13,21 @@ jobs:
   ci:
     runs-on: ubuntu-22.04
     permissions:
-      id-token: write
-      contents: read
+        id-token: write
+        contents: read
     steps:
-      - uses: actions/checkout@main
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
-      - name: Set up nix dev env
-        run: nix develop --command echo 0
-      - name: Run `cargo build`
-        run: nix develop --ignore-environment --command cargo build
-      # For when we need a shell session into the workflow
-      # - name: Setup tmate session
-      #   uses: mxschmitt/action-tmate@v3
-      - name: Run `cargo clippy`
-        # Removing --ignore-environment so this build will work for now
-        run: nix develop --command cargo clippy --all-targets -- -D warnings
-      - name: Run `cargo test`
-        run: nix develop --command cargo test
-      - name: Run `cargo fmt`
-        run: nix develop --ignore-environment --command cargo fmt --check
-      - name: Run `nix fmt`
-        run: nix fmt -- --check .
+    - uses: actions/checkout@main
+    - uses: DeterminateSystems/nix-installer-action@main
+    - uses: DeterminateSystems/magic-nix-cache-action@main
+    - name: Set up nix dev env
+      run: nix develop --command echo 0
+    - name: Run `cargo build`
+      run: nix develop --ignore-environment --command cargo build
+    - name: Run `cargo clippy`
+      run: nix develop --ignore-environment --command cargo clippy --all-targets -- -D warnings
+    - name: Run `cargo test`
+      run: nix develop --command cargo test
+    - name: Run `cargo fmt`
+      run: nix develop --ignore-environment --command cargo fmt --check
+    - name: Run `nix fmt`
+      run: nix fmt -- --check .
