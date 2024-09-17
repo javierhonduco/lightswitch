@@ -46,20 +46,20 @@ fn get_trace_sched_event_id(trace_event: &str) -> Result<u32> {
 
     match read_to_string(path) {
         Ok(id) => match id.trim().parse::<u32>() {
-            Ok(val) => return Ok(val),
-            Err(err) => {
-                return Err(anyhow!(
-                    "Failed to read event={} id, err={}",
-                    trace_event,
-                    err
-                ))
-            }
+            Ok(val) => Ok(val),
+            Err(err) => Err(anyhow!(
+                "Failed to read event={} id, err={}",
+                trace_event,
+                err
+            )),
         },
-        Err(_) => return Err(anyhow!("Failed to read event={} id", trace_event)),
+        Err(_) => Err(anyhow!("Failed to read event={} id", trace_event)),
     }
 }
 
 fn tracepoints_detected() -> bool {
+    let mut tracepoints_supported = true;
+
     let mut attrs = sys::bindings::perf_event_attr::default();
     attrs.size = std::mem::size_of::<sys::bindings::perf_event_attr>() as u32;
     attrs.type_ = sys::bindings::PERF_TYPE_TRACEPOINT;
@@ -68,7 +68,8 @@ fn tracepoints_detected() -> bool {
         Ok(event_id) => attrs.config = event_id as u64,
         Err(err) => {
             warn!("Failed to detect tracepoint support, err={}", err);
-            return false;
+            tracepoints_supported = false;
+            return tracepoints_supported;
         }
     }
 
@@ -82,18 +83,19 @@ fn tracepoints_detected() -> bool {
     };
 
     if result < 0 {
-        return false;
+        tracepoints_supported = false;
+        return tracepoints_supported;
     }
 
     if unsafe { close(result) } != 0 {
         warn!("Failed to close file descriptor {}", result);
     }
-    return true;
+    tracepoints_supported
 }
 
 fn perf_events_detected() -> bool {
     // TODO: Implement this
-    return false;
+    false
 }
 
 fn check_bpf_features() -> Result<BpfFeatures> {
@@ -123,7 +125,7 @@ fn check_bpf_features() -> Result<BpfFeatures> {
         has_ring_buf: bpf_features_bss.feature_has_ringbuf,
     };
 
-    return Ok(features);
+    Ok(features)
 }
 
 pub fn get_system_info() -> Result<SystemInfo> {
@@ -141,7 +143,7 @@ pub fn get_system_info() -> Result<SystemInfo> {
         tracepoints_support_detected: tracepoints_detected(),
         perfevents_support_detected: perf_events_detected(),
         can_load_trivial_bpf_program: available_bpf_features.is_some(),
-        available_bpf_features: available_bpf_features,
+        available_bpf_features,
     })
 }
 
