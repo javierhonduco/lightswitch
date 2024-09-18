@@ -7,6 +7,8 @@ pub struct AddressBlockRange {
     pub prefix_len: u32,
 }
 
+/// Calculate addresses for longest prefix match.
+///
 /// For a given address range, calculate all the prefix ranges to ensure searching
 /// with Longest Prefix Match returns the precise value we want. This is typically
 /// used in networking to select the right subnet.

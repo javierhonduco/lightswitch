@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+#[allow(clippy::all)]
 pub mod pprof {
     include!(concat!(env!("OUT_DIR"), "/perftools.profiles.rs"));
 }
