@@ -221,10 +221,7 @@ struct Cli {
     )]
     mapsize_rate_limits: u32,
     // Exclude myself from profiling
-    #[arg(
-        long,
-        help = "Do not profile the profiler (myself)"
-    )]
+    #[arg(long, help = "Do not profile the profiler (myself)")]
     exclude_self: bool,
 }
 
