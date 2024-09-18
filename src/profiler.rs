@@ -1222,7 +1222,7 @@ impl Profiler<'_> {
     }
 
     fn should_profile(&self, pid: i32) -> bool {
-        if self.exclude_self && (pid == std::process::id()) {
+        if self.exclude_self && (pid == std::process::id().try_into().unwrap()) {
             return false;
         }
 
