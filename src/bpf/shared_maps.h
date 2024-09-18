@@ -18,7 +18,6 @@ struct {
   __type(value, struct unwinder_stats_t);
 } percpu_stats SEC(".maps");
 
-
 #define DEFINE_COUNTER(__func__name)                                           \
   static void bump_unwind_##__func__name() {                                   \
     u32 zero = 0;                                                              \
@@ -35,7 +34,9 @@ DEFINE_COUNTER(error_truncated);
 DEFINE_COUNTER(error_unsupported_expression);
 DEFINE_COUNTER(error_unsupported_frame_pointer_action);
 DEFINE_COUNTER(error_unsupported_cfa_register);
-DEFINE_COUNTER(error_catchall);
+DEFINE_COUNTER(error_previous_rsp_zero);
+DEFINE_COUNTER(error_previous_rip_zero);
+DEFINE_COUNTER(error_previous_rbp_zero);
 DEFINE_COUNTER(error_should_never_happen);
 DEFINE_COUNTER(error_bp_should_be_zero_for_bottom_frame);
 DEFINE_COUNTER(error_mapping_not_found);

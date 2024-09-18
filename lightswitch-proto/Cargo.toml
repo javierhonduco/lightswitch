@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 prost = "0.12"
-anyhow = "1.0.86"
+anyhow = "1.0.89"
 
 [build-dependencies]
-prost-build = "0.13.1"
+prost-build = "0.13.2"
