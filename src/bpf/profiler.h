@@ -80,13 +80,13 @@ struct unwinder_stats_t {
   u64 error_previous_rip_zero;
   u64 error_previous_rbp_zero;
   u64 error_should_never_happen;
-  u64 error_bp_should_be_zero_for_bottom_frame;
   u64 error_mapping_not_found;
   u64 error_mapping_does_not_contain_pc;
   u64 error_chunk_not_found;
   u64 error_binary_search_exausted_iterations;
   u64 error_sending_new_process_event;
   u64 error_cfa_offset_did_not_fit;
+  u64 bp_non_zero_for_bottom_frame;
   u64 vdso_encountered;
   u64 jit_encountered;
 };

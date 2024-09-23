@@ -544,7 +544,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     bool main_thread = per_process_id == per_thread_id;
     if (main_thread && unwind_state->bp != 0) {
       LOG("[error] Expected rbp to be 0 but found %llx, pc: %llx (Node.js is not well supported yet)", unwind_state->bp, unwind_state->ip);
-      bump_unwind_error_bp_should_be_zero_for_bottom_frame();
+      bump_unwind_bp_non_zero_for_bottom_frame();
     }
 
     LOG("======= reached bottom frame! =======");

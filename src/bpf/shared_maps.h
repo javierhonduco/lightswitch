@@ -38,13 +38,13 @@ DEFINE_COUNTER(error_previous_rsp_zero);
 DEFINE_COUNTER(error_previous_rip_zero);
 DEFINE_COUNTER(error_previous_rbp_zero);
 DEFINE_COUNTER(error_should_never_happen);
-DEFINE_COUNTER(error_bp_should_be_zero_for_bottom_frame);
 DEFINE_COUNTER(error_mapping_not_found);
 DEFINE_COUNTER(error_mapping_does_not_contain_pc);
 DEFINE_COUNTER(error_chunk_not_found);
 DEFINE_COUNTER(error_binary_search_exausted_iterations);
 DEFINE_COUNTER(error_sending_new_process_event);
 DEFINE_COUNTER(error_cfa_offset_did_not_fit);
+DEFINE_COUNTER(bp_non_zero_for_bottom_frame);
 DEFINE_COUNTER(vdso_encountered);
 DEFINE_COUNTER(jit_encountered);
 
