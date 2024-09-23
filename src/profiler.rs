@@ -197,6 +197,8 @@ pub struct Profiler<'bpf> {
     // Size of each perf buffer, in bytes
     perf_buffer_bytes: usize,
     session_duration: Duration,
+    // Whether the profiler (this process) should be excluded from profiling
+    exclude_self: bool,
 }
 
 // Static config
@@ -326,6 +328,7 @@ pub struct ProfilerConfig {
     pub mapsize_unwind_info_chunks: u32,
     pub mapsize_unwind_tables: u32,
     pub mapsize_rate_limits: u32,
+    pub exclude_self: bool,
 }
 
 // Note that we normally pass in the defaults from Clap, and we don't want
@@ -346,6 +349,7 @@ impl Default for ProfilerConfig {
             mapsize_unwind_info_chunks: 5000,
             mapsize_unwind_tables: 65,
             mapsize_rate_limits: 5000,
+            exclude_self: false,
         }
     }
 }
@@ -398,6 +402,7 @@ impl Profiler<'_> {
             .lightswitch_config
             .verbose_logging
             .write(profiler_config.bpf_logging);
+        let exclude_self = profiler_config.exclude_self;
         let bpf = open_skel.load().expect("load skel");
         info!("native unwinder BPF program loaded");
         let native_unwinder_maps = bpf.maps();
@@ -491,6 +496,7 @@ impl Profiler<'_> {
             sample_freq,
             perf_buffer_bytes,
             session_duration: Duration::from_secs(5),
+            exclude_self,
         }
     }
 
@@ -1216,6 +1222,10 @@ impl Profiler<'_> {
     }
 
     fn should_profile(&self, pid: i32) -> bool {
+        if self.exclude_self && pid == std::process::id() as i32 {
+            return false;
+        }
+
         if self.filter_pids.is_empty() {
             return true;
         }
