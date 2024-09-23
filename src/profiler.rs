@@ -1270,9 +1270,16 @@ impl Profiler<'_> {
                     let abs_path = format!("/proc/{}/root/{}", pid, path.to_string_lossy());
 
                     // We've seen debug info executables that get deleted in Rust applications.
-                    // There are probably other cases, but we'll handle them as we bump into them.
                     if abs_path.contains("(deleted)") {
                         continue;
+                    }
+
+                    // There are probably other cases, but we'll handle them as we bump into them.
+                    if abs_path.contains("(") {
+                        warn!(
+                            "absolute path ({}) contains '(', it might be special",
+                            abs_path
+                        );
                     }
 
                     // We want to open the file as quickly as possible to minimise the chances of races
