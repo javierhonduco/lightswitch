@@ -1267,13 +1267,11 @@ impl Profiler<'_> {
             }
             match &map.pathname {
                 procfs::process::MMapPath::Path(path) => {
-                    let mut abs_path = proc.exe()?;
-                    abs_path.push("/root");
-                    abs_path.push(path);
+                    let abs_path = format!("/proc/{}/root/{}", pid, path.to_string_lossy());
 
                     // We've seen debug info executables that get deleted in Rust applications.
                     // There are probably other cases, but we'll handle them as we bump into them.
-                    if abs_path.to_str().unwrap().contains("(deleted)") {
+                    if abs_path.contains("(deleted)") {
                         continue;
                     }
 
@@ -1282,17 +1280,17 @@ impl Profiler<'_> {
                     let file = match fs::File::open(&abs_path) {
                         Ok(f) => f,
                         Err(e) => {
-                            warn!("failed to open file {} due to {:?}", abs_path.display(), e);
+                            warn!("failed to open file {} due to {:?}", abs_path, e);
                             // Rather than returning here, we prefer to be able to profile some
                             // parts of the binary
                             continue;
                         }
                     };
 
-                    let object_file = match ObjectFile::new(&abs_path) {
+                    let object_file = match ObjectFile::new(&PathBuf::from(abs_path.clone())) {
                         Ok(f) => f,
                         Err(e) => {
-                            warn!("object_file {} failed with {:?}", abs_path.display(), e);
+                            warn!("object_file {} failed with {:?}", abs_path, e);
                             // Rather than returning here, we prefer to be able to profile some
                             // parts of the binary
                             continue;
@@ -1311,7 +1309,7 @@ impl Profiler<'_> {
                     };
 
                     let Ok(executable_id) = object_file.id() else {
-                        debug!("could not get id for object file: {:?}", abs_path);
+                        debug!("could not get id for object file: {}", abs_path);
                         continue;
                     };
 
@@ -1343,7 +1341,7 @@ impl Profiler<'_> {
                         Entry::Vacant(entry) => match object_file.elf_load() {
                             Ok(elf_load) => {
                                 entry.insert(ObjectFileInfo {
-                                    path: abs_path,
+                                    path: PathBuf::from(abs_path),
                                     file,
                                     load_offset: elf_load.offset,
                                     load_vaddr: elf_load.vaddr,
