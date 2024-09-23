@@ -193,7 +193,7 @@ mod tests {
     fn test_get_system_info() {
         let result = SystemInfo::new();
 
-        assert!(!result.is_err());
+        assert!(result.is_ok());
 
         let system_info = result.unwrap();
         assert!(system_info.procfs_mount_detected);
