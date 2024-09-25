@@ -2,12 +2,13 @@ use std::fs::read_to_string;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
-use tracing::warn;
+use thiserror::Error;
+use tracing::{error, warn};
 
 use crate::bpf::features_skel::FeaturesSkelBuilder;
 use crate::perf_events::setup_perf_event;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libc::close;
 use nix::sys::utsname;
@@ -35,41 +36,65 @@ pub struct SystemInfo {
     pub available_bpf_features: BpfFeatures,
 }
 
+#[derive(Debug, Error)]
+pub enum SystemInfoError {
+    #[error("File could not be opened {0}")]
+    ErrorOpeningFile(String),
+
+    #[error("Failed to detect tracefs mount")]
+    ErrorTracefsNotMounted,
+
+    #[error("Id for trace event {0} could not be read, err={1}")]
+    ErrorReadingTraceEventId(String, String),
+
+    #[error("BPF feature detection failed, err={0}")]
+    ErrorDetectingBpfFeatures(String),
+}
+
+struct DroppableFiledescriptor {
+    fd: i32,
+}
+
+impl Drop for DroppableFiledescriptor {
+    fn drop(&mut self) {
+        if { unsafe { close(self.fd) } } != 0 {
+            warn!("Failed to close file descriptor={}", self.fd);
+        }
+    }
+}
+
 fn tracefs_mount_detected() -> bool {
     return Path::new(PROCFS_PATH).exists();
 }
 
 fn get_trace_sched_event_id(trace_event: &str) -> Result<u32> {
     if !tracefs_mount_detected() {
-        return Err(anyhow!("Failed to detect tracefs"));
+        return Err(SystemInfoError::ErrorTracefsNotMounted.into());
     }
 
     let event_id_path = format!("{}/events/sched/{}/id", TRACEFS_PATH, trace_event);
     let path = Path::new(&event_id_path);
     if !path.exists() {
-        return Err(anyhow!("Failed to open path={}", event_id_path));
+        return Err(SystemInfoError::ErrorOpeningFile(event_id_path).into());
     }
 
-    match read_to_string(path) {
-        Ok(id) => match id.trim().parse::<u32>() {
-            Ok(val) => Ok(val),
-            Err(err) => Err(anyhow!(
-                "Failed to read event={} id, err={}",
-                trace_event,
-                err
-            )),
-        },
-        Err(_) => Err(anyhow!("Failed to read event={} id", trace_event)),
-    }
+    read_to_string(path)
+        .map_err(|err| {
+            SystemInfoError::ErrorReadingTraceEventId(trace_event.to_string(), err.to_string())
+        })?
+        .trim()
+        .parse::<u32>()
+        .map_err(|err| {
+            SystemInfoError::ErrorReadingTraceEventId(trace_event.to_string(), err.to_string())
+                .into()
+        })
 }
 
 fn software_perfevents_detected() -> bool {
     unsafe {
         match setup_perf_event(/* cpu */ 0, /*sample_freq */ 0) {
             Ok(fd) => {
-                if { close(fd) } != 0 {
-                    warn!("Failed to close file descriptor={}", fd);
-                }
+                DroppableFiledescriptor { fd };
                 true
             }
             Err(_) => false,
@@ -78,8 +103,6 @@ fn software_perfevents_detected() -> bool {
 }
 
 fn tracepoints_detected() -> bool {
-    let mut tracepoints_supported = true;
-
     let mut attrs = sys::bindings::perf_event_attr {
         size: std::mem::size_of::<sys::bindings::perf_event_attr>() as u32,
         type_: sys::bindings::PERF_TYPE_TRACEPOINT,
@@ -89,45 +112,42 @@ fn tracepoints_detected() -> bool {
     match get_trace_sched_event_id("sched_process_exec") {
         Ok(event_id) => attrs.config = event_id as u64,
         Err(err) => {
-            warn!("Failed to detect tracepoint support, err={}", err);
-            tracepoints_supported = false;
-            return tracepoints_supported;
+            error!("{}", err);
+            return false;
         }
     }
 
     let fd = unsafe {
-        sys::perf_event_open(
-            &mut attrs, -1, /* pid */
-            0,  /* cpu */
-            -1, /* group_fd */
-            0,  /* flags */
-        )
+        DroppableFiledescriptor {
+            fd: sys::perf_event_open(
+                &mut attrs, -1, /* pid */
+                0,  /* cpu */
+                -1, /* group_fd */
+                0,  /* flags */
+            ),
+        }
     };
 
-    if fd < 0 {
-        tracepoints_supported = false;
-        return tracepoints_supported;
+    if fd.fd < 0 {
+        return false;
     }
 
-    if unsafe { close(fd) } != 0 {
-        warn!("Failed to close file descriptor={}", fd);
-    }
-    tracepoints_supported
+    true
 }
 
 fn check_bpf_features() -> Result<BpfFeatures> {
     let skel_builder = FeaturesSkelBuilder::default();
     let open_skel = match skel_builder.open() {
         Ok(open_skel) => open_skel,
-        Err(_) => return Err(anyhow!("Failed to get available bpf features")),
+        Err(err) => return Err(SystemInfoError::ErrorDetectingBpfFeatures(err.to_string()).into()),
     };
     let mut bpf_features = match open_skel.load() {
         Ok(bpf_features) => bpf_features,
-        Err(_) => return Err(anyhow!("Failed to get available bpf features")),
+        Err(err) => return Err(SystemInfoError::ErrorDetectingBpfFeatures(err.to_string()).into()),
     };
     match bpf_features.attach() {
         Ok(_) => {}
-        Err(_) => return Err(anyhow!("Failed to get available bpf features")),
+        Err(err) => return Err(SystemInfoError::ErrorDetectingBpfFeatures(err.to_string()).into()),
     };
 
     thread::sleep(Duration::from_millis(50));
