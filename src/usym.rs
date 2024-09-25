@@ -10,6 +10,7 @@ use tracing::error;
 
 use crate::profiler::Frame;
 use crate::profiler::FrameAddress;
+use crate::profiler::SymbolizationError;
 
 pub fn symbolize_native_stack_blaze(
     address_pairs: Vec<FrameAddress>,
@@ -30,10 +31,10 @@ pub fn symbolize_native_stack_blaze(
         Err(e) => {
             res.resize(
                 offsets.len(),
-                vec![Frame::with_error(format!(
-                    "<blazesym: failed to symbolize due to {}",
-                    e
-                ))],
+                vec![Frame::with_error(
+                    0xBAD,
+                    format!("<blazesym: failed to symbolize due to {}", e),
+                )],
             );
             return res;
         }
@@ -43,7 +44,7 @@ pub fn symbolize_native_stack_blaze(
         error!("symbols.len() != virtual_addresses.len() this should not happen");
     }
 
-    for (symbol, vaddr) in syms.iter().zip(virtual_addresses) {
+    for (symbol, virtual_address) in syms.iter().zip(virtual_addresses) {
         let mut symbols = Vec::new();
 
         match symbol {
@@ -57,25 +58,25 @@ pub fn symbolize_native_stack_blaze(
             }) => {
                 for frame in inlined.iter().rev() {
                     symbols.push(Frame {
-                        virtual_address: vaddr,
+                        virtual_address,
                         file_offset: Some(*addr),
-                        name: frame.name.to_string(),
-                        inline: true,
+                        symbolization_result: Some(Ok((frame.name.to_string(), true))),
                     });
                 }
                 symbols.push(Frame {
-                    virtual_address: vaddr,
+                    virtual_address,
                     file_offset: Some(*addr),
-                    name: name.to_string(),
-                    inline: false,
+                    symbolization_result: Some(Ok((name.to_string(), false))),
                 });
             }
             Symbolized::Unknown(r) => {
                 symbols.push(Frame {
-                    virtual_address: 0x1111,
+                    virtual_address,
                     file_offset: None,
-                    name: format!("<blazesym: unknown symbol due to {}>", r),
-                    inline: false,
+                    symbolization_result: Some(Err(SymbolizationError::Generic(format!(
+                        "<blazesym: unknown symbol due to {}>",
+                        r
+                    )))),
                 });
             }
         }
@@ -111,39 +112,33 @@ mod tests {
                     Frame {
                         virtual_address: 0,
                         file_offset: Some(0x4012b0),
-                        name: "top3()".to_string(),
-                        inline: true
+                        symbolization_result: Some(Ok(("top3()".to_string(), true)))
                     },
                     Frame {
                         virtual_address: 0,
                         file_offset: Some(0x4012b0),
-                        name: "c3()".to_string(),
-                        inline: true
+                        symbolization_result: Some(Ok(("c3()".to_string(), true)))
                     },
                     Frame {
                         virtual_address: 0,
                         file_offset: Some(0x4012b0),
-                        name: "b3()".to_string(),
-                        inline: true
+                        symbolization_result: Some(Ok(("b3()".to_string(), true)))
                     },
                     Frame {
                         virtual_address: 0,
                         file_offset: Some(0x4012b0),
-                        name: "a3()".to_string(),
-                        inline: true
+                        symbolization_result: Some(Ok(("a3()".to_string(), true)))
                     },
                     Frame {
                         virtual_address: 0,
                         file_offset: Some(0x4012b0),
-                        name: "main".to_string(),
-                        inline: false
+                        symbolization_result: Some(Ok(("main".to_string(), false)))
                     },
                 ],
                 vec![Frame {
                     virtual_address: 0x0,
                     file_offset: Some(0x401040), // TODO investigate why this doesn't match the input value
-                    name: "_start".to_string(),
-                    inline: false
+                    symbolization_result: Some(Ok(("_start".to_string(), false)))
                 }]
             ]
         );
