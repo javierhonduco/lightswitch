@@ -54,8 +54,6 @@ impl Add for unwinder_stats_t {
             error_previous_rbp_zero: self.error_previous_rbp_zero + other.error_previous_rbp_zero,
             error_should_never_happen: self.error_should_never_happen
                 + other.error_should_never_happen,
-            error_bp_should_be_zero_for_bottom_frame: self.error_bp_should_be_zero_for_bottom_frame
-                + other.error_bp_should_be_zero_for_bottom_frame,
             error_binary_search_exausted_iterations: self.error_binary_search_exausted_iterations
                 + other.error_binary_search_exausted_iterations,
             error_chunk_not_found: self.error_chunk_not_found + other.error_chunk_not_found,
@@ -66,6 +64,8 @@ impl Add for unwinder_stats_t {
                 + other.error_sending_new_process_event,
             error_cfa_offset_did_not_fit: self.error_cfa_offset_did_not_fit
                 + other.error_cfa_offset_did_not_fit,
+            bp_non_zero_for_bottom_frame: self.bp_non_zero_for_bottom_frame
+                + other.bp_non_zero_for_bottom_frame,
             vdso_encountered: self.vdso_encountered + other.vdso_encountered,
             jit_encountered: self.jit_encountered + other.jit_encountered,
         }
