@@ -123,6 +123,15 @@ enum ProfileSender {
     Remote,
 }
 
+
+#[derive(PartialEq, clap::ValueEnum, Debug, Clone, Default)]
+enum Symbolizer {
+    #[default]
+    Local,
+    None,
+}
+
+
 #[derive(Parser, Debug)]
 struct Cli {
     /// Specific PIDs to profile
@@ -219,6 +228,8 @@ struct Cli {
     // Exclude myself from profiling
     #[arg(long, help = "Do not profile the profiler (myself)")]
     exclude_self: bool,
+    #[arg(long, default_value_t, value_enum)]
+    symbolizer: Symbolizer,
 }
 
 /// Exit the main thread if any thread panics. We prefer this behaviour because pretty much every
@@ -305,7 +316,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
         }
         ProfileSender::Remote => {
-            Box::new(StreamingCollector::new(PPROF_INGEST_URL)) as Box<dyn Collector + Send>
+            Box::new(StreamingCollector::new(args.symbolizer == Symbolizer::Local, PPROF_INGEST_URL)) as Box<dyn Collector + Send>
         }
     }));
 
@@ -339,7 +350,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     p.run(collector.clone());
 
     let collector = collector.lock().unwrap();
-    let (raw_profile, procs, objs) = collector.finish();
+    let (mut profile, procs, objs) = collector.finish();
 
     // If we need to send the profile to the backend there's nothing else to do.
     match args.sender {
@@ -350,11 +361,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Otherwise let's symbolize the profile and write it to disk.
-    let symbolized_profile = symbolize_profile(&raw_profile, procs, objs);
+    if args.symbolizer == Symbolizer::Local {
+        profile = symbolize_profile(&profile, procs, objs);
+    }
 
     match args.profile_format {
         ProfileFormat::FlameGraph => {
-            let folded = fold_profile(symbolized_profile);
+            let folded = fold_profile(profile);
             let mut options: flamegraph::Options<'_> = flamegraph::Options::default();
             let data = folded.as_bytes();
             let f = File::create(args.profile_name.unwrap_or_else(|| "flame.svg".into())).unwrap();
@@ -369,7 +382,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         ProfileFormat::Pprof => {
             let mut buffer = Vec::new();
-            let proto = to_pprof(symbolized_profile, procs, objs);
+            let proto = to_pprof(profile, procs, objs);
             proto.validate().unwrap();
             proto.profile().encode(&mut buffer).unwrap();
             let mut pprof_file =

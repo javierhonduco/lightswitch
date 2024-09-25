@@ -106,7 +106,7 @@ impl ObjectFileInfo {
     }
 
     /// Returns the procfs path for this file descriptor. See comment above.
-    fn open_file_path(&self) -> PathBuf {
+    pub fn open_file_path(&self) -> PathBuf {
         let raw_fd = self.file.as_raw_fd();
         PathBuf::from(format!("/proc/{}/fd/{}", process::id(), raw_fd))
     }
@@ -240,6 +240,58 @@ pub struct RawAggregatedSample {
     pub count: u64,
 }
 
+impl RawAggregatedSample {
+    pub fn process(&self, procs: &HashMap<i32, ProcessInfo>, objs: &HashMap<ExecutableId, ObjectFileInfo>) -> Result<AggregatedSample, anyhow::Error> {
+        let Some(info) = procs.get(&self.pid) else {
+            return Err(anyhow!("process not found"));
+        };
+
+        let Some(native_stack) = self.ustack else {
+            return Err(anyhow!("no native stack")); // @nocommit, this could happen and we should not err like this
+        };
+
+        let mut processed_sample = AggregatedSample {
+            pid: self.pid,
+            tid: self.tid,
+            ustack: Vec::new(),
+            kstack: Vec::new(),
+            count: self.count,
+        };
+
+        for (i, virtual_address) in native_stack.addresses.into_iter().enumerate() {
+            if native_stack.len <= i.try_into().unwrap() {
+                continue;
+            }
+
+            let Some(mapping) = info.mappings.for_address(virtual_address) else {
+                continue;
+            };
+
+            let file_offset = match objs.get(&mapping.executable_id) {
+                Some(obj) => {
+                    // We need the normalized address for normal object files
+                    // and might need the absolute addresses for JITs
+
+                    // attempt to subtract with overflow
+                    let normalized_addr = virtual_address - mapping.start_addr + mapping.offset
+                        - obj.load_offset
+                        + obj.load_vaddr;
+
+                    Some(normalized_addr)
+                }
+                None => {
+                    error!("executable with id {} not found", mapping.executable_id);
+                    None
+                }
+            };
+
+            processed_sample.ustack.push(Frame { virtual_address, file_offset, symbolization_result: None });
+        }
+
+        Ok(processed_sample)
+    }
+}
+
 impl fmt::Display for RawAggregatedSample {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         let format_native_stack = |native_stack: Option<native_stack_t>| -> String {
@@ -276,36 +328,51 @@ pub struct FrameAddress {
     pub file_offset: u64,
 }
 
+#[derive(Debug, thiserror::Error, PartialEq, Eq, Hash, Clone)]
+pub enum SymbolizationError {
+    #[error("Symbolization error (backend) {0}")]
+    Backend(String),
+}
+
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Default)]
 pub struct Frame {
     /// Address from the process, as collected from the BPF program.
     pub virtual_address: u64,
     /// The offset in the object file after converting the virtual_address its relative position.
     pub file_offset: Option<u64>,
-    pub name: String,
-    pub inline: bool,
+    // @nocommit: do not use tuple
+    pub symbolization_result: Option<Result<(String, bool), SymbolizationError>>,
 }
 
 impl fmt::Display for Frame {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        let inline_str = if self.inline { "[inlined] " } else { "" };
-        write!(fmt, "{}{}", inline_str, self.name)
+        match &self.symbolization_result {
+            Some(Ok((name, inlined))) => {
+                let inline_str = if *inlined { "[inlined] " } else { "" };
+                write!(fmt, "{}{}", inline_str, name)
+            },
+            Some(Err(e)) => {
+                write!(fmt, "error: {:?}", e)
+            },
+            None => {
+                write!(fmt, "frame not symbolized")
+            }
+        }
     }
 }
 
 impl Frame {
-    pub fn with_error(msg: String) -> Self {
+    pub fn with_error(virtual_address: u64, msg: String) -> Self {
         Self {
-            virtual_address: 0xBAD,
+            virtual_address,
             file_offset: None,
-            name: msg,
-            inline: false,
+            symbolization_result: Some(Err(SymbolizationError::Backend(msg))),
         }
     }
 }
 
 #[derive(Default, Debug, Hash, Eq, PartialEq)]
-pub struct SymbolizedAggregatedSample {
+pub struct AggregatedSample {
     pub pid: i32,
     pub tid: i32,
     pub ustack: Vec<Frame>,
@@ -313,7 +380,7 @@ pub struct SymbolizedAggregatedSample {
     pub count: u64,
 }
 
-impl fmt::Display for SymbolizedAggregatedSample {
+impl fmt::Display for AggregatedSample {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         let format_symbolized_stack = |symbolized_stack: &Vec<Frame>| -> String {
             let mut res = vec![];
@@ -338,8 +405,10 @@ impl fmt::Display for SymbolizedAggregatedSample {
     }
 }
 
+/// Raw addresses as read from the unwinders.
 pub type RawAggregatedProfile = Vec<RawAggregatedSample>;
-pub type SymbolizedAggregatedProfile = Vec<SymbolizedAggregatedSample>;
+/// Could be symbolized or not.
+pub type AggregatedProfile = Vec<AggregatedSample>;
 
 pub struct ProfilerConfig {
     pub libbpf_debug: bool,
@@ -1760,7 +1829,7 @@ mod tests {
             })
             .collect();
 
-        let sample = SymbolizedAggregatedSample {
+        let sample = AggregatedSample {
             pid: 1234567,
             tid: 1234568,
             ustack: ustack_data,
@@ -1774,7 +1843,7 @@ mod tests {
 
         let ustack_data = vec![];
 
-        let sample = SymbolizedAggregatedSample {
+        let sample = AggregatedSample {
             pid: 98765,
             tid: 98766,
             ustack: ustack_data,

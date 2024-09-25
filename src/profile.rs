@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tracing::{debug, error, span, Level};
 
-use crate::bpf::profiler_bindings::native_stack_t;
 use crate::ksym::KsymIter;
 use crate::metadata::TaskName;
 use crate::object::ExecutableId;
@@ -15,13 +14,13 @@ use crate::profiler::FrameAddress;
 use crate::profiler::ObjectFileInfo;
 use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
-use crate::profiler::SymbolizedAggregatedProfile;
-use crate::profiler::SymbolizedAggregatedSample;
+use crate::profiler::AggregatedProfile;
+use crate::profiler::AggregatedSample;
 use crate::usym::symbolize_native_stack_blaze;
 
 /// Converts a given symbolized profile to Google's pprof.
 pub fn to_pprof(
-    profile: SymbolizedAggregatedProfile,
+    profile: AggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
 ) -> PprofBuilder {
@@ -44,8 +43,21 @@ pub fn to_pprof(
                 "fake_kernel_build_id",
             );
 
-            let (line, _) = pprof.add_line(&kframe.name);
-            let location = pprof.add_location(kframe.virtual_address, mapping_id, vec![line]);
+            let mut lines = vec![];
+
+            match kframe.symbolization_result {
+                Some(Ok((name, _))) => {
+                    let (line, _) = pprof.add_line(&name);
+                    lines.push(line);
+                }
+                Some(Err(e)) => {
+                    let (line, _) = pprof.add_line(&e.to_string());
+                    lines.push(line);
+                }
+                None => {}
+            }
+
+            let location = pprof.add_location(kframe.virtual_address, mapping_id, lines);
             location_ids.push(location);
         }
 
@@ -54,11 +66,13 @@ pub fn to_pprof(
 
             let Some(info) = procs.get(&sample.pid) else {
                 // r.push("<could not find process>".to_string());
+                println!("oh no");
                 continue;
             };
 
             let Some(mapping) = info.mappings.for_address(addr) else {
                 // r.push("<could not find mapping>".to_string());
+                println!("oh no2");
                 continue;
             };
 
@@ -86,8 +100,21 @@ pub fn to_pprof(
                     // TODO, ensure address normalization is correct
                     // normalized_addr == uframe.file_offset.unwrap()
 
-                    let (line, _) = pprof.add_line(&uframe.name);
-                    let location = pprof.add_location(normalized_addr, mapping_id, vec![line]);
+                    let mut lines = vec![];
+
+                    match uframe.symbolization_result {
+                        Some(Ok((name, _))) => {
+                            let (line, _) = pprof.add_line(&name);
+                            lines.push(line);
+                        }
+                        Some(Err(e)) => {
+                            let (line, _) = pprof.add_line(&e.to_string());
+                            lines.push(line);
+                        }
+                        None => {}
+                    }
+
+                    let location = pprof.add_location(normalized_addr, mapping_id, lines);
                     location_ids.push(location);
                 }
                 None => {
@@ -104,7 +131,7 @@ pub fn to_pprof(
                 LabelStringOrNumber::Number(sample.pid.into(), "task-tgid".into()),
             ),
             pprof.new_label(
-                "pid",
+                "tid",
                 LabelStringOrNumber::Number(sample.tid.into(), "task-id".into()),
             ),
             pprof.new_label(
@@ -131,7 +158,7 @@ pub fn to_pprof(
 ///
 /// The frame names are separated by semicolons and the count is at the end separated with a space. We insert some synthetic
 /// frames to quickly identify the thread and process names and other pieces of metadata.
-pub fn fold_profile(profile: SymbolizedAggregatedProfile) -> String {
+pub fn fold_profile(profile: AggregatedProfile) -> String {
     let mut folded = String::new();
 
     for sample in profile {
@@ -178,31 +205,50 @@ pub fn fold_profile(profile: SymbolizedAggregatedProfile) -> String {
     folded
 }
 
-pub fn symbolize_profile(
-    profile: &RawAggregatedProfile,
+/// Converts an `RawAggregatedProfile` into an unsymbolized `AggregatedProfile` that
+/// stores the object relative addresses used for symbolization.
+///
+/// Note: this excludes finding the relative addresses for kernel frames.
+pub fn raw_to_processed(
+    raw_profile: &RawAggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
-) -> SymbolizedAggregatedProfile {
+) -> AggregatedProfile {
+    let mut processed_profile = AggregatedProfile::new();
+
+    for raw_sample in raw_profile {
+        if let Ok(processed_sample) = raw_sample.process(procs, objs) {
+            processed_profile.push(processed_sample);
+        }
+    }
+
+    processed_profile
+}
+
+/// Symbolizes an `AggregatedProfile` locally.
+pub fn symbolize_profile(
+    profile: &AggregatedProfile,
+    procs: &HashMap<i32, ProcessInfo>,
+    objs: &HashMap<ExecutableId, ObjectFileInfo>,
+) -> AggregatedProfile {
     let _span = span!(Level::DEBUG, "symbolize_profile").entered();
-    let mut r = SymbolizedAggregatedProfile::new();
+    let mut r = AggregatedProfile::new();
+
     let addresses_per_sample = fetch_symbols_for_profile(profile, procs, objs);
 
     let ksyms = KsymIter::from_kallsyms().collect::<Vec<_>>();
 
     for sample in profile {
-        let mut symbolized_sample: SymbolizedAggregatedSample = SymbolizedAggregatedSample {
+        let symbolized_sample = AggregatedSample {
             pid: sample.pid,
             tid: sample.tid,
             count: sample.count,
+            ustack: symbolize_native_stack(&addresses_per_sample, procs, objs, sample.pid, &sample.ustack),
             ..Default::default()
         };
 
-        if let Some(ustack) = sample.ustack {
-            symbolized_sample.ustack =
-                symbolize_native_stack(&addresses_per_sample, procs, objs, sample.pid, &ustack);
-        };
 
-        if let Some(kstack) = sample.kstack {
+     /*    if let Some(kstack) = sample.kstack {
             for (i, addr) in kstack.addresses.into_iter().enumerate() {
                 if i >= kstack.len as usize {
                     continue;
@@ -222,13 +268,13 @@ pub fn symbolize_profile(
                     }
                 };
                 symbolized_sample.kstack.push(Frame {
-                    name: le_symbol.symbol_name,
                     virtual_address: addr,
                     file_offset: None,
-                    inline: false,
+                    symbolization_result: Some(Ok((le_symbol.symbol_name.to_string(), false))),
                 });
             }
         };
+        */
         r.push(symbolized_sample);
     }
 
@@ -236,7 +282,7 @@ pub fn symbolize_profile(
 }
 
 pub fn fetch_symbols_for_profile(
-    profile: &RawAggregatedProfile,
+    profile: &AggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
 ) -> HashMap<PathBuf, HashMap<FrameAddress, Vec<Frame>>> {
@@ -244,41 +290,31 @@ pub fn fetch_symbols_for_profile(
         HashMap::new();
 
     for sample in profile {
-        let Some(native_stack) = sample.ustack else {
+        if sample.ustack.is_empty() {
             continue;
-        };
-
+        }
         let Some(info) = procs.get(&sample.pid) else {
             continue;
         };
 
-        for (i, addr) in native_stack.addresses.into_iter().enumerate() {
-            if native_stack.len <= i.try_into().unwrap() {
+        for frame in &sample.ustack {
+            let Some(mapping) = info.mappings.for_address(frame.virtual_address) else {
                 continue;
-            }
-
-            let Some(mapping) = info.mappings.for_address(addr) else {
-                continue; //return Err(anyhow!("could not find mapping"));
             };
 
             match objs.get(&mapping.executable_id) {
                 Some(obj) => {
-                    // We need the normalized address for normal object files
-                    // and might need the absolute addresses for JITs
-                    let normalized_addr = addr - mapping.start_addr + mapping.offset
-                        - obj.load_offset
-                        + obj.load_vaddr;
-
                     addresses_per_sample
-                        .entry(obj.path.clone())
+                        .entry(obj.path.clone()) // @nocommit open_file_path
                         .or_default()
                         .insert(
                             FrameAddress {
-                                virtual_address: addr,
-                                file_offset: normalized_addr,
+                                virtual_address: frame.virtual_address,
+                                file_offset: frame.file_offset.unwrap(), //@nocommit check new behaviour
                             },
                             vec![],
                         );
+
                 }
                 None => {
                     error!("executable with id {} not found", mapping.executable_id);
@@ -308,22 +344,24 @@ fn symbolize_native_stack(
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
     pid: i32,
-    native_stack: &native_stack_t,
+    native_stack: &[Frame],
 ) -> Vec<Frame> {
-    let mut r = Vec::new();
+    let mut result = Vec::new();
 
-    for (i, addr) in native_stack.addresses.into_iter().enumerate() {
-        if native_stack.len <= i.try_into().unwrap() {
-            break;
-        }
-
+   for frame in native_stack.iter() {
         let Some(info) = procs.get(&pid) else {
-            r.push(Frame::with_error("<could not find process>".to_string()));
+            result.push(Frame::with_error(
+                frame.virtual_address,
+                "<could not find process>".to_string(),
+            ));
             continue;
         };
 
-        let Some(mapping) = info.mappings.for_address(addr) else {
-            r.push(Frame::with_error("<could not find mapping>".to_string()));
+        let Some(mapping) = info.mappings.for_address(frame.virtual_address) else {
+            result.push(Frame::with_error(
+                frame.virtual_address,
+                "<could not find mapping>".to_string(),
+            ));
             continue;
         };
 
@@ -331,18 +369,16 @@ fn symbolize_native_stack(
         match objs.get(&mapping.executable_id) {
             Some(obj) => {
                 let failed_to_fetch_symbol = vec![Frame::with_error(
+                    frame.virtual_address,
                     "<failed to fetch symbol for addr>".to_string(),
                 )];
                 let failed_to_symbolize =
-                    vec![Frame::with_error("<failed to symbolize>".to_string())];
+                    vec![Frame::with_error(frame.virtual_address, "<failed to symbolize>".to_string())];
 
-                let normalized_addr =
-                    addr - mapping.start_addr + mapping.offset - obj.load_offset + obj.load_vaddr;
-
-                let frames = match addresses_per_sample.get(&obj.path) {
+                let frames_for_address = match addresses_per_sample.get(&obj.path) {
                     Some(value) => match value.get(&FrameAddress {
-                        virtual_address: addr,
-                        file_offset: normalized_addr,
+                        virtual_address: frame.virtual_address,
+                        file_offset: frame.file_offset.unwrap(), // check this
                     }) {
                         Some(v) => v,
                         None => &failed_to_fetch_symbol,
@@ -350,8 +386,8 @@ fn symbolize_native_stack(
                     None => &failed_to_symbolize,
                 };
 
-                for frame in frames {
-                    r.push(frame.clone());
+                for frame in frames_for_address {
+                    result.push(frame.clone());
                 }
             }
             None => {
@@ -360,5 +396,5 @@ fn symbolize_native_stack(
         }
     }
 
-    r
+    result
 }
