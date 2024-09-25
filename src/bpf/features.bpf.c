@@ -12,8 +12,8 @@ bool has_ringbuf = false;
 bool has_map_of_maps = false;
 bool has_batch_map_operations = false;
 
-SEC("kprobe/hrtimer_start_range_ns")
-int detect_bpf_features(struct __sk_buff *skb) {
+SEC("tracepoint/sched/sched_switch")
+int detect_bpf_features(void *ctx) {
     has_tail_call = bpf_core_enum_value_exists(
         enum bpf_func_id, BPF_FUNC_tail_call);
 

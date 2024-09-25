@@ -150,7 +150,7 @@ fn check_bpf_features() -> Result<BpfFeatures> {
         Err(err) => return Err(SystemInfoError::ErrorDetectingBpfFeatures(err.to_string()).into()),
     };
 
-    thread::sleep(Duration::from_millis(50));
+    thread::sleep(Duration::from_millis(1));
 
     let bpf_features_bss = bpf_features.bss();
     if !bpf_features_bss.feature_check_done {
