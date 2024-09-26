@@ -6,7 +6,6 @@ pub mod object;
 pub mod perf_events;
 pub mod profile;
 pub mod profiler;
-pub mod system_info;
 pub mod unwind_info;
 pub mod usym;
 pub mod util;

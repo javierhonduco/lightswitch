@@ -20,11 +20,12 @@ use tracing::{error, info, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
+use lightswitch_sys_probe::system_info::SystemInfo;
+
 use lightswitch::object::ObjectFile;
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::{fold_profile, to_pprof};
 use lightswitch::profiler::{Profiler, ProfilerConfig};
-use lightswitch::system_info::SystemInfo;
 use lightswitch::unwind_info::in_memory_unwind_info;
 use lightswitch::unwind_info::remove_redundant;
 use lightswitch::unwind_info::remove_unnecesary_markers;
