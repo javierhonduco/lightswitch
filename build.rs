@@ -8,9 +8,6 @@ use glob::glob;
 use libbpf_cargo::SkeletonBuilder;
 use std::path::Path;
 
-const FEATURES_BPF_SOURCE: &str = "./src/bpf/features.bpf.c";
-const FEATURES_SKELETON: &str = "./src/bpf/features_skel.rs";
-
 const PROFILER_BPF_HEADER: &str = "./src/bpf/profiler.h";
 const PROFILER_BPF_SOURCE: &str = "./src/bpf/profiler.bpf.c";
 const PROFILER_SKELETON: &str = "./src/bpf/profiler_skel.rs";
@@ -64,19 +61,6 @@ fn main() {
     bindings
         .write_to_file(bindings_out_file)
         .expect("Couldn't write bindings!");
-
-    let skel = Path::new(FEATURES_SKELETON);
-    SkeletonBuilder::new()
-        .source(FEATURES_BPF_SOURCE)
-        .clang_args([
-            "-Wextra",
-            "-Wall",
-            "-Werror",
-            "-Wno-unused-command-line-argument",
-            "-Wno-unused-parameter",
-        ])
-        .build_and_generate(skel)
-        .expect("run skeleton builder");
 
     let skel = Path::new(PROFILER_SKELETON);
     SkeletonBuilder::new()

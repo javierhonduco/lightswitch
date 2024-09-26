@@ -1,4 +1,5 @@
 use std::fs::read_to_string;
+use std::os::raw::c_int;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
@@ -6,13 +7,14 @@ use thiserror::Error;
 use tracing::{error, warn};
 
 use crate::bpf::features_skel::FeaturesSkelBuilder;
-use crate::perf_events::setup_perf_event;
 
 use anyhow::Result;
+use errno::errno;
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libc::close;
 use nix::sys::utsname;
 use perf_event_open_sys as sys;
+use perf_event_open_sys::bindings::perf_event_attr;
 
 const PROCFS_PATH: &str = "/proc";
 const TRACEFS_PATH: &str = "/sys/kernel/debug/tracing";
@@ -91,15 +93,31 @@ fn get_trace_sched_event_id(trace_event: &str) -> Result<u32> {
 }
 
 fn software_perfevents_detected() -> bool {
-    unsafe {
-        match setup_perf_event(/* cpu */ 0, /*sample_freq */ 0) {
-            Ok(fd) => {
-                DroppableFiledescriptor { fd };
-                true
-            }
-            Err(_) => false,
-        }
+    let mut attrs: perf_event_attr = perf_event_open_sys::bindings::perf_event_attr {
+        size: std::mem::size_of::<sys::bindings::perf_event_attr>() as u32,
+        type_: sys::bindings::PERF_TYPE_SOFTWARE,
+        config: sys::bindings::PERF_COUNT_SW_CPU_CLOCK as u64,
+        ..Default::default()
+    };
+    attrs.__bindgen_anon_1.sample_freq = 0;
+    attrs.set_disabled(1);
+    attrs.set_freq(1);
+
+    let fd = DroppableFiledescriptor {
+        fd: unsafe {
+            sys::perf_event_open(
+                &mut attrs, -1, /* pid */
+                /* cpu */ 0, -1, /* group_fd */
+                0,  /* flags */
+            )
+        } as c_int,
+    };
+
+    if fd.fd < 0 {
+        error!("setup_perf_event failed with errno {}", errno());
+        return false;
     }
+    true
 }
 
 fn tracepoints_detected() -> bool {
@@ -117,15 +135,15 @@ fn tracepoints_detected() -> bool {
         }
     }
 
-    let fd = unsafe {
-        DroppableFiledescriptor {
-            fd: sys::perf_event_open(
+    let fd = DroppableFiledescriptor {
+        fd: unsafe {
+            sys::perf_event_open(
                 &mut attrs, -1, /* pid */
                 0,  /* cpu */
                 -1, /* group_fd */
                 0,  /* flags */
-            ),
-        }
+            ) as c_int
+        },
     };
 
     if fd.fd < 0 {
