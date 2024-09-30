@@ -146,11 +146,7 @@ fn tracepoints_detected() -> bool {
         },
     };
 
-    if fd.fd < 0 {
-        return false;
-    }
-
-    true
+    fd.fd >= 0
 }
 
 fn check_bpf_features() -> Result<BpfFeatures> {
