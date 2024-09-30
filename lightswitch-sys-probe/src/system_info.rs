@@ -216,7 +216,6 @@ impl SystemInfo {
             && self.software_perfevents_support_detected
             && self.tracepoints_support_detected
             && bpf_features.can_load_trivial_bpf_program
-            && bpf_features.has_ring_buf
             && bpf_features.has_tail_call
     }
 }
