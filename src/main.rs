@@ -20,7 +20,7 @@ use tracing::{error, info, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
-use lightswitch_sys_probe::system_info::SystemInfo;
+use lightswitch_capabilities::system_info::SystemInfo;
 
 use lightswitch::object::ObjectFile;
 use lightswitch::profile::symbolize_profile;

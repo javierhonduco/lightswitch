@@ -1,5 +1,5 @@
 [package]
-name = "lightswitch-sys-probe"
+name = "lightswitch-capabilities"
 version = "0.1.0"
 edition = "2021"
 

@@ -1251,8 +1251,8 @@ dependencies = [
  "libbpf-cargo",
  "libbpf-rs",
  "libc",
+ "lightswitch-capabilities",
  "lightswitch-proto",
- "lightswitch-sys-probe",
  "memmap2 0.9.5",
  "nix",
  "object",
@@ -1275,16 +1275,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lightswitch-proto"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "prost 0.12.6",
- "prost-build",
-]
-
-[[package]]
-name = "lightswitch-sys-probe"
+name = "lightswitch-capabilities"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1299,6 +1290,15 @@ dependencies = [
  "procfs",
  "thiserror",
  "tracing",
+]
+
+[[package]]
+name = "lightswitch-proto"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "prost 0.12.6",
+ "prost-build",
 ]
 
 [[package]]
