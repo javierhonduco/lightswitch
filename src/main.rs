@@ -73,17 +73,11 @@ fn value_is_power_of_two(s: &str) -> Result<usize, String> {
         .parse()
         .map_err(|_| format!("`{s}' isn't a valid usize"))?;
     // Now we have a value, test whether it's a power of 2
-    if is_power_of_two(value) {
+    if value.is_power_of_two() {
         Ok(value)
     } else {
         Err(format!("{} is not a power of 2", value))
     }
-}
-
-fn is_power_of_two(v: usize) -> bool {
-    // NOTE: Neither 0 nor 1 are a power of 2 (ignoring 2^0 for this use case),
-    //       so rule them out
-    (v != 0) && (v != 1) && ((v & (v - 1)) == 0)
 }
 
 /// Given a non-prime unsigned int, return the prime number that precedes it
@@ -549,22 +543,6 @@ mod tests {
             test_uint_strings.push(val_str);
         }
         test_uint_strings
-    }
-
-    // Testing is_power_of_two predicate used by perf_buffer_bytes
-    // value_parser()
-    #[rstest]
-    fn test_should_be_powers_of_two(power_of_two_usize: Vec<usize>) {
-        for val in power_of_two_usize {
-            assert!(is_power_of_two(val))
-        }
-    }
-
-    #[rstest]
-    fn test_should_not_be_powers_of_two(all_but_power_of_two_usize: Vec<usize>) {
-        for val in all_but_power_of_two_usize {
-            assert!(!is_power_of_two(val))
-        }
     }
 
     // Testing the value_parser() implementation for perf_buffer_bytes
