@@ -1251,6 +1251,7 @@ dependencies = [
  "libbpf-cargo",
  "libbpf-rs",
  "libc",
+ "lightswitch-capabilities",
  "lightswitch-proto",
  "memmap2 0.9.5",
  "nix",
@@ -1271,6 +1272,24 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "v",
+]
+
+[[package]]
+name = "lightswitch-capabilities"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bindgen",
+ "errno",
+ "glob",
+ "libbpf-cargo",
+ "libbpf-rs",
+ "libc",
+ "nix",
+ "perf-event-open-sys",
+ "procfs",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]

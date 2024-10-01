@@ -20,6 +20,8 @@ use tracing::{error, info, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
+use lightswitch_capabilities::system_info::SystemInfo;
+
 use lightswitch::object::ObjectFile;
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::{fold_profile, to_pprof};
@@ -286,6 +288,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     if !Uid::current().is_root() {
         error!("root permissions are required to run lightswitch");
         std::process::exit(1);
+    }
+
+    let system_info = SystemInfo::new();
+    match system_info {
+        Ok(system_info) => {
+            info!("system_info = {:?}", system_info);
+            if !system_info.has_minimal_requirements() {
+                error!("Some start up requirements could not be met!");
+                std::process::exit(1);
+            }
+        }
+        Err(_) => {
+            error!("Failed to detect system info!");
+            std::process::exit(1)
+        }
     }
 
     let collector = Arc::new(Mutex::new(match args.sender {

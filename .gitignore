@@ -1,6 +1,6 @@
 /target
 flame.svg
 profile.pb
-src/bpf/*_skel.rs
+**/bpf/*_skel.rs
 .vmtest.log
 /result
