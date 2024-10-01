@@ -66,7 +66,7 @@ impl Drop for DroppableFiledescriptor {
 }
 
 fn tracefs_mount_detected() -> bool {
-    return Path::new(TRACEFS_PATH).exists();
+    Path::new(TRACEFS_PATH).exists()
 }
 
 fn get_trace_sched_event_id(trace_event: &str) -> Result<u32> {

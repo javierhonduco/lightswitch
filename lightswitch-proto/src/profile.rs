@@ -143,9 +143,7 @@ impl PprofBuilder {
         }
 
         match self.known_strings.entry(string.to_string()) {
-            Entry::Occupied(o) => {
-                return *o.get();
-            }
+            Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
                 let id = self.string_table.len() as i64;
                 v.insert(id);
@@ -168,9 +166,7 @@ impl PprofBuilder {
         };
 
         match self.known_functions.entry(name_idx) {
-            Entry::Occupied(o) => {
-                return *o.get();
-            }
+            Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
                 let id = self.functions.len() as u64 + 1;
                 v.insert(id);
@@ -205,9 +201,7 @@ impl PprofBuilder {
         let unique_id = (address, mapping_id);
 
         match self.known_locations.entry(unique_id) {
-            Entry::Occupied(o) => {
-                return *o.get();
-            }
+            Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
                 let id = self.locations.len() as u64 + 1;
                 v.insert(id);
@@ -242,9 +236,7 @@ impl PprofBuilder {
         };
 
         match self.known_mappings.entry(mapping.id) {
-            Entry::Occupied(o) => {
-                return *o.get();
-            }
+            Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
                 let id = self.mappings.len() as u64 + 1;
                 v.insert(id);

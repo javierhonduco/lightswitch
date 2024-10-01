@@ -121,7 +121,7 @@ impl ObjectFile<'_> {
         }
 
         // No build id (Rust, some compilers and Linux distributions).
-        return Ok(BuildId::Sha256(HEXLOWER.encode(self.code_hash.as_ref())));
+        Ok(BuildId::Sha256(HEXLOWER.encode(self.code_hash.as_ref())))
     }
 
     pub fn is_dynamic(&self) -> bool {
