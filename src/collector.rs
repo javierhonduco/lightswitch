@@ -5,13 +5,13 @@ use std::time::Duration;
 use tracing::{debug, span, Level};
 
 use crate::object::ExecutableId;
+use crate::profile::raw_to_processed;
 use crate::profile::{symbolize_profile, to_pprof};
-use crate::profiler::ProcessInfo;
-use crate::profiler::RawAggregatedProfile;
-use crate::profiler::ObjectFileInfo;
 use crate::profiler::AggregatedProfile;
 use crate::profiler::AggregatedSample;
-use crate::profile::raw_to_processed;
+use crate::profiler::ObjectFileInfo;
+use crate::profiler::ProcessInfo;
+use crate::profiler::RawAggregatedProfile;
 
 pub trait Collector {
     fn collect(
@@ -144,7 +144,8 @@ impl Collector for AggregatorCollector {
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
-        self.profiles.push(raw_to_processed(&raw_profile, procs, objs));
+        self.profiles
+            .push(raw_to_processed(&raw_profile, procs, objs));
 
         for (k, v) in procs {
             self.procs.insert(*k, v.clone());

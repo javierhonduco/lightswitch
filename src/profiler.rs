@@ -241,7 +241,11 @@ pub struct RawAggregatedSample {
 }
 
 impl RawAggregatedSample {
-    pub fn process(&self, procs: &HashMap<i32, ProcessInfo>, objs: &HashMap<ExecutableId, ObjectFileInfo>) -> Result<AggregatedSample, anyhow::Error> {
+    pub fn process(
+        &self,
+        procs: &HashMap<i32, ProcessInfo>,
+        objs: &HashMap<ExecutableId, ObjectFileInfo>,
+    ) -> Result<AggregatedSample, anyhow::Error> {
         let Some(info) = procs.get(&self.pid) else {
             return Err(anyhow!("process not found"));
         };
@@ -285,7 +289,11 @@ impl RawAggregatedSample {
                 }
             };
 
-            processed_sample.ustack.push(Frame { virtual_address, file_offset, symbolization_result: None });
+            processed_sample.ustack.push(Frame {
+                virtual_address,
+                file_offset,
+                symbolization_result: None,
+            });
         }
 
         Ok(processed_sample)
@@ -320,6 +328,7 @@ impl fmt::Display for RawAggregatedSample {
     }
 }
 
+/// This is only used internally, when we don't need the symbolization result.
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct FrameAddress {
     /// Address from the process, as collected from the BPF program.
@@ -331,6 +340,7 @@ pub struct FrameAddress {
 #[derive(Debug, thiserror::Error, PartialEq, Eq, Hash, Clone)]
 pub enum SymbolizationError {
     #[error("Symbolization error (backend) {0}")]
+    // @nocommit confusing name...
     Backend(String),
 }
 
@@ -350,10 +360,10 @@ impl fmt::Display for Frame {
             Some(Ok((name, inlined))) => {
                 let inline_str = if *inlined { "[inlined] " } else { "" };
                 write!(fmt, "{}{}", inline_str, name)
-            },
+            }
             Some(Err(e)) => {
                 write!(fmt, "error: {:?}", e)
-            },
+            }
             None => {
                 write!(fmt, "frame not symbolized")
             }
@@ -1815,8 +1825,7 @@ mod tests {
             .map(|s| Frame {
                 virtual_address: 0x0,
                 file_offset: None,
-                name: s.to_string(),
-                inline: false,
+                symbolization_result: Some(Ok((s.to_string(), false))),
             })
             .collect();
         let kstack_data: Vec<_> = ["kfunc2", "kfunc1"]
@@ -1824,8 +1833,7 @@ mod tests {
             .map(|s| Frame {
                 virtual_address: 0x0,
                 file_offset: None,
-                name: s.to_string(),
-                inline: false,
+                symbolization_result: Some(Ok((s.to_string(), false))),
             })
             .collect();
 

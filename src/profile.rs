@@ -6,16 +6,17 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tracing::{debug, error, span, Level};
 
+use crate::ksym::Ksym;
 use crate::ksym::KsymIter;
 use crate::metadata::TaskName;
 use crate::object::ExecutableId;
+use crate::profiler::AggregatedProfile;
+use crate::profiler::AggregatedSample;
 use crate::profiler::Frame;
 use crate::profiler::FrameAddress;
 use crate::profiler::ObjectFileInfo;
 use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
-use crate::profiler::AggregatedProfile;
-use crate::profiler::AggregatedSample;
 use crate::usym::symbolize_native_stack_blaze;
 
 /// Converts a given symbolized profile to Google's pprof.
@@ -235,7 +236,6 @@ pub fn symbolize_profile(
     let mut r = AggregatedProfile::new();
 
     let addresses_per_sample = fetch_symbols_for_profile(profile, procs, objs);
-
     let ksyms = KsymIter::from_kallsyms().collect::<Vec<_>>();
 
     for sample in profile {
@@ -243,38 +243,15 @@ pub fn symbolize_profile(
             pid: sample.pid,
             tid: sample.tid,
             count: sample.count,
-            ustack: symbolize_native_stack(&addresses_per_sample, procs, objs, sample.pid, &sample.ustack),
-            ..Default::default()
+            ustack: symbolize_user_stack(
+                &addresses_per_sample,
+                procs,
+                objs,
+                sample.pid,
+                &sample.ustack,
+            ),
+            kstack: symbolize_kernel_stack(&sample.kstack, &ksyms),
         };
-
-
-     /*    if let Some(kstack) = sample.kstack {
-            for (i, addr) in kstack.addresses.into_iter().enumerate() {
-                if i >= kstack.len as usize {
-                    continue;
-                }
-                let le_symbol = match ksyms.binary_search_by(|el| el.start_addr.cmp(&addr)) {
-                    Ok(idx) => ksyms[idx].clone(),
-                    Err(idx) => {
-                        if idx > 0 {
-                            ksyms[idx - 1].clone()
-                        } else {
-                            crate::ksym::Ksym {
-                                start_addr: idx as u64,
-                                symbol_name: format!("<not found {}>", addr),
-                            }
-                            .clone()
-                        }
-                    }
-                };
-                symbolized_sample.kstack.push(Frame {
-                    virtual_address: addr,
-                    file_offset: None,
-                    symbolization_result: Some(Ok((le_symbol.symbol_name.to_string(), false))),
-                });
-            }
-        };
-        */
         r.push(symbolized_sample);
     }
 
@@ -314,7 +291,6 @@ pub fn fetch_symbols_for_profile(
                             },
                             vec![],
                         );
-
                 }
                 None => {
                     error!("executable with id {} not found", mapping.executable_id);
@@ -339,7 +315,34 @@ pub fn fetch_symbols_for_profile(
     addresses_per_sample
 }
 
-fn symbolize_native_stack(
+fn symbolize_kernel_stack(kernel_stack: &[Frame], ksyms: &[Ksym]) -> Vec<Frame> {
+    let mut symbolized_stack = Vec::new();
+
+    for frame in kernel_stack {
+        let symbol = match ksyms.binary_search_by(|el| el.start_addr.cmp(&frame.virtual_address)) {
+            Ok(idx) => ksyms[idx].clone(),
+            Err(idx) => {
+                if idx > 0 {
+                    ksyms[idx - 1].clone()
+                } else {
+                    crate::ksym::Ksym {
+                        start_addr: idx as u64,
+                        symbol_name: format!("<not found {}>", frame.virtual_address),
+                    }
+                    .clone()
+                }
+            }
+        };
+        symbolized_stack.push(Frame {
+            virtual_address: frame.virtual_address,
+            file_offset: None,
+            symbolization_result: Some(Ok((symbol.symbol_name.to_string(), false))),
+        });
+    }
+    symbolized_stack
+}
+
+fn symbolize_user_stack(
     addresses_per_sample: &HashMap<PathBuf, HashMap<FrameAddress, Vec<Frame>>>,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
@@ -348,7 +351,7 @@ fn symbolize_native_stack(
 ) -> Vec<Frame> {
     let mut result = Vec::new();
 
-   for frame in native_stack.iter() {
+    for frame in native_stack.iter() {
         let Some(info) = procs.get(&pid) else {
             result.push(Frame::with_error(
                 frame.virtual_address,
@@ -372,15 +375,18 @@ fn symbolize_native_stack(
                     frame.virtual_address,
                     "<failed to fetch symbol for addr>".to_string(),
                 )];
-                let failed_to_symbolize =
-                    vec![Frame::with_error(frame.virtual_address, "<failed to symbolize>".to_string())];
+                let failed_to_symbolize = vec![Frame::with_error(
+                    frame.virtual_address,
+                    "<failed to symbolize>".to_string(),
+                )];
 
+                let frame_address = FrameAddress {
+                    virtual_address: frame.virtual_address,
+                    file_offset: frame.file_offset.unwrap(), // check this
+                };
                 let frames_for_address = match addresses_per_sample.get(&obj.path) {
-                    Some(value) => match value.get(&FrameAddress {
-                        virtual_address: frame.virtual_address,
-                        file_offset: frame.file_offset.unwrap(), // check this
-                    }) {
-                        Some(v) => v,
+                    Some(value) => match value.get(&frame_address) {
+                        Some(frames) => frames,
                         None => &failed_to_fetch_symbol,
                     },
                     None => &failed_to_symbolize,
