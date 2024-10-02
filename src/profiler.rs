@@ -707,6 +707,7 @@ impl Profiler<'_> {
             }
         });
 
+
         let total_duration_tick = tick(self.duration);
         let session_tick = tick(self.session_duration);
 
@@ -730,15 +731,15 @@ impl Profiler<'_> {
                     self.send_profile(profile);
                 }
                 recv(self.tracers_chan_receive) -> read => {
-                                match read {
-                                          Ok(TracerEvent::Munmap(pid, start_address)) => {
-                                                    self.handle_munmap(pid, start_address);
-                                            }
-                                               Ok(TracerEvent::ProcessExit(pid)) => {
-                                                      self.handle_process_exit(pid);
-                                                 }
-                                                Err(_) => {}
-                                              }
+                    match read {
+                        Ok(TracerEvent::Munmap(pid, start_address)) => {
+                                self.handle_munmap(pid, start_address);
+                        },
+                        Ok(TracerEvent::ProcessExit(pid)) => {
+                                self.handle_process_exit(pid);
+                        },
+                        Err(_) => {}
+                    }
                 },
                 recv(self.new_proc_chan_receive) -> read => {
                         if let Ok(event) = read {

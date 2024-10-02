@@ -73,7 +73,8 @@ pub fn to_pprof(
 
             let Some(mapping) = info.mappings.for_address(addr) else {
                 // r.push("<could not find mapping>".to_string());
-                println!("oh no2");
+                // @nocommit: maybe append error frame?
+                println!("oh no2, could not find executable mappings");
                 continue;
             };
 
