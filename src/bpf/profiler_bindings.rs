@@ -12,10 +12,11 @@ include!(concat!(env!("OUT_DIR"), "/profiler_bindings.rs"));
 unsafe impl Plain for stack_count_key_t {}
 unsafe impl Plain for native_stack_t {}
 unsafe impl Plain for Event {}
-unsafe impl Plain for unwind_info_chunks_t {}
 unsafe impl Plain for unwinder_stats_t {}
 unsafe impl Plain for exec_mappings_key {}
 unsafe impl Plain for mapping_t {}
+unsafe impl Plain for page_key_t {}
+unsafe impl Plain for page_value_t {}
 
 impl exec_mappings_key {
     pub fn new(pid: u32, address: u64, prefix_len: u32) -> Self {
@@ -75,7 +76,9 @@ impl Add for unwinder_stats_t {
 impl From<&CompactUnwindRow> for stack_unwind_row_t {
     fn from(row: &CompactUnwindRow) -> Self {
         stack_unwind_row_t {
-            pc: row.pc,
+            // The 64 bit casting is necessary due to a parsing bug in bindgen:
+            // https://github.com/rust-lang/rust-bindgen/issues/923#issuecomment-2385554573
+            pc_low: (row.pc & LOW_PC_MASK as u64) as u16,
             cfa_offset: row.cfa_offset,
             cfa_type: row.cfa_type,
             rbp_type: row.rbp_type,

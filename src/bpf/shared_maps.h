@@ -8,7 +8,7 @@ struct {
   __type(key, struct exec_mappings_key);
   __type(value, mapping_t);
   __uint(map_flags, BPF_F_NO_PREALLOC);
-  __uint(max_entries, MAX_PROCESSES * 200);
+  __uint(max_entries, MAX_MAPPINGS);
 } exec_mappings SEC(".maps");
 
 struct {

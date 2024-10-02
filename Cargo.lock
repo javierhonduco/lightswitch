@@ -1151,7 +1151,7 @@ dependencies = [
  "anyhow",
  "cargo_metadata",
  "clap",
- "libbpf-rs",
+ "libbpf-rs 0.23.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "memmap2 0.5.10",
  "regex",
  "semver",
@@ -1170,6 +1170,17 @@ dependencies = [
  "libbpf-sys",
  "libc",
  "strum_macros",
+ "vsprintf",
+]
+
+[[package]]
+name = "libbpf-rs"
+version = "0.23.3"
+source = "git+https://github.com/libbpf/libbpf-rs?rev=4ebf2ac7cd509e9442aff9b9f92164f252adf2a3#4ebf2ac7cd509e9442aff9b9f92164f252adf2a3"
+dependencies = [
+ "bitflags",
+ "libbpf-sys",
+ "libc",
  "vsprintf",
 ]
 
@@ -1219,9 +1230,11 @@ dependencies = [
  "glob",
  "inferno",
  "insta",
+ "itertools 0.13.0",
  "lazy_static",
  "libbpf-cargo",
- "libbpf-rs",
+ "libbpf-rs 0.23.3 (git+https://github.com/libbpf/libbpf-rs?rev=4ebf2ac7cd509e9442aff9b9f92164f252adf2a3)",
+ "libbpf-sys",
  "libc",
  "lightswitch-capabilities",
  "lightswitch-proto",
@@ -1255,7 +1268,7 @@ dependencies = [
  "errno",
  "glob",
  "libbpf-cargo",
- "libbpf-rs",
+ "libbpf-rs 0.23.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc",
  "nix",
  "perf-event-open-sys",
@@ -1778,7 +1791,7 @@ checksum = "0c1318b19085f08681016926435853bbf7858f9c082d0999b80550ff5d9abe15"
 dependencies = [
  "bytes",
  "heck 0.5.0",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "once_cell",
@@ -1798,7 +1811,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9552f850d5f0964a4e4d0bf306459ac29323ddfbae05e35a7c0d35cb0803cc5"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.79",
