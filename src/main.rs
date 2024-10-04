@@ -13,6 +13,7 @@ use clap::Parser;
 use crossbeam_channel::bounded;
 use inferno::flamegraph;
 use lightswitch::collector::{AggregatorCollector, Collector, NullCollector, StreamingCollector};
+use lightswitch_metadata_provider::metadata_provider::GlobalMetadataProvider;
 use nix::unistd::Uid;
 use primal::is_prime;
 use prost::Message;
@@ -21,6 +22,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
 use lightswitch_capabilities::system_info::SystemInfo;
+use lightswitch_metadata_provider::metadata_provider::ThreadSafeGlobalMetadataProvider;
 
 use lightswitch::object::ObjectFile;
 use lightswitch::profile::symbolize_profile;
@@ -299,13 +301,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    // TODO: Opatnebe - Why do we need Box here?
+    let metadata_provider: ThreadSafeGlobalMetadataProvider =
+        Arc::new(Mutex::new(Box::new(GlobalMetadataProvider::new())));
+
+    // TODO: Opatnebe - Add a method to make it possible to extend the provider with
+    // additional "providers/collectors"
+
     let collector = Arc::new(Mutex::new(match args.sender {
         ProfileSender::None => Box::new(NullCollector::new()) as Box<dyn Collector + Send>,
         ProfileSender::LocalDisk => {
             Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
         }
         ProfileSender::Remote => {
-            Box::new(StreamingCollector::new(PPROF_INGEST_URL)) as Box<dyn Collector + Send>
+            Box::new(StreamingCollector::new(PPROF_INGEST_URL, metadata_provider.clone()))
+                as Box<dyn Collector + Send>
         }
     }));
 
@@ -369,7 +379,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         ProfileFormat::Pprof => {
             let mut buffer = Vec::new();
-            let proto = to_pprof(symbolized_profile, procs, objs);
+            let proto = to_pprof(symbolized_profile, procs, objs, &metadata_provider);
             proto.validate().unwrap();
             proto.profile().encode(&mut buffer).unwrap();
             let mut pprof_file =

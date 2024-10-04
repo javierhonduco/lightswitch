@@ -35,6 +35,7 @@ primal = "0.3.3"
 nix = { version = "0.29.0", features = ["user"] }
 prost = "0.13" # Needed to encode protocol buffers to bytes.
 reqwest = { version = "0.12", features = ["blocking"] }
+lightswitch-metadata-provider = {path = "./lightswitch-metadata-provider"}
 lightswitch-proto = { path = "./lightswitch-proto"}
 lightswitch-capabilities = {path = "./lightswitch-capabilities"}
 ctrlc = "3.4.5"

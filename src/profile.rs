@@ -1,5 +1,10 @@
+use lightswitch_metadata_provider::metadata_provider::{
+    MetadataAtrributeValue, MetadataProvider, ThreadSafeGlobalMetadataProvider,
+};
+use lightswitch_proto::profile::pprof::Label;
 use lightswitch_proto::profile::LabelStringOrNumber;
 use lightswitch_proto::profile::PprofBuilder;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -19,14 +24,36 @@ use crate::profiler::SymbolizedAggregatedProfile;
 use crate::profiler::SymbolizedAggregatedSample;
 use crate::usym::symbolize_native_stack_blaze;
 
+fn convert_to_label(atrribute: &MetadataAtrributeValue) -> LabelStringOrNumber {
+    match atrribute {
+        MetadataAtrributeValue::String(val) => LabelStringOrNumber::String(val.into()),
+        MetadataAtrributeValue::Number(val, unit) => LabelStringOrNumber::Number(*val, unit.into()),
+    }
+}
+
+fn metadata_to_pprof_labels(
+    metadata: HashMap<String, MetadataAtrributeValue>,
+    pprof: &mut PprofBuilder,
+) -> Vec<Label> {
+    let mut labels = Vec::with_capacity(metadata.capacity());
+    for (key, val) in &metadata {
+        labels.push(pprof.new_label(key, convert_to_label(val)));
+    }
+    labels
+}
+
 /// Converts a given symbolized profile to Google's pprof.
 pub fn to_pprof(
     profile: SymbolizedAggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
+    metadata_provider: &ThreadSafeGlobalMetadataProvider,
 ) -> PprofBuilder {
     // TODO: pass right duration and frequency.
     let mut pprof = PprofBuilder::new(Duration::from_secs(5), 27);
+
+    // TODO: opatnebe - Can we optimize the provider to return this data more efficiently?
+    let mut tid_to_labels_map: HashMap<i32, Vec<Label>> = HashMap::new();
 
     for sample in profile {
         let ustack = sample.ustack;
@@ -96,28 +123,20 @@ pub fn to_pprof(
             }
         }
 
-        let task_and_process_names = TaskName::for_task(sample.tid).unwrap_or(TaskName::errored());
-
-        let labels = vec![
-            pprof.new_label(
-                "pid",
-                LabelStringOrNumber::Number(sample.pid.into(), "task-tgid".into()),
-            ),
-            pprof.new_label(
-                "pid",
-                LabelStringOrNumber::Number(sample.tid.into(), "task-id".into()),
-            ),
-            pprof.new_label(
-                "process-name",
-                LabelStringOrNumber::String(task_and_process_names.main_thread),
-            ),
-            pprof.new_label(
-                "thread-name",
-                LabelStringOrNumber::String(task_and_process_names.current_thread),
-            ),
-        ];
-
-        pprof.add_sample(location_ids, sample.count as i64, labels);
+        let tid = sample.tid;
+        if let Entry::Vacant(e) = tid_to_labels_map.entry(tid) {
+            match metadata_provider.lock().unwrap().get_metadata(tid) {
+                Ok(metadata) => {
+                    let labels = metadata_to_pprof_labels(metadata, &mut pprof);
+                    e.insert(labels);
+                }
+                Err(err) => {
+                    error!("Error retrieving metadata err={:?}", err)
+                }
+            }
+        }
+        let labels = tid_to_labels_map.get(&tid).unwrap();
+        pprof.add_sample(location_ids, sample.count as i64, labels.clone());
     }
 
     pprof
