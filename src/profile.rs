@@ -1,6 +1,6 @@
-use lightswitch_metadata_provider::metadata_provider::{
-    MetadataAtrributeValue, MetadataProvider, ThreadSafeGlobalMetadataProvider,
-};
+use lightswitch_metadata_provider::label::LabelValue;
+use lightswitch_metadata_provider::metadata_provider::ThreadSafeGlobalMetadataProvider;
+use lightswitch_metadata_provider::taskname::TaskName;
 use lightswitch_proto::profile::pprof::Label;
 use lightswitch_proto::profile::LabelStringOrNumber;
 use lightswitch_proto::profile::PprofBuilder;
@@ -13,7 +13,6 @@ use tracing::{debug, error, span, Level};
 
 use crate::bpf::profiler_bindings::native_stack_t;
 use crate::ksym::KsymIter;
-use crate::metadata::TaskName;
 use crate::object::ExecutableId;
 use crate::profiler::Frame;
 use crate::profiler::FrameAddress;
@@ -24,15 +23,15 @@ use crate::profiler::SymbolizedAggregatedProfile;
 use crate::profiler::SymbolizedAggregatedSample;
 use crate::usym::symbolize_native_stack_blaze;
 
-fn convert_to_label(atrribute: &MetadataAtrributeValue) -> LabelStringOrNumber {
+fn convert_to_label(atrribute: &LabelValue) -> LabelStringOrNumber {
     match atrribute {
-        MetadataAtrributeValue::String(val) => LabelStringOrNumber::String(val.into()),
-        MetadataAtrributeValue::Number(val, unit) => LabelStringOrNumber::Number(*val, unit.into()),
+        LabelValue::String(val) => LabelStringOrNumber::String(val.into()),
+        LabelValue::Number(val, unit) => LabelStringOrNumber::Number(*val, unit.into()),
     }
 }
 
 fn metadata_to_pprof_labels(
-    metadata: HashMap<String, MetadataAtrributeValue>,
+    metadata: HashMap<String, LabelValue>,
     pprof: &mut PprofBuilder,
 ) -> Vec<Label> {
     let mut labels = Vec::with_capacity(metadata.capacity());

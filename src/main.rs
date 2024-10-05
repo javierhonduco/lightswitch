@@ -313,10 +313,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         ProfileSender::LocalDisk => {
             Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
         }
-        ProfileSender::Remote => {
-            Box::new(StreamingCollector::new(PPROF_INGEST_URL, metadata_provider.clone()))
-                as Box<dyn Collector + Send>
-        }
+        ProfileSender::Remote => Box::new(StreamingCollector::new(
+            PPROF_INGEST_URL,
+            metadata_provider.clone(),
+        )) as Box<dyn Collector + Send>,
     }));
 
     let profiler_config = ProfilerConfig {

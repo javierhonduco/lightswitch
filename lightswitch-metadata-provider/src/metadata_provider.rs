@@ -1,88 +1,84 @@
+use crate::label::{LabelInterner, LabelValue, UniqueLabel, UniqueLabelArc};
+use crate::taskname::TaskName;
+use anyhow::Result;
+use lru::LruCache;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
-use anyhow::Result;
-// use lru::LruCache;
-
-// struct HostMetadata {}
-// struct ContainerMetadata {}
-// struct ProcessMetadata {}
-
-// struct ProfileMetadataKey {
-//     pub pid: u64,
-//     pub comm: String, // TODO: What should this key be.
-// }
-
-pub enum MetadataAtrributeValue {
-    String(String),
-    /// Value and unit.
-    Number(i64, String),
-}
-pub type ProfileMetadataMap = HashMap<String, MetadataAtrributeValue>;
-
+pub type ProfileMetadataMap = HashMap<String, LabelValue>;
 pub trait MetadataProvider: Default {
     fn get_metadata(&self, task_id: i32) -> Result<ProfileMetadataMap>;
 }
 
-// TODO: What's this used for though?
-// Why is this needed?
-pub enum ProfileMetadataScope {
-    Process, // TODO: Does not change throughout the lifetime of the process
-    System,  //
-}
-
-#[derive(Default)]
 pub struct GlobalMetadataProvider {
-    // container_metadata_cache: LruCache<ProfileMetadataKey, ProfileMetadata>,
-    // process_metadata_cache: LruCache<ProfileMetadataKey, ProcessMetadata>
+    labels: LabelInterner,
+    task_label_cache: LruCache<i32, Vec<UniqueLabelArc>>,
 }
 
 pub type ThreadSafeGlobalMetadataProvider = Arc<Mutex<Box<GlobalMetadataProvider>>>;
 
-impl GlobalMetadataProvider {
-    pub fn new() -> GlobalMetadataProvider {
-        GlobalMetadataProvider::default()
+impl Default for GlobalMetadataProvider {
+    fn default() -> Self {
+        Self::new()
     }
-
-    /// Register a given task to ensure task-specific metadata
-    /// is still collected if the task exits before the call to
-    /// get_metadata
-    pub fn register_task(_task_id: i32) {}
-
-    /// Register a custom metdata provider
-    pub fn register_provider<T: MetadataProvider>(_provider: T, _scope: ProfileMetadataScope) {}
 }
 
-impl MetadataProvider for GlobalMetadataProvider {
-    fn get_metadata(&self, _task_id: i32) -> Result<ProfileMetadataMap> {
+impl GlobalMetadataProvider {
+    pub fn new() -> Self {
+        GlobalMetadataProvider {
+            labels: LabelInterner::new(),
+            // TODO: Split this into process/system/container metadata
+            // What's an appropriate size for this cache?
+            task_label_cache: LruCache::new(NonZeroUsize::new(10000).unwrap()),
+        }
+    }
 
-        // let task_and_process_names = TaskName::for_task(sample.tid).unwrap_or(TaskName::errored());
-        // TODO: Create this vector in the metadata provider
-        // let mut labels = vec![
-        //     pprof.new_label(
-        //         "pid",
-        //         LabelStringOrNumber::Number(sample.pid.into(), "task-tgid".into()),
-        //     ),
-        //     pprof.new_label(
-        //         "pid",
-        //         LabelStringOrNumber::Number(sample.tid.into(), "task-id".into()),
-        //     ),
-        //     pprof.new_label(
-        //         "process-name",
-        //         LabelStringOrNumber::String(task_and_process_names.main_thread),
-        //     ),
-        //     pprof.new_label(
-        //         "thread-name",
-        //         LabelStringOrNumber::String(task_and_process_names.current_thread),
-        //     ),
-        // ];
+    fn prime_label_cache(&mut self, task_id: i32) {
+        if self.task_label_cache.get(&task_id).is_some() {
+            return;
+        }
+
+        let task_and_process_names = TaskName::for_task(task_id).unwrap_or(TaskName::errored());
+
+        let default_labels = vec![
+            self.labels.intern(UniqueLabel {
+                key: String::from("pid"),
+                value: LabelValue::Number(1, "task-tgid".into()),
+            }),
+            self.labels.intern(UniqueLabel {
+                key: String::from("pid"),
+                value: LabelValue::Number(task_id.into(), "task-id".into()),
+            }),
+            self.labels.intern(UniqueLabel {
+                key: String::from("process-name"),
+                value: LabelValue::String(task_and_process_names.main_thread),
+            }),
+            self.labels.intern(UniqueLabel {
+                key: String::from("thread-name"),
+                value: LabelValue::String(task_and_process_names.current_thread),
+            }),
+        ];
+        self.task_label_cache.push(task_id, default_labels.clone());
+    }
+
+    pub fn register_provider<T: MetadataProvider>(&self, _provider: T) -> &Self {
+        // Todo: Register additional providers
+        self
+    }
+
+    pub fn get_metadata(&mut self, task_id: i32) -> Result<ProfileMetadataMap> {
+        self.prime_label_cache(task_id);
+        let default_labels = &Vec::new();
+        let labels = self
+            .task_label_cache
+            .get(&task_id)
+            .unwrap_or(default_labels);
 
         let mut metadata_map = ProfileMetadataMap::new();
-        // TODO: Get the internal metadata, and construct this return map from there
-        metadata_map.insert(
-            String::from("LS_HOST"),
-            MetadataAtrributeValue::String(String::from("myhost123")),
-        );
+        labels.iter().for_each(|label| {
+            metadata_map.insert(label.key.clone(), label.value.clone());
+        });
         Ok(metadata_map)
     }
 }
