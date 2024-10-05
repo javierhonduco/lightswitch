@@ -1,6 +1,0 @@
-{
-    "files.associations": {
-        "bpf_helpers.h": "c",
-        "bpf_core_read.h": "c"
-    }
-}
