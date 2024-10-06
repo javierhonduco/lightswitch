@@ -301,12 +301,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // TODO: Opatnebe - Why do we need Box here?
+    // TODO: Opatnebe - Do we need Box here?
     let metadata_provider: ThreadSafeGlobalMetadataProvider =
-        Arc::new(Mutex::new(Box::new(GlobalMetadataProvider::new())));
-
-    // TODO: Opatnebe - Add a method to make it possible to extend the provider with
-    // additional "providers/collectors"
+        Arc::new(Mutex::new(GlobalMetadataProvider::new()));
 
     let collector = Arc::new(Mutex::new(match args.sender {
         ProfileSender::None => Box::new(NullCollector::new()) as Box<dyn Collector + Send>,

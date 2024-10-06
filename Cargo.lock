@@ -1296,6 +1296,8 @@ dependencies = [
  "lru",
  "nix",
  "procfs",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]

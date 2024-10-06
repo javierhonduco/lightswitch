@@ -4,3 +4,4 @@ profile.pb
 **/bpf/*_skel.rs
 .vmtest.log
 /result
+.vscode/

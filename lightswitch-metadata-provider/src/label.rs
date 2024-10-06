@@ -22,6 +22,9 @@ pub struct LabelInterner {
     pool: Mutex<HashMap<UniqueLabel, UniqueLabelWeak>>,
 }
 
+// TODO: This interning approach would introduce some indirection
+// which could be worse for cpu cache locality.
+// Might not be needed.
 impl LabelInterner {
     pub fn new() -> Self {
         LabelInterner {
