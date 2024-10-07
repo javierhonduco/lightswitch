@@ -1,6 +1,6 @@
 use crate::label::{LabelValue, UniqueLabel};
 use crate::system_metadata::SystemMetadata;
-use crate::taskname::TaskName;
+use crate::task_metadata::TaskMetadata;
 use anyhow::Result;
 use lru::LruCache;
 use std::collections::HashMap;
@@ -25,8 +25,9 @@ pub type ThreadSafeMetadataProvider = Arc<Mutex<Box<dyn MetadataProvider + Send>
 pub struct GlobalMetadataProvider {
     // labels: LabelInterner,
     // task_label_cache: LruCache<i32, Vec<UniqueLabelArc>>,
-    task_label_cache: LruCache<i32, Vec<UniqueLabel>>,
+    task_label_cache: LruCache</*task_id*/ i32, Vec<UniqueLabel>>,
     system_metadata: SystemMetadata,
+    task_metadata: TaskMetadata,
     custom_metadata_providers: Vec<ThreadSafeMetadataProvider>,
 }
 
@@ -51,37 +52,15 @@ impl GlobalMetadataProvider {
         self.custom_metadata_providers.extend(providers);
     }
 
-    fn get_task_info(&mut self, task_id: i32) -> Vec<UniqueLabel> {
-        let task_and_process_names = TaskName::for_task(task_id).unwrap_or(TaskName::errored());
-
-        vec![
-            UniqueLabel {
-                key: String::from("pid"),
-                value: LabelValue::Number(1, "task-tgid".into()),
-            },
-            UniqueLabel {
-                key: String::from("pid"),
-                value: LabelValue::Number(task_id.into(), "task-id".into()),
-            },
-            UniqueLabel {
-                key: String::from("process-name"),
-                value: LabelValue::String(task_and_process_names.main_thread),
-            },
-            UniqueLabel {
-                key: String::from("thread-name"),
-                value: LabelValue::String(task_and_process_names.current_thread),
-            },
-        ]
-    }
-
     fn get_labels(&mut self, task_id: i32) -> Vec<UniqueLabel> {
-        let mut labels = self.get_task_info(task_id);
+        let mut labels = self.task_metadata.get_metadata(task_id);
 
         let system_labels = self
             .system_metadata
             .get_metadata()
             .map_err(|err| warn!("{}", err))
             .unwrap_or_default();
+
         labels.extend(system_labels);
 
         for provider in &self.custom_metadata_providers {
