@@ -51,8 +51,11 @@ pub fn to_pprof(
     // TODO: pass right duration and frequency.
     let mut pprof = PprofBuilder::new(Duration::from_secs(5), 27);
 
-    // TODO: opatnebe - Can we optimize the provider to return this data more efficiently?
-    let mut tid_to_labels_map: HashMap<i32, Vec<Label>> = HashMap::new();
+    // TODO: opatnebe - Can the provider to return this data in a ready to use state
+    // Perhaps the metadata provider can directly store the pprof labels?
+    // If so, we can have the caching happening at just one level
+    // And we can eliminate the metadata_to_pprof_labels conversion maybe?
+    let mut tid_to_pproflabels_map: HashMap<i32, Vec<Label>> = HashMap::new();
 
     for sample in profile {
         let ustack = sample.ustack;
@@ -122,19 +125,20 @@ pub fn to_pprof(
             }
         }
 
-        let tid = sample.tid;
-        let mut labels = Vec::default();
-        if let Entry::Vacant(e) = tid_to_labels_map.entry(tid) {
-            match metadata_provider.lock().unwrap().get_metadata(tid) {
+        let labels = match tid_to_pproflabels_map.entry(sample.tid) {
+            Entry::Occupied(e) => e.get().to_vec(),
+            Entry::Vacant(e) => match metadata_provider.lock().unwrap().get_metadata(tid) {
                 Ok(metadata) => {
-                    labels = metadata_to_pprof_labels(metadata, &mut pprof);
+                    let labels = metadata_to_pprof_labels(metadata, &mut pprof);
                     e.insert(labels.clone());
+                    labels
                 }
                 Err(err) => {
-                    error!("Error retrieving metadata err={:?}", err)
+                    error!("Error retrieving metadata err={:?}", err);
+                    Vec::new()
                 }
-            }
-        }
+            },
+        };
         pprof.add_sample(location_ids, sample.count as i64, labels);
     }
 

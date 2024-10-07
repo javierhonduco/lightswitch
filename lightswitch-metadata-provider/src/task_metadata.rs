@@ -14,9 +14,11 @@ pub enum TaskMetadataError {
 }
 
 impl TaskMetadata {
-    fn get_runtime(&self, _task_id: i32) -> Result<Option<String>, TaskMetadataError> {
-        // TODO: Implement this
-        Ok(None)
+    fn get_runtime(&self, task_id: i32) -> Result<Option<String>, TaskMetadataError> {
+        Err(TaskMetadataError::ErrorDetectingRuntime(
+            task_id,
+            String::from("// TODO: Implement this"),
+        ))
     }
 
     pub fn get_metadata(&self, task_id: i32) -> Vec<Label> {
