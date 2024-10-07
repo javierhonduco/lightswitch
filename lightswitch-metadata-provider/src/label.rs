@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, Weak};
+// use std::collections::HashMap;
+// use std::sync::{Arc, Mutex, Weak};
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum LabelValue {
@@ -9,45 +9,45 @@ pub enum LabelValue {
 }
 
 #[derive(PartialEq, Eq, Hash, Clone)]
-pub struct UniqueLabel {
+pub struct Label {
     pub key: String,
     pub value: LabelValue,
 }
 
-type UniqueLabelWeak = Weak<UniqueLabel>;
-pub type UniqueLabelArc = Arc<UniqueLabel>;
+// type LabelWeak = Weak<Label>;
+// pub type LabelArc = Arc<Label>;
 
-#[derive(Default)]
-pub struct LabelInterner {
-    pool: Mutex<HashMap<UniqueLabel, UniqueLabelWeak>>,
-}
+// #[derive(Default)]
+// pub struct LabelInterner {
+//     pool: Mutex<HashMap<Label, LabelWeak>>,
+// }
 
-// TODO: This interning approach would introduce some indirection
-// which could be worse for cpu cache locality.
-// Might not be needed.
-impl LabelInterner {
-    pub fn new() -> Self {
-        LabelInterner {
-            pool: Mutex::new(HashMap::new()), // TODO: is this mutex needed?
-        }
-    }
+// // TODO: This interning approach would introduce some indirection
+// // which could be worse for cpu cache locality.
+// // Might not be needed.
+// impl LabelInterner {
+//     pub fn new() -> Self {
+//         LabelInterner {
+//             pool: Mutex::new(HashMap::new()), // TODO: is this mutex needed?
+//         }
+//     }
 
-    pub fn intern(&self, label: UniqueLabel) -> UniqueLabelArc {
-        let mut pool = self.pool.lock().unwrap();
+//     pub fn intern(&self, label: Label) -> LabelArc {
+//         let mut pool = self.pool.lock().unwrap();
 
-        if let Some(weak_label) = pool.get(&label) {
-            if let Some(strong_label) = weak_label.upgrade() {
-                return strong_label;
-            }
-        }
+//         if let Some(weak_label) = pool.get(&label) {
+//             if let Some(strong_label) = weak_label.upgrade() {
+//                 return strong_label;
+//             }
+//         }
 
-        let new_arc: UniqueLabelArc = Arc::new(label.clone());
-        pool.insert(label, Arc::downgrade(&new_arc));
-        new_arc
-    }
+//         let new_arc: LabelArc = Arc::new(label.clone());
+//         pool.insert(label, Arc::downgrade(&new_arc));
+//         new_arc
+//     }
 
-    pub fn prune(&self) {
-        let mut pool = self.pool.lock().unwrap();
-        pool.retain(|_, weak_label| weak_label.strong_count() > 0);
-    }
-}
+//     pub fn prune(&self) {
+//         let mut pool = self.pool.lock().unwrap();
+//         pool.retain(|_, weak_label| weak_label.strong_count() > 0);
+//     }
+// }

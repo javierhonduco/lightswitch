@@ -1,4 +1,4 @@
-use crate::label::{LabelValue, UniqueLabel};
+use crate::label::{Label, LabelValue};
 use crate::system_metadata::SystemMetadata;
 use crate::task_metadata::TaskMetadata;
 use anyhow::Result;
@@ -18,14 +18,14 @@ pub enum MetadataProviderError {
 }
 
 pub trait MetadataProvider {
-    fn get_metadata(&self, task_id: i32) -> Result<Vec<UniqueLabel>, MetadataProviderError>;
+    fn get_metadata(&self, task_id: i32) -> Result<Vec<Label>, MetadataProviderError>;
 }
 pub type ThreadSafeMetadataProvider = Arc<Mutex<Box<dyn MetadataProvider + Send>>>;
 
 pub struct GlobalMetadataProvider {
     // labels: LabelInterner,
-    // task_label_cache: LruCache<i32, Vec<UniqueLabelArc>>,
-    task_label_cache: LruCache</*task_id*/ i32, Vec<UniqueLabel>>,
+    // task_label_cache: LruCache<i32, Vec<LabelArc>>,
+    task_label_cache: LruCache</*task_id*/ i32, Vec<Label>>,
     system_metadata: SystemMetadata,
     task_metadata: TaskMetadata,
     custom_metadata_providers: Vec<ThreadSafeMetadataProvider>,
@@ -52,7 +52,7 @@ impl GlobalMetadataProvider {
         self.custom_metadata_providers.extend(providers);
     }
 
-    fn get_labels(&mut self, task_id: i32) -> Vec<UniqueLabel> {
+    fn get_labels(&mut self, task_id: i32) -> Vec<Label> {
         let mut labels = self.task_metadata.get_metadata(task_id);
 
         let system_labels = self

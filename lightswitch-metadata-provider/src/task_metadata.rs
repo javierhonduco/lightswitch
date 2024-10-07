@@ -1,5 +1,5 @@
 use crate::{
-    label::{LabelValue, UniqueLabel},
+    label::{Label, LabelValue},
     taskname::TaskName,
 };
 use thiserror::Error;
@@ -19,30 +19,30 @@ impl TaskMetadata {
         Ok(None)
     }
 
-    pub fn get_metadata(&self, task_id: i32) -> Vec<UniqueLabel> {
+    pub fn get_metadata(&self, task_id: i32) -> Vec<Label> {
         let task_and_process_names = TaskName::for_task(task_id).unwrap_or(TaskName::errored());
 
         let mut task_metadata = vec![
-            UniqueLabel {
+            Label {
                 key: String::from("pid"),
                 value: LabelValue::Number(1, "task-tgid".into()),
             },
-            UniqueLabel {
+            Label {
                 key: String::from("pid"),
                 value: LabelValue::Number(task_id.into(), "task-id".into()),
             },
-            UniqueLabel {
+            Label {
                 key: String::from("process-name"),
                 value: LabelValue::String(task_and_process_names.main_thread),
             },
-            UniqueLabel {
+            Label {
                 key: String::from("thread-name"),
                 value: LabelValue::String(task_and_process_names.current_thread),
             },
         ];
 
         match self.get_runtime(task_id) {
-            Ok(Some(runtime)) => task_metadata.push(UniqueLabel {
+            Ok(Some(runtime)) => task_metadata.push(Label {
                 key: String::from("runtime"),
                 value: LabelValue::String(runtime),
             }),

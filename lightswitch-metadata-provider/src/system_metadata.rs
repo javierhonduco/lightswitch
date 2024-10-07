@@ -1,4 +1,4 @@
-use crate::label::{LabelValue, UniqueLabel};
+use crate::label::{Label, LabelValue};
 use anyhow::Result;
 use nix::sys::utsname;
 use thiserror::Error;
@@ -12,7 +12,7 @@ pub enum SystemMetadataError {
 }
 
 impl SystemMetadata {
-    pub fn get_metadata(&self) -> Result<Vec<UniqueLabel>, SystemMetadataError> {
+    pub fn get_metadata(&self) -> Result<Vec<Label>, SystemMetadataError> {
         let uname = match utsname::uname() {
             Ok(uname) => uname,
             Err(err) => {
@@ -21,7 +21,7 @@ impl SystemMetadata {
                 ));
             }
         };
-        let kernel_release_label = UniqueLabel {
+        let kernel_release_label = Label {
             key: String::from("kernel_release"),
             value: LabelValue::String(format!(
                 "{}:{}",
@@ -29,7 +29,7 @@ impl SystemMetadata {
                 uname.release().to_string_lossy()
             )),
         };
-        let machine_label = UniqueLabel {
+        let machine_label = Label {
             key: String::from("machine"),
             value: LabelValue::String(uname.machine().to_string_lossy().to_string()),
         };

@@ -123,19 +123,19 @@ pub fn to_pprof(
         }
 
         let tid = sample.tid;
+        let mut labels = Vec::default();
         if let Entry::Vacant(e) = tid_to_labels_map.entry(tid) {
             match metadata_provider.lock().unwrap().get_metadata(tid) {
                 Ok(metadata) => {
-                    let labels = metadata_to_pprof_labels(metadata, &mut pprof);
-                    e.insert(labels);
+                    labels = metadata_to_pprof_labels(metadata, &mut pprof);
+                    e.insert(labels.clone());
                 }
                 Err(err) => {
                     error!("Error retrieving metadata err={:?}", err)
                 }
             }
         }
-        let labels = tid_to_labels_map.get(&tid).unwrap();
-        pprof.add_sample(location_ids, sample.count as i64, labels.clone());
+        pprof.add_sample(location_ids, sample.count as i64, labels);
     }
 
     pprof
