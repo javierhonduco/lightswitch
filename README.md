@@ -3,7 +3,7 @@
 lightswitch
 ===========
 
-**lightswitch** is a profiler as a library for Linux suitable for on-demand as well as continuous profiling. While **lightswitch** is a Rust application, the unwinders are written in C and run in BPF. Currently it can profile C, C++, Rust, and Zig.
+**lightswitch** is a profiler as a library for Linux suitable for on-demand as well as continuous profiling. While **lightswitch** is a Rust application, the unwinders are written in C and run in BPF. Currently C, C++, Rust, and Zig are fully supported.
 
 Usage
 -----
@@ -14,7 +14,7 @@ As a CLI, **lightswitch** can be run with:
 $ sudo lightswitch
 ```
 
-It can be stopped with <kbd>Ctrl</kbd>+<kbd>c</kbd>, or alternatively, by passing a `--duration` in seconds. By default the whole machine will be profiled. To profile invidual processes you can use `--pids`.
+It can be stopped with <kbd>Ctrl</kbd>+<kbd>C</kbd>, or alternatively, by passing a `--duration` in seconds. By default the whole machine will be profiled. To profile invidual processes you can use `--pids`.
 
 Container images in the OCI format (Docker compatible) can be downloaded with `docker pull ghcr.io/javierhonduco/lightswitch:main-latest`. For specific images push on the `main` branch on merge, replace `-latest` with the Git revision.
 
@@ -46,4 +46,4 @@ $ nix run .#vmtest
 Project status
 ---------------
 
-**lightswitch** is in heavy development and the main focus is to provide a low-overhead profiler with excellent UX. A more comprehensive roadmap will be published. Feedback is greatly appreciated!
+**lightswitch** is in active development and the main focus is to provide a low-overhead profiler with excellent UX. A more comprehensive roadmap will be published. Feedback is greatly appreciated.
