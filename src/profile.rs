@@ -63,23 +63,30 @@ pub fn to_pprof(
         }
 
         for uframe in ustack {
-            let addr = uframe.virtual_address;
+            let virtual_address = uframe.virtual_address;
 
             let Some(info) = procs.get(&sample.pid) else {
                 // todo: maybe append an error frame for debugging?
                 continue;
             };
 
-            let Some(mapping) = info.mappings.for_address(addr) else {
+            let Some(mapping) = info.mappings.for_address(virtual_address) else {
                 // todo: maybe append an error frame for debugging?
                 continue;
             };
 
             match objs.get(&mapping.executable_id) {
                 Some(obj) => {
-                    let normalized_addr = addr - mapping.start_addr + mapping.offset
-                        - obj.load_offset
-                        + obj.load_vaddr;
+                    let normalized_addr = uframe
+                        .file_offset
+                        .or_else(|| obj.normalized_address(virtual_address, &mapping));
+
+                    if normalized_addr.is_none() {
+                        debug!("normalized address is none");
+                        continue;
+                    }
+
+                    let normalized_addr = normalized_addr.unwrap();
 
                     let build_id = match mapping.build_id {
                         Some(build_id) => {
@@ -92,12 +99,13 @@ pub fn to_pprof(
                         mapping.start_addr,
                         mapping.end_addr,
                         mapping.offset,
-                        obj.path.to_str().expect("convert path to str"),
+                        obj.path
+                            .to_string_lossy()
+                            .split('/')
+                            .last()
+                            .unwrap_or("could not get executable name"),
                         &build_id,
                     );
-
-                    // TODO, ensure address normalization is correct
-                    // normalized_addr == uframe.file_offset.unwrap()
 
                     let mut lines = vec![];
 
@@ -276,15 +284,15 @@ pub fn fetch_symbols_for_profile(
             };
 
             // We need the file offsets to symbolize.
-            if frame.file_offset.is_none() {
+            let Some(file_offset) = frame.file_offset else {
                 continue;
-            }
-            let file_offset = frame.file_offset.unwrap();
+            };
 
             match objs.get(&mapping.executable_id) {
                 Some(obj) => {
                     addresses_per_sample
-                        .entry(obj.path.clone()) // consider using open_file_path
+                        // todo: use open object file path
+                        .entry(obj.path.clone())
                         .or_default()
                         .insert(
                             FrameAddress {
@@ -372,10 +380,9 @@ fn symbolize_user_stack(
         };
 
         // We need the file offsets to symbolize.
-        if frame.file_offset.is_none() {
+        let Some(file_offset) = frame.file_offset else {
             continue;
-        }
-        let file_offset = frame.file_offset.unwrap();
+        };
 
         // finally
         match objs.get(&mapping.executable_id) {
