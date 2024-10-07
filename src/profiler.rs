@@ -31,6 +31,7 @@ use crate::bpf::profiler_skel::{ProfilerSkel, ProfilerSkelBuilder};
 use crate::bpf::tracers_bindings::*;
 use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
+use crate::object::ElfLoad;
 use crate::object::{BuildId, ExecutableId, ObjectFile};
 use crate::perf_events::setup_perf_event;
 use crate::unwind_info::CompactUnwindRow;
@@ -66,8 +67,7 @@ pub struct ProcessInfo {
 pub struct ObjectFileInfo {
     pub file: fs::File,
     pub path: PathBuf,
-    pub load_offset: u64,
-    pub load_vaddr: u64,
+    pub elf_load_segments: Vec<ElfLoad>,
     pub is_dyn: bool,
     pub references: i64,
     pub native_unwind_info_size: Option<u64>,
@@ -78,8 +78,7 @@ impl Clone for ObjectFileInfo {
         ObjectFileInfo {
             file: self.open_file_from_procfs_fd(),
             path: self.path.clone(),
-            load_offset: self.load_offset,
-            load_vaddr: self.load_vaddr,
+            elf_load_segments: self.elf_load_segments.clone(),
             is_dyn: self.is_dyn,
             references: self.references,
             native_unwind_info_size: self.native_unwind_info_size,
@@ -110,6 +109,25 @@ impl ObjectFileInfo {
         let raw_fd = self.file.as_raw_fd();
         PathBuf::from(format!("/proc/{}/fd/{}", process::id(), raw_fd))
     }
+
+    /// For a virtual address return the offset within the object file. In order
+    /// to do this we must check all the `PT_LOAD` segments.
+    pub fn normalized_address(
+        &self,
+        virtual_address: u64,
+        mapping: &ExecutableMapping,
+    ) -> Option<u64> {
+        let offset = virtual_address - mapping.start_addr + mapping.offset;
+
+        for segment in &self.elf_load_segments {
+            let addres_range = segment.p_vaddr..(segment.p_vaddr + segment.p_memsz);
+            if addres_range.contains(&offset) {
+                return Some(offset - segment.p_offset + segment.p_vaddr);
+            }
+        }
+
+        None
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -131,9 +149,9 @@ pub struct ExecutableMapping {
 pub struct ExecutableMappings(Vec<ExecutableMapping>);
 
 impl ExecutableMappings {
-    pub fn for_address(&self, addr: u64) -> Option<ExecutableMapping> {
+    pub fn for_address(&self, virtual_address: u64) -> Option<ExecutableMapping> {
         for mapping in &self.0 {
-            if mapping.start_addr <= addr && addr <= mapping.end_addr {
+            if (mapping.start_addr..mapping.end_addr).contains(&virtual_address) {
                 return Some(mapping.clone());
             }
         }
@@ -276,10 +294,7 @@ impl RawAggregatedSample {
                     Some(obj) => {
                         // We need the normalized address for normal object files
                         // and might need the absolute addresses for JIT
-                        let normalized_addr = virtual_address - mapping.start_addr + mapping.offset
-                            - obj.load_offset
-                            + obj.load_vaddr;
-                        Some(normalized_addr)
+                        obj.normalized_address(virtual_address, &mapping)
                     }
                     None => {
                         error!("executable with id {} not found", mapping.executable_id);
@@ -1544,7 +1559,7 @@ impl Profiler<'_> {
             }
             match &map.pathname {
                 procfs::process::MMapPath::Path(path) => {
-                    let abs_path = format!("/proc/{}/root/{}", pid, path.to_string_lossy());
+                    let abs_path = format!("/proc/{}/root{}", pid, path.to_string_lossy());
 
                     // We've seen debug info executables that get deleted in Rust applications.
                     if abs_path.contains("(deleted)") {
@@ -1622,13 +1637,12 @@ impl Profiler<'_> {
                     });
 
                     match object_files.entry(executable_id) {
-                        Entry::Vacant(entry) => match object_file.elf_load() {
-                            Ok(elf_load) => {
+                        Entry::Vacant(entry) => match object_file.elf_load_segments() {
+                            Ok(elf_loads) => {
                                 entry.insert(ObjectFileInfo {
                                     path: PathBuf::from(abs_path),
                                     file,
-                                    load_offset: elf_load.offset,
-                                    load_vaddr: elf_load.vaddr,
+                                    elf_load_segments: elf_loads,
                                     is_dyn: object_file.is_dynamic(),
                                     references: 1,
                                     native_unwind_info_size: None,
@@ -1899,8 +1913,7 @@ mod tests {
         let object_file_info = ObjectFileInfo {
             file,
             path: file_path.to_path_buf(),
-            load_offset: 0,
-            load_vaddr: 0,
+            elf_load_segments: vec![],
             is_dyn: false,
             references: 1,
             native_unwind_info_size: None,
