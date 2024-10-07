@@ -5,10 +5,13 @@ use std::time::Duration;
 use tracing::{debug, span, Level};
 
 use crate::object::ExecutableId;
+use crate::profile::raw_to_processed;
 use crate::profile::{symbolize_profile, to_pprof};
+use crate::profiler::AggregatedProfile;
+use crate::profiler::AggregatedSample;
+use crate::profiler::ObjectFileInfo;
 use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
-use crate::profiler::{ObjectFileInfo, RawAggregatedSample};
 
 pub trait Collector {
     fn collect(
@@ -20,7 +23,7 @@ pub trait Collector {
     fn finish(
         &self,
     ) -> (
-        RawAggregatedProfile,
+        AggregatedProfile,
         &HashMap<i32, ProcessInfo>,
         &HashMap<ExecutableId, ObjectFileInfo>,
     );
@@ -53,16 +56,17 @@ impl Collector for NullCollector {
     fn finish(
         &self,
     ) -> (
-        RawAggregatedProfile,
+        AggregatedProfile,
         &HashMap<i32, ProcessInfo>,
         &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
-        (RawAggregatedProfile::new(), &self.procs, &self.objs)
+        (AggregatedProfile::new(), &self.procs, &self.objs)
     }
 }
 
 #[derive(Default)]
 pub struct StreamingCollector {
+    local_symbolizer: bool,
     pprof_ingest_url: String,
     timeout: Duration,
     procs: HashMap<i32, ProcessInfo>,
@@ -70,8 +74,9 @@ pub struct StreamingCollector {
 }
 
 impl StreamingCollector {
-    pub fn new(pprof_ingest_url: &str) -> Self {
+    pub fn new(local_symbolizer: bool, pprof_ingest_url: &str) -> Self {
         Self {
+            local_symbolizer,
             pprof_ingest_url: pprof_ingest_url.into(),
             timeout: Duration::from_secs(30),
             ..Default::default()
@@ -89,8 +94,12 @@ impl Collector for StreamingCollector {
     ) {
         let _span = span!(Level::DEBUG, "StreamingCollector.finish").entered();
 
-        let symbolized_profile = symbolize_profile(&profile, procs, objs);
-        let pprof_builder = to_pprof(symbolized_profile, procs, objs);
+        let mut profile = raw_to_processed(&profile, procs, objs);
+        if self.local_symbolizer {
+            profile = symbolize_profile(&profile, procs, objs);
+        }
+
+        let pprof_builder = to_pprof(profile, procs, objs);
         let pprof = pprof_builder.profile();
 
         let client_builder = reqwest::blocking::Client::builder().timeout(self.timeout);
@@ -106,17 +115,17 @@ impl Collector for StreamingCollector {
     fn finish(
         &self,
     ) -> (
-        RawAggregatedProfile,
+        AggregatedProfile,
         &HashMap<i32, ProcessInfo>,
         &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
-        (RawAggregatedProfile::new(), &self.procs, &self.objs)
+        (AggregatedProfile::new(), &self.procs, &self.objs)
     }
 }
 
 #[derive(Default)]
 pub struct AggregatorCollector {
-    profiles: Vec<RawAggregatedProfile>,
+    profiles: Vec<AggregatedProfile>,
     procs: HashMap<i32, ProcessInfo>,
     objs: HashMap<ExecutableId, ObjectFileInfo>,
 }
@@ -131,11 +140,12 @@ impl AggregatorCollector {
 impl Collector for AggregatorCollector {
     fn collect(
         &mut self,
-        profile: RawAggregatedProfile,
+        raw_profile: RawAggregatedProfile,
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
-        self.profiles.push(profile);
+        self.profiles
+            .push(raw_to_processed(&raw_profile, procs, objs));
 
         for (k, v) in procs {
             self.procs.insert(*k, v.clone());
@@ -149,7 +159,7 @@ impl Collector for AggregatorCollector {
     fn finish(
         &self,
     ) -> (
-        RawAggregatedProfile,
+        AggregatedProfile,
         &HashMap<i32, ProcessInfo>,
         &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
@@ -158,8 +168,10 @@ impl Collector for AggregatorCollector {
         let mut samples_count = HashMap::new();
         for profile in &self.profiles {
             for sample in profile {
-                let sample_without_count = RawAggregatedSample {
+                let sample_without_count = AggregatedSample {
                     count: 0,
+                    ustack: sample.ustack.clone(),
+                    kstack: sample.kstack.clone(),
                     ..*sample
                 };
                 *samples_count.entry(sample_without_count).or_insert(0) += sample.count
@@ -169,8 +181,10 @@ impl Collector for AggregatorCollector {
         debug!("found {} unique samples", samples_count.len());
         let profile = samples_count
             .iter()
-            .map(|(sample, count)| RawAggregatedSample {
+            .map(|(sample, count)| AggregatedSample {
                 count: *count,
+                ustack: sample.ustack.clone(),
+                kstack: sample.kstack.clone(),
                 ..*sample
             })
             .collect();
