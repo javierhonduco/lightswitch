@@ -78,9 +78,9 @@ pub struct StreamingCollector {
 
 impl StreamingCollector {
     pub fn new(
-      local_symbolizer: bool,
-      pprof_ingest_url: &str,
-      metadata_provider: ThreadSafeGlobalMetadataProvider
+        local_symbolizer: bool,
+        pprof_ingest_url: &str,
+        metadata_provider: ThreadSafeGlobalMetadataProvider,
     ) -> Self {
         Self {
             local_symbolizer,
