@@ -1,7 +1,7 @@
 // use std::collections::HashMap;
 // use std::sync::{Arc, Mutex, Weak};
 
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub enum LabelValue {
     String(String),
     /// Value and unit.

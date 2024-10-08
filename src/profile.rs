@@ -127,7 +127,7 @@ pub fn to_pprof(
 
         let labels = match tid_to_pproflabels_map.entry(sample.tid) {
             Entry::Occupied(e) => e.get().to_vec(),
-            Entry::Vacant(e) => match metadata_provider.lock().unwrap().get_metadata(tid) {
+            Entry::Vacant(e) => match metadata_provider.lock().unwrap().get_metadata(sample.tid) {
                 Ok(metadata) => {
                     let labels = metadata_to_pprof_labels(metadata, &mut pprof);
                     e.insert(labels.clone());
