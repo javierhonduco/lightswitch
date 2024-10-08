@@ -125,6 +125,13 @@ enum ProfileSender {
     Remote,
 }
 
+#[derive(PartialEq, clap::ValueEnum, Debug, Clone, Default)]
+enum Symbolizer {
+    #[default]
+    Local,
+    None,
+}
+
 #[derive(Parser, Debug)]
 struct Cli {
     /// Specific PIDs to profile
@@ -221,6 +228,8 @@ struct Cli {
     // Exclude myself from profiling
     #[arg(long, help = "Do not profile the profiler (myself)")]
     exclude_self: bool,
+    #[arg(long, default_value_t, value_enum)]
+    symbolizer: Symbolizer,
 }
 
 /// Exit the main thread if any thread panics. We prefer this behaviour because pretty much every
@@ -311,6 +320,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
         }
         ProfileSender::Remote => Box::new(StreamingCollector::new(
+            args.symbolizer == Symbolizer::Local,
             PPROF_INGEST_URL,
             metadata_provider.clone(),
         )) as Box<dyn Collector + Send>,
@@ -346,7 +356,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     p.run(collector.clone());
 
     let collector = collector.lock().unwrap();
-    let (raw_profile, procs, objs) = collector.finish();
+    let (mut profile, procs, objs) = collector.finish();
 
     // If we need to send the profile to the backend there's nothing else to do.
     match args.sender {
@@ -357,11 +367,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Otherwise let's symbolize the profile and write it to disk.
-    let symbolized_profile = symbolize_profile(&raw_profile, procs, objs);
+    if args.symbolizer == Symbolizer::Local {
+        profile = symbolize_profile(&profile, procs, objs);
+    }
 
     match args.profile_format {
         ProfileFormat::FlameGraph => {
-            let folded = fold_profile(symbolized_profile);
+            let folded = fold_profile(profile);
             let mut options: flamegraph::Options<'_> = flamegraph::Options::default();
             let data = folded.as_bytes();
             let f = File::create(args.profile_name.unwrap_or_else(|| "flame.svg".into())).unwrap();
@@ -376,7 +388,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         ProfileFormat::Pprof => {
             let mut buffer = Vec::new();
-            let proto = to_pprof(symbolized_profile, procs, objs, &metadata_provider);
+            let proto = to_pprof(profile, procs, objs, &metadata_provider);
             proto.validate().unwrap();
             proto.profile().encode(&mut buffer).unwrap();
             let mut pprof_file =
@@ -421,9 +433,9 @@ mod tests {
         cmd.arg("--help");
         cmd.assert().success();
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
-        insta::assert_yaml_snapshot!(actual, @r###"
-        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-logs\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n          \n          [default: local-disk]\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-stacks <MAPSIZE_STACKS>\n          max number of individual stacks to capture before aggregation\n          \n          [default: 100000]\n\n      --mapsize-aggregated-stacks <MAPSIZE_AGGREGATED_STACKS>\n          Derived from constant MAX_AGGREGATED_STACKS_ENTRIES - max number of unique stacks after aggregation\n          \n          [default: 10000]\n\n      --mapsize-unwind-info-chunks <MAPSIZE_UNWIND_INFO_CHUNKS>\n          max number of chunks allowed inside a shard\n          \n          [default: 5000]\n\n      --mapsize-unwind-tables <MAPSIZE_UNWIND_TABLES>\n          Derived from constant MAX_UNWIND_INFO_SHARDS\n          \n          [default: 65]\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          Derived from constant MAX_PROCESSES\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n  -h, --help\n          Print help (see a summary with '-h')\n"
-        "###);
+        insta::assert_yaml_snapshot!(actual, @r#"
+        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-logs\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n          \n          [default: local-disk]\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-stacks <MAPSIZE_STACKS>\n          max number of individual stacks to capture before aggregation\n          \n          [default: 100000]\n\n      --mapsize-aggregated-stacks <MAPSIZE_AGGREGATED_STACKS>\n          Derived from constant MAX_AGGREGATED_STACKS_ENTRIES - max number of unique stacks after aggregation\n          \n          [default: 10000]\n\n      --mapsize-unwind-info-chunks <MAPSIZE_UNWIND_INFO_CHUNKS>\n          max number of chunks allowed inside a shard\n          \n          [default: 5000]\n\n      --mapsize-unwind-tables <MAPSIZE_UNWIND_TABLES>\n          Derived from constant MAX_UNWIND_INFO_SHARDS\n          \n          [default: 65]\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          Derived from constant MAX_PROCESSES\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n      --symbolizer <SYMBOLIZER>\n          [default: local]\n          [possible values: local, none]\n\n  -h, --help\n          Print help (see a summary with '-h')\n"
+        "#);
     }
 
     #[rstest]
