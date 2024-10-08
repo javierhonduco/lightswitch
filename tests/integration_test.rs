@@ -8,7 +8,7 @@ use crossbeam_channel::bounded;
 
 use lightswitch::collector::{AggregatorCollector, Collector};
 use lightswitch::profile::symbolize_profile;
-use lightswitch::profiler::SymbolizedAggregatedProfile;
+use lightswitch::profiler::AggregatedProfile;
 use lightswitch::profiler::{Profiler, ProfilerConfig};
 
 /// Find the `nix` binary either in the $PATH or in the below hardcoded location.
@@ -70,14 +70,14 @@ impl Drop for TestProcess {
 }
 
 fn assert_any_stack_contains(
-    symbolized_profile: &SymbolizedAggregatedProfile,
+    symbolized_profile: &AggregatedProfile,
     expected_stack: &[&str],
 ) -> bool {
     for sample in symbolized_profile {
         let stack_string = sample
             .ustack
             .iter()
-            .map(|e| e.name.clone())
+            .map(|e| e.symbolization_result.clone().unwrap().unwrap().0)
             .collect::<Vec<_>>()
             .join("::");
 

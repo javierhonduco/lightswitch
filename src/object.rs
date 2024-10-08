@@ -10,7 +10,7 @@ use data_encoding::HEXLOWER;
 use memmap2;
 use ring::digest::{Context, Digest, SHA256};
 
-use object::elf::{FileHeader32, FileHeader64};
+use object::elf::{FileHeader32, FileHeader64, PT_LOAD};
 use object::read::elf::FileHeader;
 use object::read::elf::ProgramHeader;
 use object::Endianness;
@@ -28,9 +28,11 @@ pub enum BuildId {
     Sha256(String),
 }
 
+#[derive(Debug, Clone)]
 pub struct ElfLoad {
-    pub offset: u64,
-    pub vaddr: u64,
+    pub p_offset: u64,
+    pub p_vaddr: u64,
+    pub p_memsz: u64,
 }
 
 impl Display for BuildId {
@@ -142,7 +144,7 @@ impl ObjectFile<'_> {
         false
     }
 
-    pub fn elf_load(&self) -> Result<ElfLoad> {
+    pub fn elf_load_segments(&self) -> Result<Vec<ElfLoad>> {
         let mmap = unsafe { &**self.leaked_mmap_ptr };
 
         match FileKind::parse(mmap) {
@@ -151,37 +153,41 @@ impl ObjectFile<'_> {
                 let endian = header.endian()?;
                 let segments = header.program_headers(endian, mmap)?;
 
-                if let Some(segment) = segments.iter().next() {
-                    return Ok(ElfLoad {
-                        offset: segment.p_offset(endian) as u64,
-                        vaddr: segment.p_vaddr(endian) as u64,
-                    });
+                let mut elf_loads = Vec::new();
+                for segment in segments {
+                    if segment.p_type(endian) == PT_LOAD {
+                        elf_loads.push(ElfLoad {
+                            p_offset: segment.p_offset(endian) as u64,
+                            p_vaddr: segment.p_vaddr(endian) as u64,
+                            p_memsz: segment.p_memsz(endian) as u64,
+                        });
+                    }
                 }
+                Ok(elf_loads)
             }
             Ok(FileKind::Elf64) => {
                 let header: &FileHeader64<Endianness> = FileHeader64::<Endianness>::parse(mmap)?;
                 let endian = header.endian()?;
                 let segments = header.program_headers(endian, mmap)?;
 
-                if let Some(segment) = segments.iter().next() {
-                    return Ok(ElfLoad {
-                        offset: segment.p_offset(endian),
-                        vaddr: segment.p_vaddr(endian),
-                    });
+                let mut elf_loads = Vec::new();
+                for segment in segments {
+                    if segment.p_type(endian) == PT_LOAD {
+                        elf_loads.push(ElfLoad {
+                            p_offset: segment.p_offset(endian),
+                            p_vaddr: segment.p_vaddr(endian),
+                            p_memsz: segment.p_memsz(endian),
+                        });
+                    }
                 }
+                Ok(elf_loads)
             }
-            Ok(other_file_kind) => {
-                return Err(anyhow!(
-                    "object is not an 32 or 64 bits ELF but {:?}",
-                    other_file_kind
-                ));
-            }
-            Err(e) => {
-                return Err(anyhow!("FileKind failed with {:?}", e));
-            }
+            Ok(other_file_kind) => Err(anyhow!(
+                "object is not an 32 or 64 bits ELF but {:?}",
+                other_file_kind
+            )),
+            Err(e) => Err(anyhow!("FileKind failed with {:?}", e)),
         }
-
-        Err(anyhow!("no segments found"))
     }
 }
 
