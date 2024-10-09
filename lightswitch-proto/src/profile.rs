@@ -320,8 +320,6 @@ mod tests {
     // - validate it: (in pprof's codebase) `go tool pprof profile.pb`
     // - print it: `go tool pprof -raw profile.pb`
     // - http server: `go tool pprof -http=:8080 profile.pb`
-    use prost::Message;
-
     use super::*;
 
     #[test]
@@ -414,8 +412,6 @@ mod tests {
     #[test]
     fn test_profile() {
         use rand::Rng;
-        use std::fs::File;
-        use std::io::Write;
 
         let mut rng = rand::thread_rng();
         let mut pprof = PprofBuilder::new(Duration::from_secs(5), 27);
