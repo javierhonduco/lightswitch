@@ -1,7 +1,8 @@
 use crate::{
     label::{Label, LabelValue},
-    taskname::TaskName,
+    taskinfo::TaskInfo,
 };
+use std::result::Result::Ok;
 use thiserror::Error;
 use tracing::debug;
 
@@ -22,12 +23,11 @@ impl TaskMetadata {
     }
 
     pub fn get_metadata(&self, task_id: i32) -> Vec<Label> {
-        let task_and_process_names = TaskName::for_task(task_id).unwrap_or(TaskName::errored());
-
+        let task_info = TaskInfo::for_task(task_id).unwrap_or(TaskInfo::errored());
         let mut task_metadata = vec![
             Label {
                 key: String::from("pid"),
-                value: LabelValue::Number(1, "task-tgid".into()),
+                value: LabelValue::Number(task_info.pid.into(), "task-tgid".into()),
             },
             Label {
                 key: String::from("pid"),
@@ -35,11 +35,11 @@ impl TaskMetadata {
             },
             Label {
                 key: String::from("process-name"),
-                value: LabelValue::String(task_and_process_names.main_thread),
+                value: LabelValue::String(task_info.main_thread),
             },
             Label {
                 key: String::from("thread-name"),
-                value: LabelValue::String(task_and_process_names.current_thread),
+                value: LabelValue::String(task_info.current_thread),
             },
         ];
 
@@ -54,5 +54,41 @@ impl TaskMetadata {
             }
         }
         task_metadata
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::task_metadata::*;
+    use nix::unistd;
+
+    #[test]
+    fn test_get_metadata_main_thread() {
+        // Given
+        let task_metadata = TaskMetadata {};
+        let task_id = unistd::getpgrp().as_raw();
+        let expected = TaskInfo::for_task(task_id).unwrap();
+
+        // When
+        let labels = task_metadata.get_metadata(task_id);
+
+        // Then
+        assert_eq!(labels[0].key, "pid");
+        assert_eq!(
+            labels[0].value,
+            LabelValue::Number(task_id.into(), "task-tgid".into())
+        );
+
+        assert_eq!(labels[1].key, "pid");
+        assert_eq!(
+            labels[1].value,
+            LabelValue::Number(task_id.into(), "task-id".into())
+        );
+
+        assert_eq!(labels[2].key, "process-name");
+        assert_eq!(labels[2].value, LabelValue::String(expected.main_thread));
+
+        assert_eq!(labels[3].key, "thread-name");
+        assert_eq!(labels[3].value, LabelValue::String(expected.current_thread));
     }
 }

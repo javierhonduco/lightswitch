@@ -6,6 +6,8 @@ edition = "2021"
 [workspace]
 members = [
     "lightswitch-proto",
+    "lightswitch-capabilities",
+    "lightswitch-metadata-provider"
 ]
 
 [dependencies]

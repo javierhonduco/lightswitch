@@ -1,6 +1,6 @@
 use lightswitch_metadata_provider::label::LabelValue;
 use lightswitch_metadata_provider::metadata_provider::ThreadSafeGlobalMetadataProvider;
-use lightswitch_metadata_provider::taskname::TaskName;
+use lightswitch_metadata_provider::taskinfo::TaskInfo;
 use lightswitch_proto::profile::pprof::Label;
 use lightswitch_proto::profile::LabelStringOrNumber;
 use lightswitch_proto::profile::PprofBuilder;
@@ -209,7 +209,7 @@ pub fn fold_profile(profile: AggregatedProfile) -> String {
         let kstack = kstack.join(";");
         let count: String = sample.count.to_string();
 
-        let task_and_process_names = TaskName::for_task(sample.tid).unwrap_or(TaskName::errored());
+        let task_and_process_names = TaskInfo::for_task(sample.tid).unwrap_or(TaskInfo::errored());
 
         writeln!(
             folded,

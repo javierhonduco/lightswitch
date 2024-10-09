@@ -312,7 +312,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // TODO: Opatnebe - Do we need Box here?
     let metadata_provider: ThreadSafeGlobalMetadataProvider =
-        Arc::new(Mutex::new(GlobalMetadataProvider::new()));
+        Arc::new(Mutex::new(GlobalMetadataProvider::default()));
 
     let collector = Arc::new(Mutex::new(match args.sender {
         ProfileSender::None => Box::new(NullCollector::new()) as Box<dyn Collector + Send>,

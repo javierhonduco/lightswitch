@@ -35,16 +35,18 @@ pub type ThreadSafeGlobalMetadataProvider = Arc<Mutex<GlobalMetadataProvider>>;
 
 impl Default for GlobalMetadataProvider {
     fn default() -> Self {
-        Self::new()
+        // fix me
+        Self::new(NonZeroUsize::new(1000).unwrap())
     }
 }
 
 impl GlobalMetadataProvider {
-    pub fn new() -> Self {
-        GlobalMetadataProvider {
-            // TODO: Make this configurable
-            task_label_cache: LruCache::new(NonZeroUsize::new(10000).unwrap()),
-            ..Default::default()
+    pub fn new(metadata_cache_size: NonZeroUsize) -> Self {
+        Self {
+            task_label_cache: LruCache::new(metadata_cache_size),
+            system_metadata: SystemMetadata {},
+            task_metadata: TaskMetadata {},
+            custom_metadata_providers: Vec::new(),
         }
     }
 
