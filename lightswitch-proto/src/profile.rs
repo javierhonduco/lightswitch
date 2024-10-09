@@ -359,10 +359,10 @@ mod tests {
         let _ = pprof.add_line("hahahaha-first-line");
         let (line, function_id) = pprof.add_line("test-line");
 
-        assert_eq!(pprof.add_location(0x123, 0x1111, vec![line.clone()]), 1);
-        assert_eq!(pprof.add_location(0x123, 0x1111, vec![line.clone()]), 1);
-        assert_eq!(pprof.add_location(0x256, 0x2222, vec![line.clone()]), 2);
-        assert_eq!(pprof.add_location(0x512, 0x3333, vec![line.clone()]), 3);
+        assert_eq!(pprof.add_location(0x123, 0x1111, vec![line]), 1);
+        assert_eq!(pprof.add_location(0x123, 0x1111, vec![line]), 1);
+        assert_eq!(pprof.add_location(0x256, 0x2222, vec![line]), 2);
+        assert_eq!(pprof.add_location(0x512, 0x3333, vec![line]), 3);
 
         assert_eq!(pprof.locations.len(), 3);
         assert_eq!(
