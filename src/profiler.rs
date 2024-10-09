@@ -141,6 +141,7 @@ pub struct ExecutableMapping {
     pub offset: u64,
     pub load_address: u64,
     pub main_exec: bool,
+    /// Soft delete.
     pub unmapped: bool,
     // Add (inode, ctime) and whether the file is in the root namespace
 }
@@ -165,14 +166,20 @@ impl ExecutableMapping {
         &mut self,
         object_files: &mut HashMap<ExecutableId, ObjectFileInfo>,
     ) -> bool {
-        // Avoid decrementing the reference count logic more than once if called multiple times.
+        // The executable mapping can be removed at a later time, and function might be called multiple
+        // times. To avoid this, we keep track of whether this mapping has been soft deleted.
         if self.unmapped {
             return false;
         }
-
         self.unmapped = true;
 
         if let Some(object_file) = object_files.get_mut(&self.executable_id) {
+            // Object files are also soft deleted, so do not try to decrease the reference count
+            // if it's already zero.
+            if object_file.references == 0 {
+                return false;
+            }
+
             object_file.references -= 1;
 
             if object_file.references == 0 {
