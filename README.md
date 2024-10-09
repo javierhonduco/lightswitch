@@ -34,6 +34,7 @@ We use `nix` for the development environment and the building system. It can be 
 
 ### Building
 ```shell
+# after running `nix develop`
 $ cargo build # use `--release` to get an optimized build
 $ sudo ./target/debug/lightswitch # or ./target/release for optimized builds
 ```
