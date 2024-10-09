@@ -24,7 +24,7 @@ jobs:
     - name: Run `cargo build`
       run: nix develop --ignore-environment --command cargo build
     - name: Run `cargo clippy`
-      run: nix develop --command cargo clippy --all-targets -- -D warnings
+      run: nix develop --command cargo clippy --workspace --all-targets -- -D warnings
     - name: Run `cargo test`
       run: nix develop --command cargo test --workspace
     - name: Run `cargo fmt`
