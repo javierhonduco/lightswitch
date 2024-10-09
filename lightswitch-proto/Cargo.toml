@@ -7,5 +7,8 @@ edition = "2021"
 prost = "0.13"
 anyhow = "1.0.89"
 
+[dev-dependencies]
+rand = "0.8.5"
+
 [build-dependencies]
 prost-build = "0.13.3"
