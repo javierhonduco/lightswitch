@@ -111,7 +111,7 @@ impl ObjectFileInfo {
     }
 
     /// For a virtual address return the offset within the object file. In order
-    /// to do this we must check all the `PT_LOAD` segments.
+    /// to do this we must check every `PT_LOAD` segment.
     pub fn normalized_address(
         &self,
         virtual_address: u64,
@@ -120,8 +120,8 @@ impl ObjectFileInfo {
         let offset = virtual_address - mapping.start_addr + mapping.offset;
 
         for segment in &self.elf_load_segments {
-            let addres_range = segment.p_vaddr..(segment.p_vaddr + segment.p_memsz);
-            if addres_range.contains(&offset) {
+            let address_range = segment.p_vaddr..(segment.p_vaddr + segment.p_memsz);
+            if address_range.contains(&offset) {
                 return Some(offset - segment.p_offset + segment.p_vaddr);
             }
         }
