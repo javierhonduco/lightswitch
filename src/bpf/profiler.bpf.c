@@ -452,6 +452,11 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       break;
     }
 
+    if (found_rbp_type == RBP_TYPE_OFFSET_DID_NOT_FIT) {
+      bump_unwind_error_rbp_offset_did_not_fit();
+      return 1;
+    }
+
     if (found_rbp_type == RBP_TYPE_UNDEFINED_RETURN_ADDRESS) {
       LOG("[info] null return address, end of stack", unwind_state->ip);
       reached_bottom_of_stack = true;
