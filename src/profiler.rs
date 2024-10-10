@@ -1929,4 +1929,53 @@ mod tests {
         // This would fail without the procfs hack.
         object_file_info_copy.file.read_to_string(&mut buf).unwrap();
     }
+
+    #[test]
+    fn test_address_normalization() {
+        let mut object_file_info = ObjectFileInfo {
+            file: File::open("/").unwrap(),
+            path: "/".into(),
+            elf_load_segments: vec![],
+            is_dyn: false,
+            references: 0,
+            native_unwind_info_size: None,
+        };
+
+        let mapping = ExecutableMapping {
+            executable_id: 0x0,
+            build_id: None,
+            kind: MappingType::FileBacked,
+            start_addr: 0x100,
+            end_addr: 0x100 + 100,
+            offset: 0x0,
+            load_address: 0x0,
+            main_exec: false,
+            unmapped: false,
+        };
+
+        // no elf segments
+        assert!(object_file_info
+            .normalized_address(0x110, &mapping)
+            .is_none());
+
+        // matches an elf segment
+        object_file_info.elf_load_segments = vec![ElfLoad {
+            p_offset: 0x1,
+            p_vaddr: 0x0,
+            p_memsz: 0x20,
+        }];
+        assert_eq!(
+            object_file_info.normalized_address(0x110, &mapping),
+            Some(0xF)
+        );
+        // does not match any elf segments
+        object_file_info.elf_load_segments = vec![ElfLoad {
+            p_offset: 0x0,
+            p_vaddr: 0x0,
+            p_memsz: 0x5,
+        }];
+        assert!(object_file_info
+            .normalized_address(0x110, &mapping)
+            .is_none());
+    }
 }
