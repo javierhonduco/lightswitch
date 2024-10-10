@@ -1,18 +1,20 @@
 #[derive(Debug, PartialEq, Eq)]
-pub struct TaskName {
+pub struct TaskInfo {
+    pub pid: i32,
     pub main_thread: String,
     pub current_thread: String,
 }
 
-impl TaskName {
+impl TaskInfo {
     pub fn errored() -> Self {
-        TaskName {
+        TaskInfo {
+            pid: -1,
             main_thread: "<could not fetch process name>".into(),
             current_thread: "<could not fetch thread name>".into(),
         }
     }
 
-    pub fn for_task(task_id: i32) -> Result<TaskName, anyhow::Error> {
+    pub fn for_task(task_id: i32) -> Result<TaskInfo, anyhow::Error> {
         let task = procfs::process::Process::new(task_id)?.stat()?;
         let main_task = procfs::process::Process::new(task.pgrp)?.stat()?;
         let thread_name = if task.pid == task.pgrp {
@@ -20,7 +22,8 @@ impl TaskName {
         } else {
             task.comm
         };
-        Ok(TaskName {
+        Ok(TaskInfo {
+            pid: task.pgrp,
             main_thread: main_task.comm,
             current_thread: thread_name,
         })
@@ -35,14 +38,14 @@ mod tests {
 
     #[test]
     fn test_thread_name() {
-        let names = TaskName::for_task(unistd::getpgrp().as_raw()).unwrap();
+        let names = TaskInfo::for_task(unistd::getpgrp().as_raw()).unwrap();
         assert_eq!(names.current_thread, "<main thread>");
 
         let builder = thread::Builder::new().name("funky-thread-name".to_string());
 
         builder
             .spawn(|| {
-                let names = TaskName::for_task(unistd::gettid().as_raw()).unwrap();
+                let names = TaskInfo::for_task(unistd::gettid().as_raw()).unwrap();
                 assert_eq!(names.current_thread, "funky-thread-na");
             })
             .unwrap()

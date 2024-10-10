@@ -1,5 +1,10 @@
+use lightswitch_metadata_provider::label::LabelValue;
+use lightswitch_metadata_provider::metadata_provider::ThreadSafeGlobalMetadataProvider;
+use lightswitch_metadata_provider::taskinfo::TaskInfo;
+use lightswitch_proto::profile::pprof::Label;
 use lightswitch_proto::profile::LabelStringOrNumber;
 use lightswitch_proto::profile::PprofBuilder;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -8,7 +13,6 @@ use tracing::{debug, error, span, Level};
 
 use crate::ksym::Ksym;
 use crate::ksym::KsymIter;
-use crate::metadata::TaskName;
 use crate::object::ExecutableId;
 use crate::profiler::AggregatedProfile;
 use crate::profiler::AggregatedSample;
@@ -19,14 +23,39 @@ use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
 use crate::usym::symbolize_native_stack_blaze;
 
+fn convert_to_label(atrribute: &LabelValue) -> LabelStringOrNumber {
+    match atrribute {
+        LabelValue::String(val) => LabelStringOrNumber::String(val.into()),
+        LabelValue::Number(val, unit) => LabelStringOrNumber::Number(*val, unit.into()),
+    }
+}
+
+fn metadata_to_pprof_labels(
+    metadata: HashMap<String, LabelValue>,
+    pprof: &mut PprofBuilder,
+) -> Vec<Label> {
+    let mut labels = Vec::with_capacity(metadata.capacity());
+    for (key, val) in &metadata {
+        labels.push(pprof.new_label(key, convert_to_label(val)));
+    }
+    labels
+}
+
 /// Converts a given symbolized profile to Google's pprof.
 pub fn to_pprof(
     profile: AggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
+    metadata_provider: &ThreadSafeGlobalMetadataProvider,
 ) -> PprofBuilder {
     // TODO: pass right duration and frequency.
     let mut pprof = PprofBuilder::new(Duration::from_secs(5), 27);
+
+    // TODO: opatnebe - Can the provider to return this data in a ready to use state
+    // Perhaps the metadata provider can directly store the pprof labels?
+    // If so, we can have the caching happening at just one level
+    // And we can eliminate the metadata_to_pprof_labels conversion maybe?
+    let mut tid_to_pproflabels_map: HashMap<i32, Vec<Label>> = HashMap::new();
 
     for sample in profile {
         let ustack = sample.ustack;
@@ -130,27 +159,20 @@ pub fn to_pprof(
             }
         }
 
-        let task_and_process_names = TaskName::for_task(sample.tid).unwrap_or(TaskName::errored());
-
-        let labels = vec![
-            pprof.new_label(
-                "pid",
-                LabelStringOrNumber::Number(sample.pid.into(), "task-tgid".into()),
-            ),
-            pprof.new_label(
-                "tid",
-                LabelStringOrNumber::Number(sample.tid.into(), "task-id".into()),
-            ),
-            pprof.new_label(
-                "process-name",
-                LabelStringOrNumber::String(task_and_process_names.main_thread),
-            ),
-            pprof.new_label(
-                "thread-name",
-                LabelStringOrNumber::String(task_and_process_names.current_thread),
-            ),
-        ];
-
+        let labels = match tid_to_pproflabels_map.entry(sample.tid) {
+            Entry::Occupied(e) => e.get().to_vec(),
+            Entry::Vacant(e) => match metadata_provider.lock().unwrap().get_metadata(sample.tid) {
+                Ok(metadata) => {
+                    let labels = metadata_to_pprof_labels(metadata, &mut pprof);
+                    e.insert(labels.clone());
+                    labels
+                }
+                Err(err) => {
+                    error!("Error retrieving metadata err={:?}", err);
+                    Vec::new()
+                }
+            },
+        };
         pprof.add_sample(location_ids, sample.count as i64, labels);
     }
 
@@ -187,7 +209,7 @@ pub fn fold_profile(profile: AggregatedProfile) -> String {
         let kstack = kstack.join(";");
         let count: String = sample.count.to_string();
 
-        let task_and_process_names = TaskName::for_task(sample.tid).unwrap_or(TaskName::errored());
+        let task_and_process_names = TaskInfo::for_task(sample.tid).unwrap_or(TaskInfo::errored());
 
         writeln!(
             folded,
