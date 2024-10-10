@@ -65,6 +65,8 @@ impl Add for unwinder_stats_t {
                 + other.error_sending_new_process_event,
             error_cfa_offset_did_not_fit: self.error_cfa_offset_did_not_fit
                 + other.error_cfa_offset_did_not_fit,
+            error_rbp_offset_did_not_fit: self.error_rbp_offset_did_not_fit
+                + other.error_rbp_offset_did_not_fit,
             bp_non_zero_for_bottom_frame: self.bp_non_zero_for_bottom_frame
                 + other.bp_non_zero_for_bottom_frame,
             vdso_encountered: self.vdso_encountered + other.vdso_encountered,

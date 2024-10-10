@@ -27,6 +27,7 @@ enum RbpType {
     Register = 2,
     Expression = 3,
     UndefinedReturnAddress = 4,
+    OffsetDidNotFit = 5,
 }
 
 #[repr(u16)]
@@ -299,8 +300,15 @@ impl<'a> UnwindInfoBuilder<'a> {
                             gimli::RegisterRule::Undefined => {}
                             gimli::RegisterRule::Offset(offset) => {
                                 compact_row.rbp_type = RbpType::CfaOffset as u8;
-                                compact_row.rbp_offset =
-                                    i16::try_from(offset).expect("convert rbp offset");
+
+                                match i16::try_from(offset) {
+                                    Ok(off) => {
+                                        compact_row.rbp_offset = off;
+                                    }
+                                    Err(_) => {
+                                        compact_row.rbp_type = RbpType::OffsetDidNotFit as u8;
+                                    }
+                                }
                             }
                             gimli::RegisterRule::Register(_reg) => {
                                 compact_row.rbp_type = RbpType::Register as u8;
