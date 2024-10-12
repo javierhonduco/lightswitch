@@ -1,6 +1,6 @@
 #[derive(Debug, PartialEq, Eq)]
 pub struct TaskInfo {
-    pub pid: i32,
+    pub pid: Option<i32>,
     pub main_thread: String,
     pub current_thread: String,
 }
@@ -8,7 +8,7 @@ pub struct TaskInfo {
 impl TaskInfo {
     pub fn errored() -> Self {
         TaskInfo {
-            pid: -1,
+            pid: None,
             main_thread: "<could not fetch process name>".into(),
             current_thread: "<could not fetch thread name>".into(),
         }
@@ -23,7 +23,7 @@ impl TaskInfo {
             task.comm
         };
         Ok(TaskInfo {
-            pid: task.pgrp,
+            pid: Some(task.pgrp),
             main_thread: main_task.comm,
             current_thread: thread_name,
         })

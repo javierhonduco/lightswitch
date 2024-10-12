@@ -1,15 +1,14 @@
-use crate::label::{Label, LabelValue};
+use crate::process_metadata::ProcessMetadata;
 use crate::system_metadata::SystemMetadata;
-use crate::task_metadata::TaskMetadata;
+use crate::taskinfo::{self, TaskInfo};
+
 use anyhow::Result;
+use lightswitch_proto::label::{Label, LabelValueStringOrNumber};
 use lru::LruCache;
-use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tracing::{error, warn};
-
-pub type ProfileMetadataMap = HashMap<String, LabelValue>;
 
 #[derive(Debug, Error)]
 pub enum MetadataProviderError {
@@ -18,16 +17,17 @@ pub enum MetadataProviderError {
 }
 
 pub trait MetadataProvider {
+    /// Return a vector of labels for the provided task id.
+    /// Labels returned by this function will be assumed to apply
+    /// to all task_ids in the same process/tgid as the provided task_id.
     fn get_metadata(&self, task_id: i32) -> Result<Vec<Label>, MetadataProviderError>;
 }
 pub type ThreadSafeMetadataProvider = Arc<Mutex<Box<dyn MetadataProvider + Send>>>;
 
 pub struct GlobalMetadataProvider {
-    // labels: LabelInterner,
-    // task_label_cache: LruCache<i32, Vec<LabelArc>>,
-    task_label_cache: LruCache</*task_id*/ i32, Vec<Label>>,
+    pid_label_cache: LruCache</*pid*/ i32, Vec<Label>>,
     system_metadata: SystemMetadata,
-    task_metadata: TaskMetadata,
+    process_metadata: ProcessMetadata,
     custom_metadata_providers: Vec<ThreadSafeMetadataProvider>,
 }
 
@@ -35,7 +35,6 @@ pub type ThreadSafeGlobalMetadataProvider = Arc<Mutex<GlobalMetadataProvider>>;
 
 impl Default for GlobalMetadataProvider {
     fn default() -> Self {
-        // fix me
         Self::new(NonZeroUsize::new(1000).unwrap())
     }
 }
@@ -43,9 +42,9 @@ impl Default for GlobalMetadataProvider {
 impl GlobalMetadataProvider {
     pub fn new(metadata_cache_size: NonZeroUsize) -> Self {
         Self {
-            task_label_cache: LruCache::new(metadata_cache_size),
+            pid_label_cache: LruCache::new(metadata_cache_size),
             system_metadata: SystemMetadata {},
-            task_metadata: TaskMetadata {},
+            process_metadata: ProcessMetadata {},
             custom_metadata_providers: Vec::new(),
         }
     }
@@ -54,8 +53,8 @@ impl GlobalMetadataProvider {
         self.custom_metadata_providers.extend(providers);
     }
 
-    fn get_labels(&mut self, task_id: i32) -> Vec<Label> {
-        let mut labels = self.task_metadata.get_metadata(task_id);
+    fn get_labels(&mut self, pid: i32) -> Vec<Label> {
+        let mut labels = self.process_metadata.get_metadata(pid);
 
         let system_labels = self
             .system_metadata
@@ -66,7 +65,7 @@ impl GlobalMetadataProvider {
         labels.extend(system_labels);
 
         for provider in &self.custom_metadata_providers {
-            match provider.lock().unwrap().get_metadata(task_id) {
+            match provider.lock().unwrap().get_metadata(pid) {
                 Ok(custom_labels) => {
                     labels.extend(custom_labels.into_iter());
                 }
@@ -78,31 +77,42 @@ impl GlobalMetadataProvider {
         labels
     }
 
-    fn prime_label_cache(&mut self, task_id: i32) {
-        if self.task_label_cache.get(&task_id).is_some() {
-            return;
+    pub fn get_metadata(&mut self, task_id: i32) -> Vec<Label> {
+        let task_info = taskinfo::TaskInfo::for_task(task_id).unwrap_or(TaskInfo::errored());
+        let mut task_metadata = vec![
+            Label {
+                key: String::from("pid"),
+                value: LabelValueStringOrNumber::Number(task_id.into(), "task-id".into()),
+            },
+            Label {
+                key: String::from("process-name"),
+                value: LabelValueStringOrNumber::String(task_info.main_thread),
+            },
+            Label {
+                key: String::from("thread-name"),
+                value: LabelValueStringOrNumber::String(task_info.current_thread),
+            },
+        ];
+
+        if task_info.pid.is_none() {
+            error!("Failed to retrieve pid for provided task_id={}", task_id);
+            return task_metadata;
         }
-        let labels = self.get_labels(task_id);
-        self.task_label_cache.push(task_id, labels);
-    }
 
-    pub fn get_metadata(
-        &mut self,
-        task_id: i32,
-    ) -> Result<ProfileMetadataMap, MetadataProviderError> {
-        self.prime_label_cache(task_id);
-        let labels = match self.task_label_cache.get(&task_id) {
-            Some(labels) => labels,
-            None => {
-                return Err(MetadataProviderError::ErrorRetrievingMetadata(task_id));
-            }
-        };
-
-        let mut metadata_map = ProfileMetadataMap::new();
-        labels.iter().for_each(|label| {
-            metadata_map.insert(label.key.clone(), label.value.clone());
+        let pid = task_info.pid.unwrap();
+        task_metadata.push(Label {
+            key: String::from("pid"),
+            value: LabelValueStringOrNumber::Number(pid.into(), "task-tgid".into()),
         });
-        Ok(metadata_map)
+
+        if let Some(cached_labels) = self.pid_label_cache.get(&pid) {
+            task_metadata.extend(cached_labels.iter().cloned());
+        } else {
+            let labels = self.get_labels(pid);
+            self.pid_label_cache.push(pid, labels.clone());
+            task_metadata.extend(labels.into_iter());
+        }
+        task_metadata
     }
 }
 
@@ -121,8 +131,6 @@ mod tests {
         let result = metadata_provider.get_metadata(my_tid);
 
         // Then
-        assert!(result.is_ok());
-        let _labels = result.unwrap();
         // TODO: Fixme
         // assert!(result.)
     }

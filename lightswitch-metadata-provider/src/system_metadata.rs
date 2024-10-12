@@ -1,4 +1,4 @@
-use crate::label::{Label, LabelValue};
+use lightswitch_proto::label::{Label, LabelValueStringOrNumber};
 use anyhow::Result;
 use nix::sys::utsname;
 use thiserror::Error;
@@ -31,11 +31,11 @@ impl SystemMetadata {
         };
         let kernel_release_label = Label {
             key: String::from("kernel_release"),
-            value: LabelValue::String(get_kernel_release(&uname)),
+            value: LabelValueStringOrNumber::String(get_kernel_release(&uname)),
         };
         let machine_label = Label {
             key: String::from("machine"),
-            value: LabelValue::String(uname.machine().to_string_lossy().to_string()),
+            value: LabelValueStringOrNumber::String(uname.machine().to_string_lossy().to_string()),
         };
         Ok(vec![kernel_release_label, machine_label])
     }
@@ -65,13 +65,13 @@ mod tests {
         assert_eq!(kernel_release.key, "kernel_release");
         assert_eq!(
             kernel_release.value,
-            LabelValue::String(get_kernel_release(&expected))
+            LabelValueStringOrNumber::String(get_kernel_release(&expected))
         );
 
         assert_eq!(machine.key, "machine");
         assert_eq!(
             machine.value,
-            LabelValue::String(expected.machine().to_string_lossy().to_string())
+            LabelValueStringOrNumber::String(expected.machine().to_string_lossy().to_string())
         );
     }
 }
