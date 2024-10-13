@@ -1,6 +1,5 @@
 #include "basic_types.h"
 
-#define MAX_UNWIND_INFO_SHARDS 65
 
 // Number of frames to walk per tail call iteration.
 #define MAX_STACK_DEPTH_PER_PROGRAM 7
@@ -68,6 +67,7 @@ typedef struct {
 #define RBP_TYPE_EXPRESSION 3
 // Special values.
 #define RBP_TYPE_UNDEFINED_RETURN_ADDRESS 4
+#define RBP_TYPE_OFFSET_DID_NOT_FIT 5
 
 // Binary search error codes.
 #define BINARY_SEARCH_DEFAULT 0xFABADAFABADAULL
@@ -101,6 +101,7 @@ struct unwinder_stats_t {
   u64 error_binary_search_exausted_iterations;
   u64 error_sending_new_process_event;
   u64 error_cfa_offset_did_not_fit;
+  u64 error_rbp_offset_did_not_fit;
   u64 bp_non_zero_for_bottom_frame;
   u64 vdso_encountered;
   u64 jit_encountered;

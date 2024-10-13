@@ -111,7 +111,7 @@ impl ObjectFileInfo {
     }
 
     /// For a virtual address return the offset within the object file. In order
-    /// to do this we must check all the `PT_LOAD` segments.
+    /// to do this we must check every `PT_LOAD` segment.
     pub fn normalized_address(
         &self,
         virtual_address: u64,
@@ -120,8 +120,8 @@ impl ObjectFileInfo {
         let offset = virtual_address - mapping.start_addr + mapping.offset;
 
         for segment in &self.elf_load_segments {
-            let addres_range = segment.p_vaddr..(segment.p_vaddr + segment.p_memsz);
-            if addres_range.contains(&offset) {
+            let address_range = segment.p_vaddr..(segment.p_vaddr + segment.p_memsz);
+            if address_range.contains(&offset) {
                 return Some(offset - segment.p_offset + segment.p_vaddr);
             }
         }
@@ -141,6 +141,7 @@ pub struct ExecutableMapping {
     pub offset: u64,
     pub load_address: u64,
     pub main_exec: bool,
+    /// Soft delete.
     pub unmapped: bool,
     // Add (inode, ctime) and whether the file is in the root namespace
 }
@@ -165,14 +166,20 @@ impl ExecutableMapping {
         &mut self,
         object_files: &mut HashMap<ExecutableId, ObjectFileInfo>,
     ) -> bool {
-        // Avoid decrementing the reference count logic more than once if called multiple times.
+        // The executable mapping can be removed at a later time, and function might be called multiple
+        // times. To avoid this, we keep track of whether this mapping has been soft deleted.
         if self.unmapped {
             return false;
         }
-
         self.unmapped = true;
 
         if let Some(object_file) = object_files.get_mut(&self.executable_id) {
+            // Object files are also soft deleted, so do not try to decrease the reference count
+            // if it's already zero.
+            if object_file.references == 0 {
+                return false;
+            }
+
             object_file.references -= 1;
 
             if object_file.references == 0 {
@@ -462,8 +469,6 @@ pub struct ProfilerConfig {
     pub mapsize_info: bool,
     pub mapsize_stacks: u32,
     pub mapsize_aggregated_stacks: u32,
-    pub mapsize_unwind_info_chunks: u32,
-    pub mapsize_unwind_tables: u32,
     pub mapsize_rate_limits: u32,
     pub exclude_self: bool,
     pub native_unwind_info_bucket_sizes: Vec<u32>,
@@ -484,8 +489,6 @@ impl Default for ProfilerConfig {
             mapsize_info: false,
             mapsize_stacks: 100000,
             mapsize_aggregated_stacks: 10000,
-            mapsize_unwind_info_chunks: 5000,
-            mapsize_unwind_tables: 65,
             mapsize_rate_limits: 5000,
             exclude_self: false,
             native_unwind_info_bucket_sizes: vec![1_000, 10_000, 50_000, 100_000, 1_500_000],
@@ -1925,5 +1928,54 @@ mod tests {
         let mut buf = String::new();
         // This would fail without the procfs hack.
         object_file_info_copy.file.read_to_string(&mut buf).unwrap();
+    }
+
+    #[test]
+    fn test_address_normalization() {
+        let mut object_file_info = ObjectFileInfo {
+            file: File::open("/").unwrap(),
+            path: "/".into(),
+            elf_load_segments: vec![],
+            is_dyn: false,
+            references: 0,
+            native_unwind_info_size: None,
+        };
+
+        let mapping = ExecutableMapping {
+            executable_id: 0x0,
+            build_id: None,
+            kind: MappingType::FileBacked,
+            start_addr: 0x100,
+            end_addr: 0x100 + 100,
+            offset: 0x0,
+            load_address: 0x0,
+            main_exec: false,
+            unmapped: false,
+        };
+
+        // no elf segments
+        assert!(object_file_info
+            .normalized_address(0x110, &mapping)
+            .is_none());
+
+        // matches an elf segment
+        object_file_info.elf_load_segments = vec![ElfLoad {
+            p_offset: 0x1,
+            p_vaddr: 0x0,
+            p_memsz: 0x20,
+        }];
+        assert_eq!(
+            object_file_info.normalized_address(0x110, &mapping),
+            Some(0xF)
+        );
+        // does not match any elf segments
+        object_file_info.elf_load_segments = vec![ElfLoad {
+            p_offset: 0x0,
+            p_vaddr: 0x0,
+            p_memsz: 0x5,
+        }];
+        assert!(object_file_info
+            .normalized_address(0x110, &mapping)
+            .is_none());
     }
 }

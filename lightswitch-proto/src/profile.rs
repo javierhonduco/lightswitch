@@ -316,8 +316,6 @@ mod tests {
     // - validate it: (in pprof's codebase) `go tool pprof profile.pb`
     // - print it: `go tool pprof -raw profile.pb`
     // - http server: `go tool pprof -http=:8080 profile.pb`
-    use prost::Message;
-
     use super::*;
 
     #[test]
@@ -357,10 +355,10 @@ mod tests {
         let _ = pprof.add_line("hahahaha-first-line");
         let (line, function_id) = pprof.add_line("test-line");
 
-        assert_eq!(pprof.add_location(0x123, 0x1111, vec![line.clone()]), 1);
-        assert_eq!(pprof.add_location(0x123, 0x1111, vec![line.clone()]), 1);
-        assert_eq!(pprof.add_location(0x256, 0x2222, vec![line.clone()]), 2);
-        assert_eq!(pprof.add_location(0x512, 0x3333, vec![line.clone()]), 3);
+        assert_eq!(pprof.add_location(0x123, 0x1111, vec![line]), 1);
+        assert_eq!(pprof.add_location(0x123, 0x1111, vec![line]), 1);
+        assert_eq!(pprof.add_location(0x256, 0x2222, vec![line]), 2);
+        assert_eq!(pprof.add_location(0x512, 0x3333, vec![line]), 3);
 
         assert_eq!(pprof.locations.len(), 3);
         assert_eq!(
@@ -410,8 +408,6 @@ mod tests {
     #[test]
     fn test_profile() {
         use rand::Rng;
-        use std::fs::File;
-        use std::io::Write;
 
         let mut rng = rand::thread_rng();
         let mut pprof = PprofBuilder::new(Duration::from_secs(5), 27);

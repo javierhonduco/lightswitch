@@ -8,5 +8,8 @@ prost = "0.13"
 anyhow = "1.0.89"
 rand = { version = "0.8.5", features = ["small_rng"] }
 
+[dev-dependencies]
+rand = "0.8.5"
+
 [build-dependencies]
 prost-build = "0.13.3"
