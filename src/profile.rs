@@ -1,4 +1,4 @@
-use lightswitch_metadata_provider::metadata_provider::ThreadSafeGlobalMetadataProvider;
+use lightswitch_metadata_provider::metadata_provider::{TaskKey, ThreadSafeGlobalMetadataProvider};
 use lightswitch_metadata_provider::taskinfo::TaskInfo;
 use lightswitch_proto::profile::pprof::Label;
 use lightswitch_proto::profile::PprofBuilder;
@@ -135,7 +135,10 @@ pub fn to_pprof(
         }
 
         let labels = task_pproflabels_map.entry(sample.tid).or_insert_with(|| {
-            let metadata = metadata_provider.lock().unwrap().get_metadata(sample.tid);
+            let metadata = metadata_provider.lock().unwrap().get_metadata(TaskKey {
+                tid: sample.tid,
+                pid: sample.pid,
+            });
             metadata
                 .into_iter()
                 .map(|label| pprof.new_label(&label.key, label.value))

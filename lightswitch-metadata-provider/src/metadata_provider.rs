@@ -1,6 +1,6 @@
 use crate::process_metadata::ProcessMetadata;
 use crate::system_metadata::SystemMetadata;
-use crate::taskinfo::{self, TaskInfo};
+use crate::taskinfo::TaskInfo;
 
 use anyhow::Result;
 use lightswitch_proto::label::{Label, LabelValueStringOrNumber};
@@ -29,6 +29,11 @@ pub struct GlobalMetadataProvider {
     system_metadata: SystemMetadata,
     process_metadata: ProcessMetadata,
     custom_metadata_providers: Vec<ThreadSafeMetadataProvider>,
+}
+
+pub struct TaskKey {
+    pub pid: i32,
+    pub tid: i32,
 }
 
 pub type ThreadSafeGlobalMetadataProvider = Arc<Mutex<GlobalMetadataProvider>>;
@@ -77,12 +82,12 @@ impl GlobalMetadataProvider {
         labels
     }
 
-    pub fn get_metadata(&mut self, task_id: i32) -> Vec<Label> {
-        let task_info = taskinfo::TaskInfo::for_task(task_id).unwrap_or(TaskInfo::errored());
+    pub fn get_metadata(&mut self, task_key: TaskKey) -> Vec<Label> {
+        let task_info = TaskInfo::for_task(task_key.tid).unwrap_or(TaskInfo::errored());
         let mut task_metadata = vec![
             Label {
                 key: String::from("pid"),
-                value: LabelValueStringOrNumber::Number(task_id.into(), "task-id".into()),
+                value: LabelValueStringOrNumber::Number(task_key.tid.into(), "task-id".into()),
             },
             Label {
                 key: String::from("thread-name"),
@@ -94,12 +99,22 @@ impl GlobalMetadataProvider {
             },
         ];
 
-        if task_info.pid.is_none() {
-            warn!("Failed to retrieve pid for provided task_id={}", task_id);
-            return task_metadata;
+        // If the thread owning the provided tid has exited by the time
+        // TaskInfo::for_task() is called, proceed with the provided pid.
+        // But first, some sanity checks.
+        if let Some(actual_pid) = task_info.pid {
+            if actual_pid != task_key.pid {
+                // TODO: Look into why these two pids could be different
+                warn!(
+                    "Expected pid={} for task_id={}, actual pid={}",
+                    task_key.pid, task_key.tid, actual_pid
+                );
+            }
+        } else {
+            warn!("Failed to get task_info for tid={}", task_key.tid);
         }
 
-        let pid = task_info.pid.unwrap();
+        let pid = task_key.pid;
         task_metadata.push(Label {
             key: String::from("pid"),
             value: LabelValueStringOrNumber::Number(pid.into(), "task-tgid".into()),
@@ -124,19 +139,19 @@ mod tests {
     #[test]
     fn test_get_metadata_returns_minimal_labels() {
         // Given
-        let my_tid = unistd::gettid().as_raw();
-        let task_tgid = unistd::getpgrp().as_raw();
+        let tid = unistd::gettid().as_raw();
+        let pid = unistd::getpgrp().as_raw();
         let mut metadata_provider = GlobalMetadataProvider::default();
-        let expected = TaskInfo::for_task(my_tid).unwrap();
+        let expected = TaskInfo::for_task(tid).unwrap();
 
         // When
-        let labels = metadata_provider.get_metadata(my_tid);
+        let labels = metadata_provider.get_metadata(TaskKey { tid, pid });
 
         // Then
         assert_eq!(labels[0].key, "pid");
         assert_eq!(
             labels[0].value,
-            LabelValueStringOrNumber::Number(my_tid.into(), "task-id".into())
+            LabelValueStringOrNumber::Number(tid.into(), "task-id".into())
         );
         assert_eq!(labels[1].key, "thread-name");
         assert_eq!(
@@ -151,7 +166,7 @@ mod tests {
         assert_eq!(labels[3].key, "pid");
         assert_eq!(
             labels[3].value,
-            LabelValueStringOrNumber::Number(task_tgid.into(), "task-tgid".into())
+            LabelValueStringOrNumber::Number(pid.into(), "task-tgid".into())
         );
     }
 }

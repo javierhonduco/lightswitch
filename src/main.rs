@@ -296,7 +296,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // TODO: Opatnebe - Do we need Box here?
     let metadata_provider: ThreadSafeGlobalMetadataProvider =
         Arc::new(Mutex::new(GlobalMetadataProvider::default()));
 

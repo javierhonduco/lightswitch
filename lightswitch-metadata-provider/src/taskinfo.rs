@@ -23,7 +23,7 @@ impl TaskInfo {
             task.comm
         };
         Ok(TaskInfo {
-            pid: Some(task.pgrp),
+            pid: Some(main_task.pid),
             main_thread: main_task.comm,
             current_thread: thread_name,
         })
