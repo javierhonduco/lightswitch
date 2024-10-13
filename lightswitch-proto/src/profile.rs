@@ -383,8 +383,8 @@ mod tests {
             pprof.new_label("key", LabelValueStringOrNumber::String("value".into())),
             pprof.new_label("key", LabelValueStringOrNumber::Number(123, "pid".into())),
         ];
-        pprof.add_sample(vec![1, 2, 3], 100, labels.clone());
-        pprof.add_sample(vec![1, 2, 3], 100, labels);
+        pprof.add_sample(vec![1, 2, 3], 100, &labels);
+        pprof.add_sample(vec![1, 2, 3], 100, &labels);
 
         assert_eq!(pprof.samples.len(), 2);
         assert_eq!(
@@ -437,7 +437,7 @@ mod tests {
                 location_ids.push(pprof.add_location(addr, mapping_id, vec![]));
             }
 
-            pprof.add_sample(location_ids, count, vec![]);
+            pprof.add_sample(location_ids, count, &[]);
         }
 
         assert!(pprof.validate().is_ok());
