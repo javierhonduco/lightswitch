@@ -2,7 +2,6 @@ use lightswitch_metadata_provider::metadata_provider::ThreadSafeGlobalMetadataPr
 use lightswitch_metadata_provider::taskinfo::TaskInfo;
 use lightswitch_proto::profile::pprof::Label;
 use lightswitch_proto::profile::PprofBuilder;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -135,21 +134,15 @@ pub fn to_pprof(
             }
         }
 
-        let labels = match task_pproflabels_map.entry(sample.tid) {
-            Entry::Occupied(e) => e.get().to_vec(),
-            Entry::Vacant(e) => {
-                let metadata = metadata_provider.lock().unwrap().get_metadata(sample.tid);
-                let labels: Vec<Label> = metadata
-                    .into_iter()
-                    .map(|label| pprof.new_label(&label.key, label.value))
-                    .collect();
-                e.insert(labels.clone());
-                labels
-            }
-        };
+        let labels = task_pproflabels_map.entry(sample.tid).or_insert_with(|| {
+            let metadata = metadata_provider.lock().unwrap().get_metadata(sample.tid);
+            metadata
+                .into_iter()
+                .map(|label| pprof.new_label(&label.key, label.value))
+                .collect()
+        });
         pprof.add_sample(location_ids, sample.count as i64, labels);
     }
-
     pprof
 }
 

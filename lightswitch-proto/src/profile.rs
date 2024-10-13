@@ -241,11 +241,11 @@ impl PprofBuilder {
             }
         }
     }
-    pub fn add_sample(&mut self, location_ids: Vec<u64>, count: i64, labels: Vec<pprof::Label>) {
+    pub fn add_sample(&mut self, location_ids: Vec<u64>, count: i64, labels: &[pprof::Label]) {
         let sample = pprof::Sample {
             location_id: location_ids, // from the source code: `The leaf is at location_id\[0\].`
             value: vec![count, count * 1_000_000_000 / self.freq_in_hz],
-            label: labels,
+            label: labels.to_vec(),
         };
 
         self.samples.push(sample);
