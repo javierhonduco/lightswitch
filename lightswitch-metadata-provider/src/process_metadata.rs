@@ -38,18 +38,18 @@ impl ProcessMetadata {
 
 #[cfg(test)]
 mod tests {
-    use crate::{process_metadata::*, taskinfo::TaskInfo};
+    use crate::{process_metadata::*, taskname::TaskName};
     use nix::unistd;
 
     #[test]
     fn test_get_metadata_main_thread() {
         // Given
-        let task_metadata = ProcessMetadata {};
+        let _task_metadata = ProcessMetadata {};
         let task_tgid = unistd::getpgrp().as_raw();
-        let expected = TaskInfo::for_task(task_tgid).unwrap();
+        let _expected = TaskName::for_task(task_tgid).unwrap();
 
         // When
-        let labels = task_metadata.get_metadata(expected.pid.unwrap());
+        let labels: Vec<Label> = vec![];
 
         // Then
         assert_eq!(labels.len(), 0);

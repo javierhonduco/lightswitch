@@ -1,20 +1,18 @@
 #[derive(Debug, PartialEq, Eq)]
-pub struct TaskInfo {
-    pub pid: Option<i32>,
+pub struct TaskName {
     pub main_thread: String,
     pub current_thread: String,
 }
 
-impl TaskInfo {
+impl TaskName {
     pub fn errored() -> Self {
-        TaskInfo {
-            pid: None,
+        TaskName {
             main_thread: "<could not fetch process name>".into(),
             current_thread: "<could not fetch thread name>".into(),
         }
     }
 
-    pub fn for_task(task_id: i32) -> Result<TaskInfo, anyhow::Error> {
+    pub fn for_task(task_id: i32) -> Result<TaskName, anyhow::Error> {
         let task = procfs::process::Process::new(task_id)?.stat()?;
         let main_task = procfs::process::Process::new(task.pgrp)?.stat()?;
         let thread_name = if task.pid == task.pgrp {
@@ -22,8 +20,7 @@ impl TaskInfo {
         } else {
             task.comm
         };
-        Ok(TaskInfo {
-            pid: Some(main_task.pid),
+        Ok(TaskName {
             main_thread: main_task.comm,
             current_thread: thread_name,
         })
@@ -38,14 +35,14 @@ mod tests {
 
     #[test]
     fn test_thread_name() {
-        let names = TaskInfo::for_task(unistd::getpgrp().as_raw()).unwrap();
+        let names = TaskName::for_task(unistd::getpgrp().as_raw()).unwrap();
         assert_eq!(names.current_thread, "<main thread>");
 
         let builder = thread::Builder::new().name("funky-thread-name".to_string());
 
         builder
             .spawn(|| {
-                let names = TaskInfo::for_task(unistd::gettid().as_raw()).unwrap();
+                let names = TaskName::for_task(unistd::gettid().as_raw()).unwrap();
                 assert_eq!(names.current_thread, "funky-thread-na");
             })
             .unwrap()
@@ -56,16 +53,15 @@ mod tests {
     #[test]
     fn test_errored() {
         // Given
-        let task_info = TaskInfo::errored();
+        let task_name = TaskName::errored();
 
         // When / Then
-        assert!(task_info.pid.is_none());
         assert_eq!(
-            task_info.current_thread,
+            task_name.current_thread,
             String::from("<could not fetch thread name>")
         );
         assert_eq!(
-            task_info.main_thread,
+            task_name.main_thread,
             String::from("<could not fetch process name>")
         );
     }

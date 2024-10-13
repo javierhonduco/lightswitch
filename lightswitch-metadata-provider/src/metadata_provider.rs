@@ -1,6 +1,6 @@
 use crate::process_metadata::ProcessMetadata;
 use crate::system_metadata::SystemMetadata;
-use crate::taskinfo::TaskInfo;
+use crate::taskname::TaskName;
 
 use anyhow::Result;
 use lightswitch_proto::label::{Label, LabelValueStringOrNumber};
@@ -83,7 +83,8 @@ impl GlobalMetadataProvider {
     }
 
     pub fn get_metadata(&mut self, task_key: TaskKey) -> Vec<Label> {
-        let task_info = TaskInfo::for_task(task_key.tid).unwrap_or(TaskInfo::errored());
+        let task_name = TaskName::for_task(task_key.tid).unwrap_or(TaskName::errored());
+        let pid = task_key.pid;
         let mut task_metadata = vec![
             Label {
                 key: String::from("pid"),
@@ -91,34 +92,17 @@ impl GlobalMetadataProvider {
             },
             Label {
                 key: String::from("thread-name"),
-                value: LabelValueStringOrNumber::String(task_info.current_thread),
+                value: LabelValueStringOrNumber::String(task_name.current_thread),
             },
             Label {
                 key: String::from("process-name"),
-                value: LabelValueStringOrNumber::String(task_info.main_thread),
+                value: LabelValueStringOrNumber::String(task_name.main_thread),
             },
-        ];
-
-        // If the thread owning the provided tid has exited by the time
-        // TaskInfo::for_task() is called, proceed with the provided pid.
-        // But first, some sanity checks.
-        if let Some(actual_pid) = task_info.pid {
-            if actual_pid != task_key.pid {
-                // TODO: Look into why these two pids could be different
-                warn!(
-                    "Expected pid={} for task_id={}, actual pid={}",
-                    task_key.pid, task_key.tid, actual_pid
-                );
+            Label {
+                key: String::from("pid"),
+                value: LabelValueStringOrNumber::Number(pid.into(), "task-tgid".into()),
             }
-        } else {
-            warn!("Failed to get task_info for tid={}", task_key.tid);
-        }
-
-        let pid = task_key.pid;
-        task_metadata.push(Label {
-            key: String::from("pid"),
-            value: LabelValueStringOrNumber::Number(pid.into(), "task-tgid".into()),
-        });
+        ];
 
         if let Some(cached_labels) = self.pid_label_cache.get(&pid) {
             task_metadata.extend(cached_labels.iter().cloned());
@@ -142,7 +126,7 @@ mod tests {
         let tid = unistd::gettid().as_raw();
         let pid = unistd::getpgrp().as_raw();
         let mut metadata_provider = GlobalMetadataProvider::default();
-        let expected = TaskInfo::for_task(tid).unwrap();
+        let expected = TaskName::for_task(tid).unwrap();
 
         // When
         let labels = metadata_provider.get_metadata(TaskKey { tid, pid });
