@@ -52,4 +52,21 @@ mod tests {
             .join()
             .unwrap();
     }
+
+    #[test]
+    fn test_errored() {
+        // Given
+        let task_info = TaskInfo::errored();
+
+        // When / Then
+        assert!(task_info.pid.is_none());
+        assert_eq!(
+            task_info.current_thread,
+            String::from("<could not fetch thread name>")
+        );
+        assert_eq!(
+            task_info.main_thread,
+            String::from("<could not fetch process name>")
+        );
+    }
 }

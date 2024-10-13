@@ -38,37 +38,20 @@ impl ProcessMetadata {
 
 #[cfg(test)]
 mod tests {
-    use crate::process_metadata::*;
+    use crate::{process_metadata::*, taskinfo::TaskInfo};
     use nix::unistd;
 
     #[test]
     fn test_get_metadata_main_thread() {
         // Given
-        // let task_metadata = ProcessMetadata {};
-        // let task_tgid = unistd::getpgrp().as_raw();
-        // let expected = TaskInfo::for_task(task_tgid).unwrap();
+        let task_metadata = ProcessMetadata {};
+        let task_tgid = unistd::getpgrp().as_raw();
+        let expected = TaskInfo::for_task(task_tgid).unwrap();
 
-        // // When
-        // let PidLabels(pid, labels) = task_metadata.get_metadata(task_tgid);
+        // When
+        let labels = task_metadata.get_metadata(expected.pid.unwrap());
 
-        // // Then
-        // assert_eq!(pid, task_tgid);
-        // assert_eq!(labels[0].key, "pid");
-        // assert_eq!(
-        //     labels[0].value,
-        //     LabelValue::Number(task_tgid.into(), "task-tgid".into())
-        // );
-
-        // assert_eq!(labels[1].key, "pid");
-        // assert_eq!(
-        //     labels[1].value,
-        //     LabelValue::Number(task_tgid.into(), "task-id".into())
-        // );
-
-        // assert_eq!(labels[2].key, "process-name");
-        // assert_eq!(labels[2].value, LabelValue::String(expected.main_thread));
-
-        // assert_eq!(labels[3].key, "thread-name");
-        // assert_eq!(labels[3].value, LabelValue::String(expected.current_thread));
+        // Then
+        assert_eq!(labels.len(), 0);
     }
 }

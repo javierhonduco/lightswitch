@@ -1,5 +1,5 @@
-use lightswitch_proto::label::{Label, LabelValueStringOrNumber};
 use anyhow::Result;
+use lightswitch_proto::label::{Label, LabelValueStringOrNumber};
 use nix::sys::utsname;
 use thiserror::Error;
 
@@ -65,7 +65,11 @@ mod tests {
         assert_eq!(kernel_release.key, "kernel_release");
         assert_eq!(
             kernel_release.value,
-            LabelValueStringOrNumber::String(get_kernel_release(&expected))
+            LabelValueStringOrNumber::String(format!(
+                "{}:{}",
+                expected.sysname().to_string_lossy(),
+                expected.release().to_string_lossy()
+            ))
         );
 
         assert_eq!(machine.key, "machine");

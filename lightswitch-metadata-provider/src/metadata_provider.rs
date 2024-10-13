@@ -12,8 +12,8 @@ use tracing::{error, warn};
 
 #[derive(Debug, Error)]
 pub enum MetadataProviderError {
-    #[error("Failed to retrieve metadata for task_id {0}")]
-    ErrorRetrievingMetadata(i32),
+    #[error("Failed to retrieve metadata for task_id={0}, error={1}")]
+    ErrorRetrievingMetadata(i32, String),
 }
 
 pub trait MetadataProvider {
@@ -85,17 +85,17 @@ impl GlobalMetadataProvider {
                 value: LabelValueStringOrNumber::Number(task_id.into(), "task-id".into()),
             },
             Label {
-                key: String::from("process-name"),
-                value: LabelValueStringOrNumber::String(task_info.main_thread),
-            },
-            Label {
                 key: String::from("thread-name"),
                 value: LabelValueStringOrNumber::String(task_info.current_thread),
+            },
+            Label {
+                key: String::from("process-name"),
+                value: LabelValueStringOrNumber::String(task_info.main_thread),
             },
         ];
 
         if task_info.pid.is_none() {
-            error!("Failed to retrieve pid for provided task_id={}", task_id);
+            warn!("Failed to retrieve pid for provided task_id={}", task_id);
             return task_metadata;
         }
 
@@ -110,7 +110,7 @@ impl GlobalMetadataProvider {
         } else {
             let labels = self.get_labels(pid);
             self.pid_label_cache.push(pid, labels.clone());
-            task_metadata.extend(labels.into_iter());
+            task_metadata.extend(labels);
         }
         task_metadata
     }
@@ -122,16 +122,36 @@ mod tests {
     use nix::unistd;
 
     #[test]
-    fn test_get_metadata() {
+    fn test_get_metadata_returns_minimal_labels() {
         // Given
-        let my_tid = unistd::getpgrp().as_raw();
+        let my_tid = unistd::gettid().as_raw();
+        let task_tgid = unistd::getpgrp().as_raw();
         let mut metadata_provider = GlobalMetadataProvider::default();
+        let expected = TaskInfo::for_task(my_tid).unwrap();
 
         // When
-        let result = metadata_provider.get_metadata(my_tid);
+        let labels = metadata_provider.get_metadata(my_tid);
 
         // Then
-        // TODO: Fixme
-        // assert!(result.)
+        assert_eq!(labels[0].key, "pid");
+        assert_eq!(
+            labels[0].value,
+            LabelValueStringOrNumber::Number(my_tid.into(), "task-id".into())
+        );
+        assert_eq!(labels[1].key, "thread-name");
+        assert_eq!(
+            labels[1].value,
+            LabelValueStringOrNumber::String(expected.current_thread)
+        );
+        assert_eq!(labels[2].key, "process-name");
+        assert_eq!(
+            labels[2].value,
+            LabelValueStringOrNumber::String(expected.main_thread)
+        );
+        assert_eq!(labels[3].key, "pid");
+        assert_eq!(
+            labels[3].value,
+            LabelValueStringOrNumber::Number(task_tgid.into(), "task-tgid".into())
+        );
     }
 }
