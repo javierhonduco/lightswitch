@@ -5,7 +5,7 @@
 use plain::Plain;
 use std::ops::Add;
 
-use crate::unwind_info::CompactUnwindRow;
+use crate::unwind_info::types::CompactUnwindRow;
 
 include!(concat!(env!("OUT_DIR"), "/profiler_bindings.rs"));
 

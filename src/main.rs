@@ -26,10 +26,10 @@ use lightswitch::object::ObjectFile;
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::{fold_profile, to_pprof};
 use lightswitch::profiler::{Profiler, ProfilerConfig};
-use lightswitch::unwind_info::in_memory_unwind_info;
-use lightswitch::unwind_info::remove_redundant;
-use lightswitch::unwind_info::remove_unnecesary_markers;
-use lightswitch::unwind_info::UnwindInfoBuilder;
+use lightswitch::unwind_info::convert::in_memory_unwind_info;
+use lightswitch::unwind_info::convert::UnwindInfoBuilder;
+use lightswitch::unwind_info::optimize::remove_redundant;
+use lightswitch::unwind_info::optimize::remove_unnecesary_markers;
 
 const SAMPLE_FREQ_RANGE: RangeInclusive<usize> = 1..=1009;
 const PPROF_INGEST_URL: &str = "http://localhost:4567/pprof/new";

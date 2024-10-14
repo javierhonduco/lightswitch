@@ -35,9 +35,10 @@ use crate::collector::*;
 use crate::object::ElfLoad;
 use crate::object::{BuildId, ExecutableId, ObjectFile};
 use crate::perf_events::setup_perf_event;
+use crate::unwind_info::convert::in_memory_unwind_info;
 use crate::unwind_info::log_unwind_info_sections;
-use crate::unwind_info::CompactUnwindRow;
-use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
+use crate::unwind_info::optimize::{remove_redundant, remove_unnecesary_markers};
+use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::{get_online_cpus, summarize_address_range};
 
 pub enum TracerEvent {
@@ -1140,7 +1141,7 @@ impl Profiler<'_> {
         executable_id: u64,
         bucket_id: u32,
     ) {
-        let pages = crate::unwind_info::to_pages(unwind_info);
+        let pages = crate::unwind_info::pages::to_pages(unwind_info);
         for page in pages {
             let page_key = page_key_t {
                 file_offset: page.address,
