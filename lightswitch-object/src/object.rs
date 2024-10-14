@@ -36,6 +36,32 @@ pub enum BuildId {
     Sha256(String),
 }
 
+impl BuildId {
+    pub fn gnu_from_bytes(bytes: &[u8]) -> Self {
+        BuildId::Gnu(
+            bytes
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<Vec<_>>()
+                .join(""),
+        )
+    }
+
+    pub fn go_from_bytes(bytes: &[u8]) -> Self {
+        BuildId::Go(
+            bytes
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<Vec<_>>()
+                .join(""),
+        )
+    }
+
+    pub fn sha256_from_digest(digest: &Digest) -> Self {
+        BuildId::Sha256(HEXLOWER.encode(digest.as_ref()))
+    }
+}
+
 /// Elf load segments used during address normalization to find the segment
 /// for what an code address falls into.
 #[derive(Debug, Clone)]
@@ -105,35 +131,23 @@ impl ObjectFile<'_> {
     /// are found it returns the hash of the text section.
     pub fn build_id(&self) -> anyhow::Result<BuildId> {
         let object = &self.object;
-        let build_id = object.build_id()?;
+        let gnu_build_id = object.build_id()?;
 
-        if let Some(bytes) = build_id {
-            return Ok(BuildId::Gnu(
-                bytes
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<Vec<_>>()
-                    .join(""),
-            ));
+        if let Some(data) = gnu_build_id {
+            return Ok(BuildId::gnu_from_bytes(data));
         }
 
         // Golang (the Go toolchain does not interpret these bytes as we do).
         for section in object.sections() {
             if section.name().unwrap() == ".note.go.buildid" {
-                return Ok(BuildId::Go(
-                    section
-                        .data()
-                        .unwrap()
-                        .iter()
-                        .map(|b| format!("{:02x}", b))
-                        .collect::<Vec<_>>()
-                        .join(""),
-                ));
+                if let Ok(data) = section.data() {
+                    return Ok(BuildId::go_from_bytes(data));
+                }
             }
         }
 
         // No build id (Rust, some compilers and Linux distributions).
-        Ok(BuildId::Sha256(HEXLOWER.encode(self.code_hash.as_ref())))
+        Ok(BuildId::sha256_from_digest(&self.code_hash))
     }
 
     pub fn is_dynamic(&self) -> bool {
