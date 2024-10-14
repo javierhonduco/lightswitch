@@ -101,7 +101,7 @@ impl GlobalMetadataProvider {
             Label {
                 key: String::from("pid"),
                 value: LabelValueStringOrNumber::Number(pid.into(), "task-tgid".into()),
-            }
+            },
         ];
 
         if let Some(cached_labels) = self.pid_label_cache.get(&pid) {
