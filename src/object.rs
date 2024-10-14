@@ -10,8 +10,9 @@ use data_encoding::HEXLOWER;
 use memmap2;
 use ring::digest::{Context, Digest, SHA256};
 
-use object::elf::{FileHeader32, FileHeader64, PT_LOAD};
+use object::elf::{FileHeader32, FileHeader64, ELF_NOTE_GNU, NT_GNU_BUILD_ID, PT_LOAD};
 use object::read::elf::FileHeader;
+use object::read::elf::NoteIterator;
 use object::read::elf::ProgramHeader;
 use object::Endianness;
 use object::FileKind;
@@ -64,6 +65,35 @@ impl Drop for ObjectFile<'_> {
             let _to_free = Box::from_raw(self.leaked_mmap_ptr as *mut memmap2::Mmap);
         }
     }
+}
+/*
+use std::fs::File;
+
+let mut file = File::open("/sys/kernel/notes")?;
+let mut data = Vec::new();
+file.read_to_end(&mut data).unwrap(); */
+
+/// sudo perf buildid-list --kernel
+pub fn read_notes_gnu_build_id(data: &[u8]) -> Result<&[u8], anyhow::Error> {
+    let notes: NoteIterator<'_, FileHeader32<Endianness>> =
+        NoteIterator::new(Endianness::Little, 4, data)?;
+
+    for note in notes {
+        let Ok(note) = note else {
+            continue;
+        };
+
+        let name = note.name();
+        let ntype = note.n_type(Endianness::Little);
+
+        if name != ELF_NOTE_GNU || ntype != NT_GNU_BUILD_ID {
+            continue;
+        }
+
+        return Ok(note.desc());
+    }
+
+    Err(anyhow!("no notes found"))
 }
 
 impl ObjectFile<'_> {
