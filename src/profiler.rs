@@ -33,9 +33,9 @@ use crate::bpf::tracers_bindings::*;
 use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
 use crate::perf_events::setup_perf_event;
+use crate::unwind_info::compact_unwind_info;
 use crate::unwind_info::log_unwind_info_sections;
-use crate::unwind_info::CompactUnwindRow;
-use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
+use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::{get_online_cpus, summarize_address_range};
 use lightswitch_object::ElfLoad;
 use lightswitch_object::{BuildId, ExecutableId, ObjectFile};
@@ -1140,7 +1140,7 @@ impl Profiler<'_> {
         executable_id: u64,
         bucket_id: u32,
     ) {
-        let pages = crate::unwind_info::to_pages(unwind_info);
+        let pages = crate::unwind_info::pages::to_pages(unwind_info);
         for page in pages {
             let page_key = page_key_t {
                 file_offset: page.address,
@@ -1445,40 +1445,32 @@ impl Profiler<'_> {
             )
             .entered();
 
-            let mut found_unwind_info: Vec<CompactUnwindRow>;
+            let found_unwind_info: Vec<CompactUnwindRow> =
+                match compact_unwind_info(&executable_path.to_string_lossy()) {
+                    Ok(unwind_info) => unwind_info,
+                    Err(e) => {
+                        let executable_path_str = executable.path.to_string_lossy();
+                        let known_naughty = executable_path_str.contains("libicudata");
 
-            match in_memory_unwind_info(&executable_path.to_string_lossy()) {
-                Ok(unwind_info) => {
-                    found_unwind_info = unwind_info;
-                }
-                Err(e) => {
-                    let executable_path_str = executable.path.to_string_lossy();
-                    let known_naughty = executable_path_str.contains("libicudata");
+                        // tracing doesn't support a level chosen at runtime: https://github.com/tokio-rs/tracing/issues/2730
+                        if known_naughty {
+                            debug!(
+                                "failed to get unwind information for {} with {}",
+                                executable_path_str, e
+                            );
+                        } else {
+                            info!(
+                                "failed to get unwind information for {} with {}",
+                                executable_path_str, e
+                            );
 
-                    // tracing doesn't support a level chosen at runtime: https://github.com/tokio-rs/tracing/issues/2730
-                    if known_naughty {
-                        debug!(
-                            "failed to get unwind information for {} with {}",
-                            executable_path_str, e
-                        );
-                    } else {
-                        info!(
-                            "failed to get unwind information for {} with {}",
-                            executable_path_str, e
-                        );
-
-                        if let Err(e) = log_unwind_info_sections(&executable_path) {
-                            warn!("log_unwind_info_sections failed with {}", e);
+                            if let Err(e) = log_unwind_info_sections(&executable_path) {
+                                warn!("log_unwind_info_sections failed with {}", e);
+                            }
                         }
+                        continue;
                     }
-                    continue;
-                }
-            }
-            span.exit();
-
-            let span: span::EnteredSpan = span!(Level::DEBUG, "optimize unwind info").entered();
-            remove_unnecesary_markers(&mut found_unwind_info);
-            remove_redundant(&mut found_unwind_info);
+                };
             span.exit();
 
             // Evicting object files can get complicated real quick... this can be implemented once

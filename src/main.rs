@@ -27,10 +27,8 @@ use lightswitch_metadata_provider::metadata_provider::ThreadSafeGlobalMetadataPr
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::{fold_profile, to_pprof};
 use lightswitch::profiler::{Profiler, ProfilerConfig};
-use lightswitch::unwind_info::in_memory_unwind_info;
-use lightswitch::unwind_info::remove_redundant;
-use lightswitch::unwind_info::remove_unnecesary_markers;
-use lightswitch::unwind_info::UnwindInfoBuilder;
+use lightswitch::unwind_info::compact_unwind_info;
+use lightswitch::unwind_info::CompactUnwindInfoBuilder;
 use lightswitch_object::ObjectFile;
 
 const SAMPLE_FREQ_RANGE: RangeInclusive<usize> = 1..=1009;
@@ -237,10 +235,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args = Cli::parse();
 
     if let Some(path) = args.show_unwind_info {
-        let mut unwind_info = in_memory_unwind_info(&path).unwrap();
-        remove_unnecesary_markers(&mut unwind_info);
-        remove_redundant(&mut unwind_info);
-
+        let unwind_info = compact_unwind_info(&path).unwrap();
         for compact_row in unwind_info {
             let pc = compact_row.pc;
             let cfa_type = compact_row.cfa_type;
@@ -272,8 +267,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Some(path) = args.show_info {
         let objet_file = ObjectFile::new(&PathBuf::from(path.clone())).unwrap();
         println!("build id {:?}", objet_file.build_id());
-        let unwind_info: Result<UnwindInfoBuilder<'_>, anyhow::Error> =
-            UnwindInfoBuilder::with_callback(&path, |_| {});
+        let unwind_info: Result<CompactUnwindInfoBuilder<'_>, anyhow::Error> =
+            CompactUnwindInfoBuilder::with_callback(&path, |_| {});
         println!("unwind info {:?}", unwind_info.unwrap().process());
 
         return Ok(());
