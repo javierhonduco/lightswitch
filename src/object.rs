@@ -1,3 +1,4 @@
+use core::str;
 use std::fmt;
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -40,14 +41,8 @@ impl BuildId {
         )
     }
 
-    pub fn go_from_bytes(bytes: &[u8]) -> Self {
-        BuildId::Go(
-            bytes
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<Vec<_>>()
-                .join(""),
-        )
+    pub fn go_from_bytes(bytes: &[u8]) -> Result<Self> {
+        Ok(BuildId::Go(str::from_utf8(bytes)?.to_string()))
     }
 
     pub fn sha256_from_digest(digest: &Digest) -> Self {
@@ -161,7 +156,7 @@ impl ObjectFile<'_> {
         for section in object.sections() {
             if section.name().unwrap() == ".note.go.buildid" {
                 if let Ok(data) = section.data() {
-                    return Ok(BuildId::go_from_bytes(data));
+                    return Ok(BuildId::go_from_bytes(data)?);
                 }
             }
         }

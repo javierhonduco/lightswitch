@@ -265,8 +265,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     if let Some(path) = args.show_info {
-        let objet_file = ObjectFile::new(&PathBuf::from(path.clone())).unwrap();
-        println!("build id {:?}", objet_file.build_id());
+        let object_file = ObjectFile::new(&PathBuf::from(path.clone())).unwrap();
+        println!("build id {}", object_file.build_id().unwrap());
         let unwind_info: Result<UnwindInfoBuilder<'_>, anyhow::Error> =
             UnwindInfoBuilder::with_callback(&path, |_| {});
         println!("unwind info {:?}", unwind_info.unwrap().process());
