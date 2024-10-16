@@ -5,8 +5,6 @@ pub mod pprof {
     include!(concat!(env!("OUT_DIR"), "/perftools.profiles.rs"));
 }
 
-use crate::label::LabelValueStringOrNumber;
-
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
@@ -31,6 +29,12 @@ pub struct PprofBuilder {
     pub functions: Vec<pprof::Function>,
 
     samples: Vec<pprof::Sample>,
+}
+
+pub enum LabelStringOrNumber {
+    String(String),
+    /// Value and unit.
+    Number(i64, String),
 }
 
 impl PprofBuilder {
@@ -251,17 +255,17 @@ impl PprofBuilder {
         self.samples.push(sample);
     }
 
-    pub fn new_label(&mut self, key: &str, value: LabelValueStringOrNumber) -> pprof::Label {
+    pub fn new_label(&mut self, key: &str, value: LabelStringOrNumber) -> pprof::Label {
         let mut label = pprof::Label {
             key: self.get_or_insert_string(key),
             ..Default::default()
         };
 
         match value {
-            LabelValueStringOrNumber::String(string) => {
+            LabelStringOrNumber::String(string) => {
                 label.str = self.get_or_insert_string(&string);
             }
-            LabelValueStringOrNumber::Number(num, unit) => {
+            LabelStringOrNumber::Number(num, unit) => {
                 label.num = num;
                 label.num_unit = self.get_or_insert_string(&unit);
             }
@@ -380,8 +384,8 @@ mod tests {
     fn test_sample() {
         let mut pprof = PprofBuilder::new(Duration::from_secs(5), 27);
         let labels = vec![
-            pprof.new_label("key", LabelValueStringOrNumber::String("value".into())),
-            pprof.new_label("key", LabelValueStringOrNumber::Number(123, "pid".into())),
+            pprof.new_label("key", LabelStringOrNumber::String("value".into())),
+            pprof.new_label("key", LabelStringOrNumber::Number(123, "pid".into())),
         ];
         pprof.add_sample(vec![1, 2, 3], 100, &labels);
         pprof.add_sample(vec![1, 2, 3], 100, &labels);

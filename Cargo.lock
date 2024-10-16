@@ -1299,7 +1299,6 @@ name = "lightswitch-metadata-provider"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "lightswitch-proto",
  "lru",
  "nix",
  "procfs",

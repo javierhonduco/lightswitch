@@ -1,4 +1,5 @@
-use lightswitch_proto::label::{Label, LabelValueStringOrNumber};
+use crate::metadata_label::{MetadataLabel, MetadataLabelValue};
+
 use std::result::Result::Ok;
 use thiserror::Error;
 use tracing::debug;
@@ -19,13 +20,13 @@ impl ProcessMetadata {
         ))
     }
 
-    pub fn get_metadata(&self, pid: i32) -> Vec<Label> {
+    pub fn get_metadata(&self, pid: i32) -> Vec<MetadataLabel> {
         let mut labels = Vec::new();
 
         match self.get_runtime(pid) {
-            Ok(Some(runtime)) => labels.push(Label {
+            Ok(Some(runtime)) => labels.push(MetadataLabel {
                 key: String::from("runtime"),
-                value: LabelValueStringOrNumber::String(runtime),
+                value: MetadataLabelValue::String(runtime),
             }),
             Ok(None) => {}
             Err(err) => {
@@ -49,7 +50,7 @@ mod tests {
         let _expected = TaskName::for_task(task_tgid).unwrap();
 
         // When
-        let labels: Vec<Label> = vec![];
+        let labels: Vec<MetadataLabel> = vec![];
 
         // Then
         assert_eq!(labels.len(), 0);

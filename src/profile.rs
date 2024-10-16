@@ -1,7 +1,10 @@
+use lightswitch_metadata_provider::metadata_label::MetadataLabelValue;
 use lightswitch_metadata_provider::metadata_provider::{TaskKey, ThreadSafeGlobalMetadataProvider};
 use lightswitch_metadata_provider::taskname::TaskName;
+
 use lightswitch_proto::profile::pprof::Label;
-use lightswitch_proto::profile::PprofBuilder;
+use lightswitch_proto::profile::{LabelStringOrNumber, PprofBuilder};
+
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -19,6 +22,14 @@ use crate::profiler::ObjectFileInfo;
 use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
 use crate::usym::symbolize_native_stack_blaze;
+
+/// Converts the metadata provider label type to a proto label type
+fn convert_label_value(metadata_label: MetadataLabelValue) -> LabelStringOrNumber {
+    match metadata_label {
+        MetadataLabelValue::Number(value, unit) => LabelStringOrNumber::Number(value, unit),
+        MetadataLabelValue::String(value) => LabelStringOrNumber::String(value),
+    }
+}
 
 /// Converts a given symbolized profile to Google's pprof.
 pub fn to_pprof(
@@ -141,7 +152,7 @@ pub fn to_pprof(
             });
             metadata
                 .into_iter()
-                .map(|label| pprof.new_label(&label.key, label.value))
+                .map(|label| pprof.new_label(&label.key, convert_label_value(label.value)))
                 .collect()
         });
         pprof.add_sample(location_ids, sample.count as i64, labels);

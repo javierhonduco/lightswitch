@@ -1,9 +1,9 @@
+use crate::metadata_label::{MetadataLabel, MetadataLabelValue};
 use crate::process_metadata::ProcessMetadata;
 use crate::system_metadata::SystemMetadata;
 use crate::taskname::TaskName;
 
 use anyhow::Result;
-use lightswitch_proto::label::{Label, LabelValueStringOrNumber};
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
@@ -20,12 +20,12 @@ pub trait MetadataProvider {
     /// Return a vector of labels for the provided task id.
     /// Labels returned by this function will be assumed to apply
     /// to all task_ids in the same process/tgid as the provided task_id.
-    fn get_metadata(&self, task_id: i32) -> Result<Vec<Label>, MetadataProviderError>;
+    fn get_metadata(&self, task_id: i32) -> Result<Vec<MetadataLabel>, MetadataProviderError>;
 }
 pub type ThreadSafeMetadataProvider = Arc<Mutex<Box<dyn MetadataProvider + Send>>>;
 
 pub struct GlobalMetadataProvider {
-    pid_label_cache: LruCache</*pid*/ i32, Vec<Label>>,
+    pid_label_cache: LruCache</*pid*/ i32, Vec<MetadataLabel>>,
     system_metadata: SystemMetadata,
     process_metadata: ProcessMetadata,
     custom_metadata_providers: Vec<ThreadSafeMetadataProvider>,
@@ -58,7 +58,7 @@ impl GlobalMetadataProvider {
         self.custom_metadata_providers.extend(providers);
     }
 
-    fn get_labels(&mut self, pid: i32) -> Vec<Label> {
+    fn get_labels(&mut self, pid: i32) -> Vec<MetadataLabel> {
         let mut labels = self.process_metadata.get_metadata(pid);
 
         let system_labels = self
@@ -82,25 +82,25 @@ impl GlobalMetadataProvider {
         labels
     }
 
-    pub fn get_metadata(&mut self, task_key: TaskKey) -> Vec<Label> {
+    pub fn get_metadata(&mut self, task_key: TaskKey) -> Vec<MetadataLabel> {
         let task_name = TaskName::for_task(task_key.tid).unwrap_or(TaskName::errored());
         let pid = task_key.pid;
         let mut task_metadata = vec![
-            Label {
+            MetadataLabel {
                 key: String::from("pid"),
-                value: LabelValueStringOrNumber::Number(task_key.tid.into(), "task-id".into()),
+                value: MetadataLabelValue::Number(task_key.tid.into(), "task-id".into()),
             },
-            Label {
+            MetadataLabel {
                 key: String::from("thread-name"),
-                value: LabelValueStringOrNumber::String(task_name.current_thread),
+                value: MetadataLabelValue::String(task_name.current_thread),
             },
-            Label {
+            MetadataLabel {
                 key: String::from("process-name"),
-                value: LabelValueStringOrNumber::String(task_name.main_thread),
+                value: MetadataLabelValue::String(task_name.main_thread),
             },
-            Label {
+            MetadataLabel {
                 key: String::from("pid"),
-                value: LabelValueStringOrNumber::Number(pid.into(), "task-tgid".into()),
+                value: MetadataLabelValue::Number(pid.into(), "task-tgid".into()),
             },
         ];
 
@@ -135,22 +135,22 @@ mod tests {
         assert_eq!(labels[0].key, "pid");
         assert_eq!(
             labels[0].value,
-            LabelValueStringOrNumber::Number(tid.into(), "task-id".into())
+            MetadataLabelValue::Number(tid.into(), "task-id".into())
         );
         assert_eq!(labels[1].key, "thread-name");
         assert_eq!(
             labels[1].value,
-            LabelValueStringOrNumber::String(expected.current_thread)
+            MetadataLabelValue::String(expected.current_thread)
         );
         assert_eq!(labels[2].key, "process-name");
         assert_eq!(
             labels[2].value,
-            LabelValueStringOrNumber::String(expected.main_thread)
+            MetadataLabelValue::String(expected.main_thread)
         );
         assert_eq!(labels[3].key, "pid");
         assert_eq!(
             labels[3].value,
-            LabelValueStringOrNumber::Number(pid.into(), "task-tgid".into())
+            MetadataLabelValue::Number(pid.into(), "task-tgid".into())
         );
     }
 }

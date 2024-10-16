@@ -1,5 +1,6 @@
+use crate::metadata_label::{MetadataLabel, MetadataLabelValue};
+
 use anyhow::Result;
-use lightswitch_proto::label::{Label, LabelValueStringOrNumber};
 use nix::sys::utsname;
 use thiserror::Error;
 
@@ -20,7 +21,7 @@ fn get_kernel_release(uname: &utsname::UtsName) -> String {
 }
 
 impl SystemMetadata {
-    pub fn get_metadata(&self) -> Result<Vec<Label>, SystemMetadataError> {
+    pub fn get_metadata(&self) -> Result<Vec<MetadataLabel>, SystemMetadataError> {
         let uname = match utsname::uname() {
             Ok(uname) => uname,
             Err(err) => {
@@ -29,13 +30,13 @@ impl SystemMetadata {
                 ));
             }
         };
-        let kernel_release_label = Label {
+        let kernel_release_label = MetadataLabel {
             key: String::from("kernel_release"),
-            value: LabelValueStringOrNumber::String(get_kernel_release(&uname)),
+            value: MetadataLabelValue::String(get_kernel_release(&uname)),
         };
-        let machine_label = Label {
+        let machine_label = MetadataLabel {
             key: String::from("machine"),
-            value: LabelValueStringOrNumber::String(uname.machine().to_string_lossy().to_string()),
+            value: MetadataLabelValue::String(uname.machine().to_string_lossy().to_string()),
         };
         Ok(vec![kernel_release_label, machine_label])
     }
@@ -65,7 +66,7 @@ mod tests {
         assert_eq!(kernel_release.key, "kernel_release");
         assert_eq!(
             kernel_release.value,
-            LabelValueStringOrNumber::String(format!(
+            MetadataLabelValue::String(format!(
                 "{}:{}",
                 expected.sysname().to_string_lossy(),
                 expected.release().to_string_lossy()
@@ -75,7 +76,7 @@ mod tests {
         assert_eq!(machine.key, "machine");
         assert_eq!(
             machine.value,
-            LabelValueStringOrNumber::String(expected.machine().to_string_lossy().to_string())
+            MetadataLabelValue::String(expected.machine().to_string_lossy().to_string())
         );
     }
 }
