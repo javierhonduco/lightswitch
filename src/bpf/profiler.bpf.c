@@ -374,16 +374,15 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       return 1;
     }
 
-    if (mapping->type == 1) {
+    if (mapping->type == MAPPING_TYPE_ANON) {
       LOG("JIT section, stopping");
       bump_unwind_jit_encountered();
       return 1;
     }
 
-    if (mapping->type == 2) {
-      LOG("vDSO section, stopping");
+    if (mapping->type == MAPPING_TYPE_VDSO) {
+      LOG("vDSO section");
       bump_unwind_vdso_encountered();
-      return 1;
     }
 
     u64 object_relative_pc = unwind_state->ip - mapping->load_address;
