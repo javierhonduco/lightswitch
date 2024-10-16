@@ -1,11 +1,11 @@
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub enum MetadataLabelValue {
     String(String),
     /// Value and unit.
     Number(i64, String),
 }
 
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[derive(Clone, Debug)]
 pub struct MetadataLabel {
     pub key: String,
     pub value: MetadataLabelValue,

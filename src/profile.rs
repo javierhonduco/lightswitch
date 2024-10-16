@@ -23,7 +23,7 @@ use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
 use crate::usym::symbolize_native_stack_blaze;
 
-/// Converts the metadata provider label type to a proto label type
+/// Converts a metadata provider label type to a proto label type
 fn convert_label_value(metadata_label: MetadataLabelValue) -> LabelStringOrNumber {
     match metadata_label {
         MetadataLabelValue::Number(value, unit) => LabelStringOrNumber::Number(value, unit),
