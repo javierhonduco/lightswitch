@@ -1,7 +1,6 @@
 pub mod bpf;
 pub mod collector;
 pub mod ksym;
-pub mod metadata;
 pub mod object;
 pub mod perf_events;
 pub mod profile;

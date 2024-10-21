@@ -245,11 +245,11 @@ impl PprofBuilder {
             }
         }
     }
-    pub fn add_sample(&mut self, location_ids: Vec<u64>, count: i64, labels: Vec<pprof::Label>) {
+    pub fn add_sample(&mut self, location_ids: Vec<u64>, count: i64, labels: &[pprof::Label]) {
         let sample = pprof::Sample {
             location_id: location_ids, // from the source code: `The leaf is at location_id\[0\].`
             value: vec![count, count * 1_000_000_000 / self.freq_in_hz],
-            label: labels,
+            label: labels.to_vec(),
         };
 
         self.samples.push(sample);
@@ -387,8 +387,8 @@ mod tests {
             pprof.new_label("key", LabelStringOrNumber::String("value".into())),
             pprof.new_label("key", LabelStringOrNumber::Number(123, "pid".into())),
         ];
-        pprof.add_sample(vec![1, 2, 3], 100, labels.clone());
-        pprof.add_sample(vec![1, 2, 3], 100, labels);
+        pprof.add_sample(vec![1, 2, 3], 100, &labels);
+        pprof.add_sample(vec![1, 2, 3], 100, &labels);
 
         assert_eq!(pprof.samples.len(), 2);
         assert_eq!(
@@ -441,7 +441,7 @@ mod tests {
                 location_ids.push(pprof.add_location(addr, mapping_id, vec![]));
             }
 
-            pprof.add_sample(location_ids, count, vec![]);
+            pprof.add_sample(location_ids, count, &[]);
         }
 
         assert!(pprof.validate().is_ok());
