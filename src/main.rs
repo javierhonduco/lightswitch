@@ -359,10 +359,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             let folded = fold_profile(profile);
             let mut options: flamegraph::Options<'_> = flamegraph::Options::default();
             let data = folded.as_bytes();
-            let f = File::create(args.profile_name.unwrap_or_else(|| "flame.svg".into())).unwrap();
+            let profile_path = args.profile_name.unwrap_or_else(|| "flame.svg".into());
+            let f = File::create(&profile_path).unwrap();
             match flamegraph::from_reader(&mut options, data, f) {
                 Ok(_) => {
-                    eprintln!("Flamegraph profile successfully written to disk");
+                    eprintln!("Flamegraph profile successfully written to {}", profile_path.to_string_lossy());
                 }
                 Err(e) => {
                     error!("Failed generate flamegraph: {:?}", e);
@@ -374,12 +375,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             let proto = to_pprof(profile, procs, objs, &metadata_provider);
             proto.validate().unwrap();
             proto.profile().encode(&mut buffer).unwrap();
+            let profile_path = args.profile_name.unwrap_or_else(|| "profile.pb".into());
             let mut pprof_file =
-                File::create(args.profile_name.unwrap_or_else(|| "profile.pb".into())).unwrap();
+                File::create(&profile_path).unwrap();
 
             match pprof_file.write_all(&buffer) {
                 Ok(_) => {
-                    eprintln!("Pprof profile successfully written to disk");
+                    eprintln!("Pprof profile successfully written to {}", profile_path.to_string_lossy());
                 }
                 Err(e) => {
                     error!("Failed generate pprof: {:?}", e);

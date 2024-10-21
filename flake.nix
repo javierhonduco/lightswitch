@@ -59,7 +59,7 @@
             container = pkgs.dockerTools.buildLayeredImage {
               name = "lightswitch";
               config = {
-                Cmd = [ "${lightswitch}/bin/lightswitch" ];
+                Entrypoint = [ "${lightswitch}/bin/lightswitch" ];
                 Env = [
                   "RUST_BACKTRACE=1"
                 ];
