@@ -21,7 +21,7 @@ Container images in the OCI format (Docker compatible) can be downloaded from th
 Using Docker:
 
 ```shell
-$ docker run --privileged --pid=host -v /sys:/sys ghcr.io/javierhonduco/lightswitch:main-$LIGTHSWITCH_SHA1
+$ docker run -it --privileged --pid=host -v /sys:/sys -v $PWD:/profiles ghcr.io/javierhonduco/lightswitch:main-$LIGHTSWITCH_SHA1 --profile-name=/profiles/flame.svg
 ```
 
 Development
