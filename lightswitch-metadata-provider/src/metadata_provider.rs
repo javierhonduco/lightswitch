@@ -106,6 +106,7 @@ impl GlobalMetadataProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metadata_label::MetadataLabelValue;
     use nix::unistd;
 
     #[test]
