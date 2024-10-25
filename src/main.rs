@@ -174,6 +174,9 @@ struct Cli {
     /// Output file for Flame Graph in SVG format
     #[arg(long, default_value_t, value_enum)]
     profile_format: ProfileFormat,
+    /// Path for the generated profile.
+    #[arg(long)]
+    profile_path: Option<PathBuf>,
     /// Name for the generated profile.
     #[arg(long)]
     profile_name: Option<PathBuf>,
@@ -354,15 +357,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         profile = symbolize_profile(&profile, procs, objs);
     }
 
+    let profile_path = args.profile_path.unwrap_or(PathBuf::from(""));
+
     match args.profile_format {
         ProfileFormat::FlameGraph => {
             let folded = fold_profile(profile);
             let mut options: flamegraph::Options<'_> = flamegraph::Options::default();
             let data = folded.as_bytes();
-            let profile_path = args.profile_name.unwrap_or_else(|| "flame.svg".into());
+            let profile_name = args.profile_name.unwrap_or_else(|| "flame.svg".into());
+            let profile_path = profile_path.join(profile_name);
             let f = File::create(&profile_path).unwrap();
             match flamegraph::from_reader(&mut options, data, f) {
                 Ok(_) => {
+                    eprintln!(
+                        "Flamegraph profile successfully written to {}",
+                        profile_path.to_string_lossy()
+                    );
                     eprintln!(
                         "Flamegraph profile successfully written to {}",
                         profile_path.to_string_lossy()
@@ -378,11 +388,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             let proto = to_pprof(profile, procs, objs, &metadata_provider);
             proto.validate().unwrap();
             proto.profile().encode(&mut buffer).unwrap();
-            let profile_path = args.profile_name.unwrap_or_else(|| "profile.pb".into());
+            let profile_name = args.profile_name.unwrap_or_else(|| "profile.pb".into());
+            let profile_path = profile_path.join(profile_name);
             let mut pprof_file = File::create(&profile_path).unwrap();
 
             match pprof_file.write_all(&buffer) {
                 Ok(_) => {
+                    eprintln!(
+                        "Pprof profile successfully written to {}",
+                        profile_path.to_string_lossy()
+                    );
                     eprintln!(
                         "Pprof profile successfully written to {}",
                         profile_path.to_string_lossy()
@@ -424,7 +439,7 @@ mod tests {
         cmd.assert().success();
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
         insta::assert_yaml_snapshot!(actual, @r#"
-        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-logs\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n          \n          [default: local-disk]\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-stacks <MAPSIZE_STACKS>\n          max number of individual stacks to capture before aggregation\n          \n          [default: 100000]\n\n      --mapsize-aggregated-stacks <MAPSIZE_AGGREGATED_STACKS>\n          Derived from constant MAX_AGGREGATED_STACKS_ENTRIES - max number of unique stacks after aggregation\n          \n          [default: 10000]\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          max number of chunks allowed inside a shard\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n      --symbolizer <SYMBOLIZER>\n          [default: local]\n          [possible values: local, none]\n\n  -h, --help\n          Print help (see a summary with '-h')\n"
+        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-logs\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --profile-path <PROFILE_PATH>\n          Path for the generated profile\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n          \n          [default: local-disk]\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-stacks <MAPSIZE_STACKS>\n          max number of individual stacks to capture before aggregation\n          \n          [default: 100000]\n\n      --mapsize-aggregated-stacks <MAPSIZE_AGGREGATED_STACKS>\n          Derived from constant MAX_AGGREGATED_STACKS_ENTRIES - max number of unique stacks after aggregation\n          \n          [default: 10000]\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          max number of chunks allowed inside a shard\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n      --symbolizer <SYMBOLIZER>\n          [default: local]\n          [possible values: local, none]\n\n  -h, --help\n          Print help (see a summary with '-h')\n"
         "#);
     }
 
