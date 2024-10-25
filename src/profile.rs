@@ -1,5 +1,10 @@
-use lightswitch_proto::profile::LabelStringOrNumber;
-use lightswitch_proto::profile::PprofBuilder;
+use lightswitch_metadata_provider::metadata_label::MetadataLabelValue;
+use lightswitch_metadata_provider::metadata_provider::{TaskKey, ThreadSafeGlobalMetadataProvider};
+use lightswitch_metadata_provider::taskname::TaskName;
+
+use lightswitch_proto::profile::pprof::Label;
+use lightswitch_proto::profile::{LabelStringOrNumber, PprofBuilder};
+
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -8,7 +13,6 @@ use tracing::{debug, error, span, Level};
 
 use crate::ksym::Ksym;
 use crate::ksym::KsymIter;
-use crate::metadata::TaskName;
 use crate::object::ExecutableId;
 use crate::profiler::AggregatedProfile;
 use crate::profiler::AggregatedSample;
@@ -19,14 +23,30 @@ use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
 use crate::usym::symbolize_native_stack_blaze;
 
+struct ProfileLabel {
+    value: MetadataLabelValue,
+}
+
+impl From<ProfileLabel> for LabelStringOrNumber {
+    fn from(label: ProfileLabel) -> Self {
+        match label.value {
+            MetadataLabelValue::Number(value, unit) => LabelStringOrNumber::Number(value, unit),
+            MetadataLabelValue::String(value) => LabelStringOrNumber::String(value),
+        }
+    }
+}
+
 /// Converts a given symbolized profile to Google's pprof.
 pub fn to_pprof(
     profile: AggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
+    metadata_provider: &ThreadSafeGlobalMetadataProvider,
 ) -> PprofBuilder {
     // TODO: pass right duration and frequency.
     let mut pprof = PprofBuilder::new(Duration::from_secs(5), 27);
+
+    let mut task_to_labels: HashMap<i32, Vec<Label>> = HashMap::new();
 
     for sample in profile {
         let ustack = sample.ustack;
@@ -130,30 +150,20 @@ pub fn to_pprof(
             }
         }
 
-        let task_and_process_names = TaskName::for_task(sample.tid).unwrap_or(TaskName::errored());
-
-        let labels = vec![
-            pprof.new_label(
-                "pid",
-                LabelStringOrNumber::Number(sample.pid.into(), "task-tgid".into()),
-            ),
-            pprof.new_label(
-                "tid",
-                LabelStringOrNumber::Number(sample.tid.into(), "task-id".into()),
-            ),
-            pprof.new_label(
-                "process-name",
-                LabelStringOrNumber::String(task_and_process_names.main_thread),
-            ),
-            pprof.new_label(
-                "thread-name",
-                LabelStringOrNumber::String(task_and_process_names.current_thread),
-            ),
-        ];
-
+        let labels = task_to_labels.entry(sample.tid).or_insert_with(|| {
+            let metadata = metadata_provider.lock().unwrap().get_metadata(TaskKey {
+                tid: sample.tid,
+                pid: sample.pid,
+            });
+            metadata
+                .into_iter()
+                .map(|label| {
+                    pprof.new_label(&label.key, ProfileLabel { value: label.value }.into())
+                })
+                .collect()
+        });
         pprof.add_sample(location_ids, sample.count as i64, labels);
     }
-
     pprof
 }
 

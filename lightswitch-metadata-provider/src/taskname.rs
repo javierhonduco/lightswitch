@@ -49,4 +49,20 @@ mod tests {
             .join()
             .unwrap();
     }
+
+    #[test]
+    fn test_errored() {
+        // Given
+        let task_name = TaskName::errored();
+
+        // When / Then
+        assert_eq!(
+            task_name.current_thread,
+            String::from("<could not fetch thread name>")
+        );
+        assert_eq!(
+            task_name.main_thread,
+            String::from("<could not fetch process name>")
+        );
+    }
 }

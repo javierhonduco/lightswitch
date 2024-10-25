@@ -13,6 +13,8 @@ use crate::profiler::ObjectFileInfo;
 use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
 
+use lightswitch_metadata_provider::metadata_provider::ThreadSafeGlobalMetadataProvider;
+
 pub trait Collector {
     fn collect(
         &mut self,
@@ -71,14 +73,20 @@ pub struct StreamingCollector {
     timeout: Duration,
     procs: HashMap<i32, ProcessInfo>,
     objs: HashMap<ExecutableId, ObjectFileInfo>,
+    metadata_provider: ThreadSafeGlobalMetadataProvider,
 }
 
 impl StreamingCollector {
-    pub fn new(local_symbolizer: bool, pprof_ingest_url: &str) -> Self {
+    pub fn new(
+        local_symbolizer: bool,
+        pprof_ingest_url: &str,
+        metadata_provider: ThreadSafeGlobalMetadataProvider,
+    ) -> Self {
         Self {
             local_symbolizer,
             pprof_ingest_url: pprof_ingest_url.into(),
             timeout: Duration::from_secs(30),
+            metadata_provider,
             ..Default::default()
         }
     }
@@ -99,7 +107,7 @@ impl Collector for StreamingCollector {
             profile = symbolize_profile(&profile, procs, objs);
         }
 
-        let pprof_builder = to_pprof(profile, procs, objs);
+        let pprof_builder = to_pprof(profile, procs, objs, &self.metadata_provider);
         let pprof = pprof_builder.profile();
 
         let client_builder = reqwest::blocking::Client::builder().timeout(self.timeout);

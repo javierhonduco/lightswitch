@@ -13,6 +13,7 @@ use clap::Parser;
 use crossbeam_channel::bounded;
 use inferno::flamegraph;
 use lightswitch::collector::{AggregatorCollector, Collector, NullCollector, StreamingCollector};
+use lightswitch_metadata_provider::metadata_provider::GlobalMetadataProvider;
 use nix::unistd::Uid;
 use primal::is_prime;
 use prost::Message;
@@ -21,6 +22,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
 use lightswitch_capabilities::system_info::SystemInfo;
+use lightswitch_metadata_provider::metadata_provider::ThreadSafeGlobalMetadataProvider;
 
 use lightswitch::object::ObjectFile;
 use lightswitch::profile::symbolize_profile;
@@ -297,6 +299,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    let metadata_provider: ThreadSafeGlobalMetadataProvider =
+        Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+
     let collector = Arc::new(Mutex::new(match args.sender {
         ProfileSender::None => Box::new(NullCollector::new()) as Box<dyn Collector + Send>,
         ProfileSender::LocalDisk => {
@@ -305,6 +310,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ProfileSender::Remote => Box::new(StreamingCollector::new(
             args.symbolizer == Symbolizer::Local,
             PPROF_INGEST_URL,
+            metadata_provider.clone(),
         )) as Box<dyn Collector + Send>,
     }));
 
@@ -367,6 +373,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                         "Flamegraph profile successfully written to {}",
                         profile_path.to_string_lossy()
                     );
+                    eprintln!(
+                        "Flamegraph profile successfully written to {}",
+                        profile_path.to_string_lossy()
+                    );
                 }
                 Err(e) => {
                     error!("Failed generate flamegraph: {:?}", e);
@@ -375,7 +385,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         ProfileFormat::Pprof => {
             let mut buffer = Vec::new();
-            let proto = to_pprof(profile, procs, objs);
+            let proto = to_pprof(profile, procs, objs, &metadata_provider);
             proto.validate().unwrap();
             proto.profile().encode(&mut buffer).unwrap();
             let profile_name = args.profile_name.unwrap_or_else(|| "profile.pb".into());
