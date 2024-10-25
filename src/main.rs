@@ -398,10 +398,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                         "Pprof profile successfully written to {}",
                         profile_path.to_string_lossy()
                     );
-                    eprintln!(
-                        "Pprof profile successfully written to {}",
-                        profile_path.to_string_lossy()
-                    );
                 }
                 Err(e) => {
                     error!("Failed generate pprof: {:?}", e);
