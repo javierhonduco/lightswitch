@@ -1,5 +1,4 @@
 use crate::metadata_label::MetadataLabel;
-use crate::process_metadata::ProcessMetadata;
 use crate::system_metadata::SystemMetadata;
 use crate::taskname::TaskName;
 
@@ -27,7 +26,6 @@ pub type ThreadSafeMetadataProvider = Arc<Mutex<Box<dyn MetadataProvider + Send>
 pub struct GlobalMetadataProvider {
     pid_label_cache: LruCache</*pid*/ i32, Vec<MetadataLabel>>,
     system_metadata: SystemMetadata,
-    process_metadata: ProcessMetadata,
     custom_metadata_providers: Vec<ThreadSafeMetadataProvider>,
 }
 
@@ -49,7 +47,6 @@ impl GlobalMetadataProvider {
         Self {
             pid_label_cache: LruCache::new(metadata_cache_size),
             system_metadata: SystemMetadata {},
-            process_metadata: ProcessMetadata {},
             custom_metadata_providers: Vec::new(),
         }
     }
@@ -59,15 +56,11 @@ impl GlobalMetadataProvider {
     }
 
     fn get_labels(&mut self, pid: i32) -> Vec<MetadataLabel> {
-        let mut labels = self.process_metadata.get_metadata(pid);
-
-        let system_labels = self
+        let mut labels = self
             .system_metadata
             .get_metadata()
             .map_err(|err| warn!("{}", err))
             .unwrap_or_default();
-
-        labels.extend(system_labels);
 
         for provider in &self.custom_metadata_providers {
             match provider.lock().unwrap().get_metadata(pid) {
