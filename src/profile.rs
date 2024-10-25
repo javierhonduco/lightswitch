@@ -41,7 +41,7 @@ pub fn to_pprof(
     // TODO: pass right duration and frequency.
     let mut pprof = PprofBuilder::new(Duration::from_secs(5), 27);
 
-    let mut task_pproflabels_map: HashMap<i32, Vec<Label>> = HashMap::new();
+    let mut task_to_labels: HashMap<i32, Vec<Label>> = HashMap::new();
 
     for sample in profile {
         let ustack = sample.ustack;
@@ -145,7 +145,7 @@ pub fn to_pprof(
             }
         }
 
-        let labels = task_pproflabels_map.entry(sample.tid).or_insert_with(|| {
+        let labels = task_to_labels.entry(sample.tid).or_insert_with(|| {
             let metadata = metadata_provider.lock().unwrap().get_metadata(TaskKey {
                 tid: sample.tid,
                 pid: sample.pid,

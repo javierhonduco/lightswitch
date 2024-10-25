@@ -1,4 +1,4 @@
-use crate::metadata_label::{MetadataLabel, MetadataLabelValue};
+use crate::metadata_label::MetadataLabel;
 use crate::process_metadata::ProcessMetadata;
 use crate::system_metadata::SystemMetadata;
 use crate::taskname::TaskName;
@@ -86,22 +86,10 @@ impl GlobalMetadataProvider {
         let task_name = TaskName::for_task(task_key.tid).unwrap_or(TaskName::errored());
         let pid = task_key.pid;
         let mut task_metadata = vec![
-            MetadataLabel {
-                key: String::from("pid"),
-                value: MetadataLabelValue::Number(task_key.tid.into(), "task-id".into()),
-            },
-            MetadataLabel {
-                key: String::from("thread-name"),
-                value: MetadataLabelValue::String(task_name.current_thread),
-            },
-            MetadataLabel {
-                key: String::from("process-name"),
-                value: MetadataLabelValue::String(task_name.main_thread),
-            },
-            MetadataLabel {
-                key: String::from("pid"),
-                value: MetadataLabelValue::Number(pid.into(), "task-tgid".into()),
-            },
+            MetadataLabel::from_number_value("pid".into(), task_key.tid.into(), "task-id".into()),
+            MetadataLabel::from_string_value("thread-name".into(), task_name.current_thread),
+            MetadataLabel::from_string_value("process-name".into(), task_name.main_thread),
+            MetadataLabel::from_number_value("pid".into(), pid.into(), "task-tgid".into()),
         ];
 
         if let Some(cached_labels) = self.pid_label_cache.get(&pid) {

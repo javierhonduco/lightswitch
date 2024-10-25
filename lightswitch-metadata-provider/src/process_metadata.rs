@@ -1,8 +1,6 @@
-use crate::metadata_label::{MetadataLabel, MetadataLabelValue};
+use crate::metadata_label::MetadataLabel;
 
-use std::result::Result::Ok;
 use thiserror::Error;
-use tracing::debug;
 
 pub struct ProcessMetadata {}
 
@@ -13,27 +11,8 @@ pub enum ProcessMetadataError {
 }
 
 impl ProcessMetadata {
-    fn get_runtime(&self, pid: i32) -> Result<Option<String>, ProcessMetadataError> {
-        Err(ProcessMetadataError::ErrorDetectingRuntime(
-            pid,
-            String::from("// TODO: Implement this"),
-        ))
-    }
-
-    pub fn get_metadata(&self, pid: i32) -> Vec<MetadataLabel> {
-        let mut labels = Vec::new();
-
-        match self.get_runtime(pid) {
-            Ok(Some(runtime)) => labels.push(MetadataLabel {
-                key: String::from("runtime"),
-                value: MetadataLabelValue::String(runtime),
-            }),
-            Ok(None) => {}
-            Err(err) => {
-                debug!("{}", err);
-            }
-        }
-        labels
+    pub fn get_metadata(&self, _pid: i32) -> Vec<MetadataLabel> {
+        Vec::new()
     }
 }
 

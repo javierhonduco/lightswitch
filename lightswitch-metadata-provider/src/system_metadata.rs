@@ -1,4 +1,4 @@
-use crate::metadata_label::{MetadataLabel, MetadataLabelValue};
+use crate::metadata_label::MetadataLabel;
 
 use anyhow::Result;
 use nix::sys::utsname;
@@ -22,28 +22,21 @@ fn get_kernel_release(uname: &utsname::UtsName) -> String {
 
 impl SystemMetadata {
     pub fn get_metadata(&self) -> Result<Vec<MetadataLabel>, SystemMetadataError> {
-        let uname = match utsname::uname() {
-            Ok(uname) => uname,
-            Err(err) => {
-                return Err(SystemMetadataError::ErrorRetrievingSystemInfo(
-                    err.desc().to_string(),
-                ));
-            }
-        };
-        let kernel_release_label = MetadataLabel {
-            key: String::from("kernel_release"),
-            value: MetadataLabelValue::String(get_kernel_release(&uname)),
-        };
-        let machine_label = MetadataLabel {
-            key: String::from("machine"),
-            value: MetadataLabelValue::String(uname.machine().to_string_lossy().to_string()),
-        };
+        let uname = utsname::uname()
+            .map_err(|e| SystemMetadataError::ErrorRetrievingSystemInfo(e.desc().to_string()))?;
+        let kernel_release_label =
+            MetadataLabel::from_string_value("kernel_release".into(), get_kernel_release(&uname));
+        let machine_label = MetadataLabel::from_string_value(
+            "machine".into(),
+            uname.machine().to_string_lossy().to_string(),
+        );
         Ok(vec![kernel_release_label, machine_label])
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::metadata_label::MetadataLabelValue;
     use crate::system_metadata::*;
 
     #[test]

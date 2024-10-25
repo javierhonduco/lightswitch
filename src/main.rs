@@ -363,7 +363,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             let f = File::create(&profile_path).unwrap();
             match flamegraph::from_reader(&mut options, data, f) {
                 Ok(_) => {
-                    eprintln!("Flamegraph profile successfully written to {}", profile_path.to_string_lossy());
+                    eprintln!(
+                        "Flamegraph profile successfully written to {}",
+                        profile_path.to_string_lossy()
+                    );
                 }
                 Err(e) => {
                     error!("Failed generate flamegraph: {:?}", e);
@@ -376,12 +379,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             proto.validate().unwrap();
             proto.profile().encode(&mut buffer).unwrap();
             let profile_path = args.profile_name.unwrap_or_else(|| "profile.pb".into());
-            let mut pprof_file =
-                File::create(&profile_path).unwrap();
+            let mut pprof_file = File::create(&profile_path).unwrap();
 
             match pprof_file.write_all(&buffer) {
                 Ok(_) => {
-                    eprintln!("Pprof profile successfully written to {}", profile_path.to_string_lossy());
+                    eprintln!(
+                        "Pprof profile successfully written to {}",
+                        profile_path.to_string_lossy()
+                    );
                 }
                 Err(e) => {
                     error!("Failed generate pprof: {:?}", e);

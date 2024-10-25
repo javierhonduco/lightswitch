@@ -10,5 +10,3 @@ nix = { version = "0.29.0", features = ["user", "process"] }
 procfs = "0.16.0"
 tracing = "0.1.40"
 thiserror = "1.0.63"
-
-[build-dependencies]
