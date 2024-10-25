@@ -23,11 +23,16 @@ use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
 use crate::usym::symbolize_native_stack_blaze;
 
-/// Converts a metadata provider label type to a proto label type
-fn convert_label_value(metadata_label: MetadataLabelValue) -> LabelStringOrNumber {
-    match metadata_label {
-        MetadataLabelValue::Number(value, unit) => LabelStringOrNumber::Number(value, unit),
-        MetadataLabelValue::String(value) => LabelStringOrNumber::String(value),
+struct ProfileLabel {
+    value: MetadataLabelValue,
+}
+
+impl From<ProfileLabel> for LabelStringOrNumber {
+    fn from(label: ProfileLabel) -> Self {
+        match label.value {
+            MetadataLabelValue::Number(value, unit) => LabelStringOrNumber::Number(value, unit),
+            MetadataLabelValue::String(value) => LabelStringOrNumber::String(value),
+        }
     }
 }
 
@@ -152,7 +157,9 @@ pub fn to_pprof(
             });
             metadata
                 .into_iter()
-                .map(|label| pprof.new_label(&label.key, convert_label_value(label.value)))
+                .map(|label| {
+                    pprof.new_label(&label.key, ProfileLabel { value: label.value }.into())
+                })
                 .collect()
         });
         pprof.add_sample(location_ids, sample.count as i64, labels);
