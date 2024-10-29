@@ -1237,7 +1237,6 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "ctrlc",
- "data-encoding",
  "errno",
  "gimli",
  "glob",
@@ -1250,6 +1249,7 @@ dependencies = [
  "libbpf-sys",
  "lightswitch-capabilities",
  "lightswitch-metadata-provider",
+ "lightswitch-object",
  "lightswitch-proto",
  "memmap2 0.9.5",
  "nix",
@@ -1262,7 +1262,6 @@ dependencies = [
  "prost",
  "rand 0.8.5",
  "reqwest",
- "ring",
  "rstest",
  "tempdir",
  "tempfile",
@@ -1297,6 +1296,17 @@ dependencies = [
  "procfs",
  "thiserror",
  "tracing",
+]
+
+[[package]]
+name = "lightswitch-object"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "data-encoding",
+ "memmap2 0.9.5",
+ "object",
+ "ring",
 ]
 
 [[package]]

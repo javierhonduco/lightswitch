@@ -32,13 +32,13 @@ use crate::bpf::profiler_skel::{ProfilerSkel, ProfilerSkelBuilder};
 use crate::bpf::tracers_bindings::*;
 use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
-use crate::object::ElfLoad;
-use crate::object::{BuildId, ExecutableId, ObjectFile};
 use crate::perf_events::setup_perf_event;
 use crate::unwind_info::log_unwind_info_sections;
 use crate::unwind_info::CompactUnwindRow;
 use crate::unwind_info::{in_memory_unwind_info, remove_redundant, remove_unnecesary_markers};
 use crate::util::{get_online_cpus, summarize_address_range};
+use lightswitch_object::ElfLoad;
+use lightswitch_object::{BuildId, ExecutableId, ObjectFile};
 
 pub enum TracerEvent {
     ProcessExit(i32),

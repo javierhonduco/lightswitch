@@ -7,7 +7,8 @@ edition = "2021"
 members = [
     "lightswitch-proto",
     "lightswitch-capabilities",
-    "lightswitch-metadata-provider"
+    "lightswitch-metadata-provider",
+    "lightswitch-object"
 ]
 
 [dependencies]
@@ -23,8 +24,6 @@ perf-event-open-sys = "4.0.0"
 errno = "0.3.9"
 plain = "0.2.3"
 procfs = "0.16.0"
-ring = "0.17.8"
-data-encoding = "2.6.0"
 page_size = "0.6.0"
 clap = { version = "4.5.18", features = ["derive", "string"] }
 blazesym = "0.2.0-rc.1"
@@ -38,6 +37,7 @@ reqwest = { version = "0.12", features = ["blocking"] }
 lightswitch-metadata-provider = {path = "./lightswitch-metadata-provider"}
 lightswitch-proto = { path = "./lightswitch-proto"}
 lightswitch-capabilities = {path = "./lightswitch-capabilities"}
+lightswitch-object = {path = "./lightswitch-object"}
 ctrlc = "3.4.5"
 crossbeam-channel = "0.5.13"
 libbpf-sys = "1.4.3"

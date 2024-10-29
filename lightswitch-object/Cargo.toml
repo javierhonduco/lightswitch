@@ -1,0 +1,11 @@
+[package]
+name = "lightswitch-object"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+memmap2 = "0.9.5"
+object = "0.36.4"
+ring = "0.17.8"
+anyhow = "*"
+data-encoding = "*"
