@@ -1,15 +1,12 @@
-use std::fmt;
-use std::fmt::Display;
-use std::fmt::Formatter;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
-use data_encoding::HEXLOWER;
 use memmap2::Mmap;
 use ring::digest::{Context, Digest, SHA256};
 
+use crate::BuildId;
 use object::elf::{FileHeader32, FileHeader64, PT_LOAD};
 use object::read::elf::FileHeader;
 use object::read::elf::ProgramHeader;
@@ -27,41 +24,6 @@ use object::ObjectSection;
 /// and other operations are cheaper.
 pub type ExecutableId = u64;
 
-/// Represents a build id, which could be either a GNU build ID, the build
-/// ID from Go, or a Sha256 hash of the code in the .text section.
-#[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub enum BuildId {
-    Gnu(String),
-    Go(String),
-    Sha256(String),
-}
-
-impl BuildId {
-    pub fn gnu_from_bytes(bytes: &[u8]) -> Self {
-        BuildId::Gnu(
-            bytes
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<Vec<_>>()
-                .join(""),
-        )
-    }
-
-    pub fn go_from_bytes(bytes: &[u8]) -> Self {
-        BuildId::Go(
-            bytes
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<Vec<_>>()
-                .join(""),
-        )
-    }
-
-    pub fn sha256_from_digest(digest: &Digest) -> Self {
-        BuildId::Sha256(HEXLOWER.encode(digest.as_ref()))
-    }
-}
-
 /// Elf load segments used during address normalization to find the segment
 /// for what an code address falls into.
 #[derive(Debug, Clone)]
@@ -69,22 +31,6 @@ pub struct ElfLoad {
     pub p_offset: u64,
     pub p_vaddr: u64,
     pub p_memsz: u64,
-}
-
-impl Display for BuildId {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            BuildId::Gnu(build_id) => {
-                write!(f, "gnu-{}", build_id)
-            }
-            BuildId::Go(build_id) => {
-                write!(f, "go-{}", build_id)
-            }
-            BuildId::Sha256(build_id) => {
-                write!(f, "sha256-{}", build_id)
-            }
-        }
-    }
 }
 
 #[derive(Debug)]
