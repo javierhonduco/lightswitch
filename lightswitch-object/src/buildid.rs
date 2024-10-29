@@ -1,7 +1,9 @@
 use std::fmt;
 use std::fmt::Display;
 use std::fmt::Formatter;
+use std::str;
 
+use anyhow::Result;
 use data_encoding::HEXLOWER;
 use ring::digest::Digest;
 
@@ -25,14 +27,8 @@ impl BuildId {
         )
     }
 
-    pub fn go_from_bytes(bytes: &[u8]) -> Self {
-        BuildId::Go(
-            bytes
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<Vec<_>>()
-                .join(""),
-        )
+    pub fn go_from_bytes(bytes: &[u8]) -> Result<Self> {
+        Ok(BuildId::Go(str::from_utf8(bytes)?.to_string()))
     }
 
     pub fn sha256_from_digest(digest: &Digest) -> Self {
@@ -68,8 +64,10 @@ mod tests {
             "gnu-beefcafe"
         );
         assert_eq!(
-            BuildId::go_from_bytes(&[0xbe, 0xef, 0xca, 0xfe]).to_string(),
-            "go-beefcafe"
+            BuildId::go_from_bytes("fake".as_bytes())
+                .unwrap()
+                .to_string(),
+            "go-fake"
         );
 
         let mut context = Context::new(&SHA256);
