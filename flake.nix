@@ -71,14 +71,17 @@
             nativeBuildInputs = nativeBuildInputs;
             buildInputs = buildInputs ++ [
               rust-toolchain
-              # Debugging
+              # Debugging tools
               strace
               gdb
-              # Other tools
+              # Upload container image to registry
               skopeo
+              # Cargo subcommand tools
+              ## To upgrade deps
               cargo-edit
-              # snapshot testing plugin binary
+              ## Snapshot testing
               cargo-insta
+              # Commented out because this is typically not cached and it's rarely used
               # ocamlPackages.magic-trace
             ];
             hardeningDisable = [ "all" ];

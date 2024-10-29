@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.86"
 lru = "0.12.4"
-nix = { version = "0.29.0", features = ["user", "process"] }
-procfs = "0.16.0"
-tracing = "0.1.40"
-thiserror = "1.0.63"
+nix = { workspace = true, features = ["user", "process"] }
+anyhow = { workspace = true }
+procfs = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
