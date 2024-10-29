@@ -75,7 +75,7 @@ impl ObjectFile<'_> {
 
     /// Returns the executable build ID if present. If no GNU build ID and no Go build ID
     /// are found it returns the hash of the text section.
-    pub fn build_id(&self) -> anyhow::Result<BuildId> {
+    pub fn build_id(&self) -> Result<BuildId> {
         let object = &self.object;
         let gnu_build_id = object.build_id()?;
 
@@ -85,7 +85,7 @@ impl ObjectFile<'_> {
 
         // Golang (the Go toolchain does not interpret these bytes as we do).
         for section in object.sections() {
-            if section.name().unwrap() == ".note.go.buildid" {
+            if section.name()? == ".note.go.buildid" {
                 if let Ok(data) = section.data() {
                     return BuildId::go_from_bytes(data);
                 }
@@ -163,7 +163,11 @@ impl ObjectFile<'_> {
 
 pub fn code_hash(object: &object::File) -> Option<Digest> {
     for section in object.sections() {
-        if section.name().unwrap() == ".text" {
+        let Ok(section_name) = section.name() else {
+            continue;
+        };
+
+        if section_name == ".text" {
             if let Ok(section) = section.data() {
                 return Some(sha256_digest(section));
             }
@@ -178,7 +182,9 @@ fn sha256_digest<R: Read>(mut reader: R) -> Digest {
     let mut buffer = [0; 1024];
 
     loop {
-        let count = reader.read(&mut buffer).unwrap();
+        let count = reader
+            .read(&mut buffer)
+            .expect("reading digest into buffer should not fail");
         if count == 0 {
             break;
         }
