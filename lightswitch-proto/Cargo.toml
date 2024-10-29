@@ -12,3 +12,6 @@ rand = { workspace = true }
 
 [build-dependencies]
 prost-build = "0.13.3"
+
+[package.metadata.cargo-shear]
+ignored = ["prost"]

@@ -81,6 +81,8 @@
               cargo-edit
               ## Snapshot testing
               cargo-insta
+              ## Remove unused deps
+              cargo-shear
               # Commented out because this is typically not cached and it's rarely used
               # ocamlPackages.magic-trace
             ];
