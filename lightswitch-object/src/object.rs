@@ -87,7 +87,7 @@ impl ObjectFile<'_> {
         for section in object.sections() {
             if section.name().unwrap() == ".note.go.buildid" {
                 if let Ok(data) = section.data() {
-                    return Ok(BuildId::go_from_bytes(data));
+                    return BuildId::go_from_bytes(data);
                 }
             }
         }
