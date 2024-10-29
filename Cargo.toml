@@ -11,51 +11,67 @@ members = [
     "lightswitch-object"
 ]
 
-[dependencies]
-gimli = "0.31.0"
-object = "0.36.4"
+[workspace.dependencies]
 memmap2 = "0.9.5"
-lazy_static = "1.5.0"
 anyhow = "1.0.89"
-thiserror = "1.0.63"
+object = "0.36.4"
 # TODO: Move to a release.
 libbpf-rs = { git = "https://github.com/libbpf/libbpf-rs", rev="4ebf2ac7cd509e9442aff9b9f92164f252adf2a3", features = ["static"] }
-perf-event-open-sys = "4.0.0"
+tracing = "0.1.40"
+thiserror = "1.0.63"
 errno = "0.3.9"
-plain = "0.2.3"
+perf-event-open-sys = "4.0.0"
 procfs = "0.16.0"
+nix = { version = "0.29.0" }
+# workspace dev dependencies have to be defined here
+rand = "0.8.5"
+# workspace build dependencies have to be defined here
+libbpf-cargo = "0.23.3"
+glob = "0.3.1"
+
+[dependencies]
+gimli = "0.31.0"
+lazy_static = "1.5.0"
+plain = "0.2.3"
 page_size = "0.6.0"
 clap = { version = "4.5.18", features = ["derive", "string"] }
 blazesym = "0.2.0-rc.1"
-tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
 inferno = "0.11.21"
 primal = "0.3.3"
-nix = { version = "0.29.0", features = ["user"] }
 prost = "0.13" # Needed to encode protocol buffers to bytes.
 reqwest = { version = "0.12", features = ["blocking"] }
-lightswitch-metadata-provider = {path = "./lightswitch-metadata-provider"}
-lightswitch-proto = { path = "./lightswitch-proto"}
-lightswitch-capabilities = {path = "./lightswitch-capabilities"}
-lightswitch-object = {path = "./lightswitch-object"}
 ctrlc = "3.4.5"
 crossbeam-channel = "0.5.13"
 libbpf-sys = "1.4.3"
 itertools = "0.13.0"
+lightswitch-metadata-provider = {path = "lightswitch-metadata-provider"}
+lightswitch-proto = { path = "lightswitch-proto"}
+lightswitch-capabilities = {path = "lightswitch-capabilities"}
+lightswitch-object = {path = "lightswitch-object"}
+memmap2 = { workspace = true }
+anyhow = { workspace = true }
+object = { workspace = true }
+libbpf-rs = { workspace = true }
+tracing = { workspace = true }
+perf-event-open-sys = { workspace = true }
+thiserror = { workspace = true }
+errno = { workspace = true }
+procfs = { workspace = true }
+nix = { workspace = true, features = ["user"] }
 
 [dev-dependencies]
 assert_cmd = { version = "2.0.16" }
 insta = { version = "1.40.0", features = ["yaml"] }
 rstest = "0.23.0"
-tempdir = "0.3.7"
-rand = "0.8.5"
+rand = { workspace = true }
 criterion = "0.5.1"
 tempfile = "3.13.0"
 
 [build-dependencies]
+libbpf-cargo = { workspace = true }
+glob = { workspace = true }
 bindgen = "0.70.1"
-libbpf-cargo = "0.23.3"
-glob = "0.3.1"
 
 [profile.dev.package."*"]
 opt-level = 3

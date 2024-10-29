@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-memmap2 = "0.9.5"
-object = "0.36.4"
+data-encoding = "2.6.0"
 ring = "0.17.8"
-anyhow = "*"
-data-encoding = "*"
+memmap2 = { workspace = true }
+object = { workspace = true }
+anyhow = { workspace = true }
