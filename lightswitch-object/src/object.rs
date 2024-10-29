@@ -3,11 +3,11 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 use std::fs;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::Path;
 
 use anyhow::{anyhow, Result};
 use data_encoding::HEXLOWER;
-use memmap2;
+use memmap2::Mmap;
 use ring::digest::{Context, Digest, SHA256};
 
 use object::elf::{FileHeader32, FileHeader64, PT_LOAD};
@@ -19,8 +19,16 @@ use object::Object;
 use object::ObjectKind;
 use object::ObjectSection;
 
+/// Compact identifier for executable files.
+///
+/// Compact identifier for executable files derived from the first 8 bytes
+/// of the hash of the code stored in the .text ELF segment. By using this
+/// smaller type for object files less memory is used and also comparison,
+/// and other operations are cheaper.
 pub type ExecutableId = u64;
 
+/// Represents a build id, which could be either a GNU build ID, the build
+/// ID from Go, or a Sha256 hash of the code in the .text section.
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum BuildId {
     Gnu(String),
@@ -28,6 +36,8 @@ pub enum BuildId {
     Sha256(String),
 }
 
+/// Elf load segments used during address normalization to find the segment
+/// for what an code address falls into.
 #[derive(Debug, Clone)]
 pub struct ElfLoad {
     pub p_offset: u64,
@@ -53,7 +63,7 @@ impl Display for BuildId {
 
 #[derive(Debug)]
 pub struct ObjectFile<'a> {
-    leaked_mmap_ptr: *const memmap2::Mmap,
+    leaked_mmap_ptr: *const Mmap,
     object: object::File<'a>,
     code_hash: Digest,
 }
@@ -61,15 +71,15 @@ pub struct ObjectFile<'a> {
 impl Drop for ObjectFile<'_> {
     fn drop(&mut self) {
         unsafe {
-            let _to_free = Box::from_raw(self.leaked_mmap_ptr as *mut memmap2::Mmap);
+            let _to_free = Box::from_raw(self.leaked_mmap_ptr as *mut Mmap);
         }
     }
 }
 
 impl ObjectFile<'_> {
-    pub fn new(path: &PathBuf) -> Result<Self> {
+    pub fn new(path: &Path) -> Result<Self> {
         let file = fs::File::open(path)?;
-        let mmap = unsafe { memmap2::Mmap::map(&file) }?;
+        let mmap = unsafe { Mmap::map(&file) }?;
         let mmap = Box::new(mmap);
         let leaked = Box::leak(mmap);
         let object = object::File::parse(&**leaked)?;
@@ -78,7 +88,7 @@ impl ObjectFile<'_> {
         };
 
         Ok(ObjectFile {
-            leaked_mmap_ptr: leaked as *const memmap2::Mmap,
+            leaked_mmap_ptr: leaked as *const Mmap,
             object,
             code_hash,
         })

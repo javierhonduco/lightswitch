@@ -13,7 +13,6 @@ use tracing::{debug, error, span, Level};
 
 use crate::ksym::Ksym;
 use crate::ksym::KsymIter;
-use crate::object::ExecutableId;
 use crate::profiler::AggregatedProfile;
 use crate::profiler::AggregatedSample;
 use crate::profiler::Frame;
@@ -22,6 +21,7 @@ use crate::profiler::ObjectFileInfo;
 use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
 use crate::usym::symbolize_native_stack_blaze;
+use lightswitch_object::ExecutableId;
 
 struct ProfileLabel {
     value: MetadataLabelValue,
