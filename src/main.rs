@@ -150,12 +150,12 @@ struct Cli {
     )]
     show_info: Option<String>,
     /// How long this agent will run in seconds
-    #[arg(short='D', long, default_value = Duration::MAX.as_secs().to_string(),
+    #[arg(short='D', long, default_value = ProfilerConfig::default().duration.as_secs().to_string(),
         value_parser = parse_duration)]
     duration: Duration,
     /// Enable libbpf logs. This includes the BPF verifier output
     #[arg(long)]
-    libbpf_logs: bool,
+    libbpf_debug: bool,
     /// Enable BPF programs logging
     #[arg(long)]
     bpf_logging: bool,
@@ -165,7 +165,7 @@ struct Cli {
     // Verification for this option guarantees the only possible selections
     // are prime numbers up to and including 1001
     /// Per-CPU Sampling Frequency in Hz
-    #[arg(long, default_value_t = 19, value_name = "SAMPLE_FREQ_IN_HZ",
+    #[arg(long, default_value_t = ProfilerConfig::default().sample_freq, value_name = "SAMPLE_FREQ_IN_HZ",
       value_parser = sample_freq_in_range,
     )]
     sample_freq: u16,
@@ -182,34 +182,29 @@ struct Cli {
     #[arg(long, default_value_t, value_enum)]
     sender: ProfileSender,
     // Buffer Sizes with defaults
-    #[arg(long, default_value_t = 512 * 1024, value_name = "PERF_BUFFER_BYTES",
+    #[arg(long, default_value_t = ProfilerConfig::default().perf_buffer_bytes, value_name = "PERF_BUFFER_BYTES",
           help="Size of each profiler perf buffer, in bytes (must be a power of 2)",
           value_parser = value_is_power_of_two)]
     perf_buffer_bytes: usize,
     // Print out info on eBPF map sizes
     #[arg(long, help = "Print eBPF map sizes after creation")]
     mapsize_info: bool,
-    // eBPF map stacks
     #[arg(
         long,
-        default_value_t = 100000,
-        help = "max number of individual \
-        stacks to capture before aggregation"
+        default_value_t = ProfilerConfig::default().mapsize_stacks,
+        help = "max number of individual stacks to capture before aggregation"
     )]
     mapsize_stacks: u32,
-    // eBPF map aggregated_stacks
     #[arg(
         long,
-        default_value_t = 10000,
-        help = "Derived from constant MAX_AGGREGATED_STACKS_ENTRIES - max \
-                number of unique stacks after aggregation"
+        default_value_t = ProfilerConfig::default().mapsize_aggregated_stacks,
+        help = "max number of unique stacks after aggregation"
     )]
     mapsize_aggregated_stacks: u32,
-    // eBPF map unwind_info_chunks
     #[arg(
         long,
-        default_value_t = 5000,
-        help = "max number of chunks allowed inside a shard"
+        default_value_t = ProfilerConfig::default().mapsize_rate_limits,
+        help = "max number of rate limit entries"
     )]
     mapsize_rate_limits: u32,
     // Exclude myself from profiling
@@ -310,8 +305,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }));
 
     let profiler_config = ProfilerConfig {
-        // NOTE the difference in this arg name from the actual config name
-        libbpf_debug: args.libbpf_logs,
+        libbpf_debug: args.libbpf_debug,
         bpf_logging: args.bpf_logging,
         duration: args.duration,
         sample_freq: args.sample_freq,
@@ -426,7 +420,7 @@ mod tests {
         cmd.assert().success();
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
         insta::assert_yaml_snapshot!(actual, @r#"
-        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-logs\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --profile-path <PROFILE_PATH>\n          Path for the generated profile\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n          \n          [default: local-disk]\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-stacks <MAPSIZE_STACKS>\n          max number of individual stacks to capture before aggregation\n          \n          [default: 100000]\n\n      --mapsize-aggregated-stacks <MAPSIZE_AGGREGATED_STACKS>\n          Derived from constant MAX_AGGREGATED_STACKS_ENTRIES - max number of unique stacks after aggregation\n          \n          [default: 10000]\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          max number of chunks allowed inside a shard\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n      --symbolizer <SYMBOLIZER>\n          [default: local]\n          [possible values: local, none]\n\n  -h, --help\n          Print help (see a summary with '-h')\n"
+        "Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-debug\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --profile-path <PROFILE_PATH>\n          Path for the generated profile\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n          \n          [default: local-disk]\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-stacks <MAPSIZE_STACKS>\n          max number of individual stacks to capture before aggregation\n          \n          [default: 100000]\n\n      --mapsize-aggregated-stacks <MAPSIZE_AGGREGATED_STACKS>\n          max number of unique stacks after aggregation\n          \n          [default: 10000]\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          max number of rate limit entries\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n      --symbolizer <SYMBOLIZER>\n          [default: local]\n          [possible values: local, none]\n\n  -h, --help\n          Print help (see a summary with '-h')\n"
         "#);
     }
 
