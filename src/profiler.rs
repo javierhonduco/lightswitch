@@ -8,7 +8,7 @@ use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::process;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
 
@@ -227,8 +227,8 @@ pub struct Profiler<'bpf> {
     bpf: ProfilerSkel<'bpf>,
     tracers: TracersSkel<'bpf>,
     // Profiler state
-    procs: Arc<Mutex<HashMap<i32, ProcessInfo>>>,
-    object_files: Arc<Mutex<HashMap<ExecutableId, ObjectFileInfo>>>,
+    procs: Arc<RwLock<HashMap<i32, ProcessInfo>>>,
+    object_files: Arc<RwLock<HashMap<ExecutableId, ObjectFileInfo>>>,
     // Channel for new process events.
     new_proc_chan_send: Arc<Sender<Event>>,
     new_proc_chan_receive: Arc<Receiver<Event>>,
@@ -636,8 +636,8 @@ impl Profiler<'_> {
         let tracers = open_tracers.load().expect("load skel");
         info!("munmap and process exit tracing BPF programs loaded");
 
-        let procs = Arc::new(Mutex::new(HashMap::new()));
-        let object_files = Arc::new(Mutex::new(HashMap::new()));
+        let procs = Arc::new(RwLock::new(HashMap::new()));
+        let object_files = Arc::new(RwLock::new(HashMap::new()));
 
         let (sender, receiver) = unbounded();
         let chan_send = Arc::new(sender);
@@ -759,8 +759,8 @@ impl Profiler<'_> {
                 Ok(profile) => {
                     collector.lock().unwrap().collect(
                         profile,
-                        &procs.lock().unwrap(),
-                        &object_files.lock().unwrap(),
+                        &procs.read().unwrap(),
+                        &object_files.read().unwrap(),
                     );
                 }
                 Err(_e) => {
@@ -825,7 +825,7 @@ impl Profiler<'_> {
 
     pub fn handle_process_exit(&mut self, pid: i32) {
         // TODO: remove ratelimits for this process.
-        let mut procs = self.procs.lock().expect("lock");
+        let mut procs = self.procs.write().expect("lock");
         match procs.get_mut(&pid) {
             Some(proc_info) => {
                 debug!("marking process {} as exited", pid);
@@ -835,7 +835,7 @@ impl Profiler<'_> {
                 let _ = Self::delete_bpf_process(&self.bpf, pid);
 
                 for mapping in &mut proc_info.mappings.0 {
-                    let mut object_files = self.object_files.lock().expect("lock");
+                    let mut object_files = self.object_files.write().expect("lock");
                     if mapping.mark_as_deleted(&mut object_files) {
                         if let Entry::Occupied(entry) = self
                             .native_unwind_state
@@ -878,14 +878,14 @@ impl Profiler<'_> {
     }
 
     pub fn handle_munmap(&mut self, pid: i32, start_address: u64) {
-        let mut procs = self.procs.lock().expect("lock");
+        let mut procs = self.procs.write().expect("lock");
 
         match procs.get_mut(&pid) {
             Some(proc_info) => {
                 for mapping in &mut proc_info.mappings.0 {
                     if mapping.start_addr <= start_address && start_address <= mapping.end_addr {
                         debug!("found memory mapping starting at {:x} for pid {} while handling munmap", start_address, pid);
-                        let mut object_files = self.object_files.lock().expect("lock");
+                        let mut object_files = self.object_files.write().expect("lock");
                         if mapping.mark_as_deleted(&mut object_files) {
                             if let Entry::Occupied(entry) = self
                                 .native_unwind_state
@@ -1093,7 +1093,7 @@ impl Profiler<'_> {
     }
 
     fn process_is_known(&self, pid: i32) -> bool {
-        self.procs.lock().expect("lock").get(&pid).is_some()
+        self.procs.read().expect("lock").get(&pid).is_some()
     }
 
     fn add_bpf_unwind_info(inner: &MapHandle, unwind_info: &[CompactUnwindRow]) {
@@ -1340,7 +1340,7 @@ impl Profiler<'_> {
         for mapping in self
             .procs
             .clone()
-            .lock()
+            .read()
             .expect("lock")
             .get(&pid)
             .unwrap()
@@ -1365,10 +1365,9 @@ impl Profiler<'_> {
                 panic!("build id should be present for file backed mappings");
             }
 
-            let object_files = self.object_files.lock().unwrap();
-
+            let object_file = self.object_files.read().unwrap();
             // We might know about a mapping that failed to open for some reason.
-            let object_file_info = object_files.get(&mapping.executable_id);
+            let object_file_info = object_file.get(&mapping.executable_id);
             if object_file_info.is_none() {
                 warn!("mapping not found");
                 continue;
@@ -1387,9 +1386,6 @@ impl Profiler<'_> {
             } else {
                 load_address = mapping.load_address;
             }
-
-            // Avoid deadlock
-            std::mem::drop(object_files);
 
             match self
                 .native_unwind_state
@@ -1431,7 +1427,7 @@ impl Profiler<'_> {
             });
 
             // This is not released (see note "deadlock")
-            let object_files = self.object_files.lock().unwrap();
+            let object_files = self.object_files.read().unwrap();
             let executable = object_files.get(&mapping.executable_id).unwrap();
             let executable_path = executable.open_file_path();
 
@@ -1654,7 +1650,7 @@ impl Profiler<'_> {
                         map.address.0
                     };
 
-                    let mut object_files = object_files_clone.lock().expect("lock object_files");
+                    let mut object_files = object_files_clone.write().expect("lock object_files");
                     let main_exec = mappings.is_empty();
 
                     mappings.push(ExecutableMapping {
@@ -1711,7 +1707,7 @@ impl Profiler<'_> {
                     if let Ok((vdso_path, object_file)) =
                         fetch_vdso_info(pid, map.address.0, map.address.1, map.offset)
                     {
-                        let mut object_files = object_files_clone.lock().expect("lock");
+                        let mut object_files = object_files_clone.write().expect("lock");
                         let Ok(executable_id) = object_file.id() else {
                             debug!("vDSO object file id failed");
                             continue;
@@ -1765,7 +1761,7 @@ impl Profiler<'_> {
         };
         self.procs
             .clone()
-            .lock()
+            .write()
             .expect("lock")
             .insert(pid, proc_info);
 
