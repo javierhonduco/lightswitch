@@ -15,11 +15,8 @@ use crate::ksym::Ksym;
 use crate::ksym::KsymIter;
 use crate::process::ObjectFileInfo;
 use crate::process::ProcessInfo;
-use crate::profiler::AggregatedProfile;
-use crate::profiler::AggregatedSample;
-use crate::profiler::Frame;
-use crate::profiler::FrameAddress;
-use crate::profiler::RawAggregatedProfile;
+use crate::profile::aggregated::RawAggregatedProfile;
+use crate::profile::{AggregatedProfile, AggregatedSample, Frame, FrameAddress};
 use crate::usym::symbolize_native_stack_blaze;
 use lightswitch_object::ExecutableId;
 

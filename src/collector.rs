@@ -7,10 +7,10 @@ use tracing::{debug, span, Level};
 use crate::process::ObjectFileInfo;
 use crate::process::ProcessInfo;
 use crate::profile::raw_to_processed;
+use crate::profile::AggregatedProfile;
+use crate::profile::AggregatedSample;
+use crate::profile::RawAggregatedProfile;
 use crate::profile::{symbolize_profile, to_pprof};
-use crate::profiler::AggregatedProfile;
-use crate::profiler::AggregatedSample;
-use crate::profiler::RawAggregatedProfile;
 use lightswitch_object::ExecutableId;
 
 use lightswitch_metadata_provider::metadata_provider::ThreadSafeGlobalMetadataProvider;

@@ -8,9 +8,9 @@ use blazesym::symbolize::Symbolized;
 use blazesym::symbolize::Symbolizer;
 use tracing::error;
 
-use crate::profiler::Frame;
-use crate::profiler::FrameAddress;
-use crate::profiler::SymbolizationError;
+use crate::profile::Frame;
+use crate::profile::FrameAddress;
+use crate::profile::SymbolizationError;
 
 pub fn symbolize_native_stack_blaze(
     address_pairs: Vec<FrameAddress>,
