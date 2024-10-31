@@ -8,7 +8,7 @@ use crossbeam_channel::bounded;
 
 use lightswitch::collector::{AggregatorCollector, Collector};
 use lightswitch::profile::symbolize_profile;
-use lightswitch::profiler::AggregatedProfile;
+use lightswitch::profile::AggregatedProfile;
 use lightswitch::profiler::{Profiler, ProfilerConfig};
 
 /// Find the `nix` binary either in the $PATH or in the below hardcoded location.
