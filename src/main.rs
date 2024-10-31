@@ -373,10 +373,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                         "Flamegraph profile successfully written to {}",
                         profile_path.to_string_lossy()
                     );
-                    eprintln!(
-                        "Flamegraph profile successfully written to {}",
-                        profile_path.to_string_lossy()
-                    );
                 }
                 Err(e) => {
                     error!("Failed generate flamegraph: {:?}", e);
