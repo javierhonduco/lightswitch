@@ -2,12 +2,10 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
-use std::fs::File;
 use std::mem::size_of;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
-use std::process;
 use std::sync::{Arc, RwLock};
 
 use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
@@ -33,174 +31,19 @@ use crate::bpf::tracers_bindings::*;
 use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
 use crate::perf_events::setup_perf_event;
+use crate::process::{
+    ExecutableMapping, ExecutableMappingType, ExecutableMappings, ObjectFileInfo, Pid, ProcessInfo,
+    ProcessStatus,
+};
 use crate::unwind_info::compact_unwind_info;
 use crate::unwind_info::log_unwind_info_sections;
 use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::{get_online_cpus, summarize_address_range};
-use lightswitch_object::ElfLoad;
-use lightswitch_object::{BuildId, ExecutableId, ObjectFile};
+use lightswitch_object::{ExecutableId, ObjectFile};
 
 pub enum TracerEvent {
-    ProcessExit(i32),
-    Munmap(i32, u64),
-}
-
-// Some temporary data structures to get things going, this could use lots of
-// improvements
-#[derive(Debug, Clone, PartialEq)]
-pub enum MappingType {
-    FileBacked,
-    Anonymous,
-    Vdso,
-}
-
-#[derive(Clone)]
-pub enum ProcessStatus {
-    Running,
-    Exited,
-}
-
-#[derive(Clone)]
-pub struct ProcessInfo {
-    pub status: ProcessStatus,
-    pub mappings: ExecutableMappings,
-}
-
-pub struct ObjectFileInfo {
-    pub file: fs::File,
-    pub path: PathBuf,
-    pub elf_load_segments: Vec<ElfLoad>,
-    pub is_dyn: bool,
-    pub references: i64,
-    pub native_unwind_info_size: Option<u64>,
-}
-
-impl Clone for ObjectFileInfo {
-    fn clone(&self) -> Self {
-        ObjectFileInfo {
-            file: self.open_file_from_procfs_fd(),
-            path: self.path.clone(),
-            elf_load_segments: self.elf_load_segments.clone(),
-            is_dyn: self.is_dyn,
-            references: self.references,
-            native_unwind_info_size: self.native_unwind_info_size,
-        }
-    }
-}
-
-impl ObjectFileInfo {
-    /// Files might be removed at any time from the file system and they won't
-    /// be accessible anymore with their path. We work around this by doing the
-    /// following:
-    ///
-    /// - We open object files as soon as we learn about them, that way we increase
-    ///   the reference count of the file in the kernel. Files won't really be deleted
-    ///   until the reference count drops to zero.
-    /// - In order to re-open files even if they've been deleted, we can use the procfs
-    ///   interface, as long as their reference count hasn't reached zero and the kernel
-    ///   hasn't removed the file from the file system and the various caches.
-    fn open_file_from_procfs_fd(&self) -> File {
-        let raw_fd = self.file.as_raw_fd();
-        File::open(format!("/proc/{}/fd/{}", process::id(), raw_fd)).expect(
-            "re-opening the file from procfs will never fail as we have an already opened file",
-        )
-    }
-
-    /// Returns the procfs path for this file descriptor. See comment above.
-    pub fn open_file_path(&self) -> PathBuf {
-        let raw_fd = self.file.as_raw_fd();
-        PathBuf::from(format!("/proc/{}/fd/{}", process::id(), raw_fd))
-    }
-
-    /// For a virtual address return the offset within the object file. In order
-    /// to do this we must check every `PT_LOAD` segment.
-    pub fn normalized_address(
-        &self,
-        virtual_address: u64,
-        mapping: &ExecutableMapping,
-    ) -> Option<u64> {
-        let offset = virtual_address - mapping.start_addr + mapping.offset;
-
-        for segment in &self.elf_load_segments {
-            let address_range = segment.p_vaddr..(segment.p_vaddr + segment.p_memsz);
-            if address_range.contains(&offset) {
-                return Some(offset - segment.p_offset + segment.p_vaddr);
-            }
-        }
-
-        None
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ExecutableMapping {
-    pub executable_id: ExecutableId,
-    // No build id means either JIT or that we could not fetch it. Change this.
-    pub build_id: Option<BuildId>,
-    pub kind: MappingType,
-    pub start_addr: u64,
-    pub end_addr: u64,
-    pub offset: u64,
-    pub load_address: u64,
-    pub main_exec: bool,
-    /// Soft delete.
-    pub unmapped: bool,
-    // Add (inode, ctime) and whether the file is in the root namespace
-}
-
-#[derive(Clone)]
-pub struct ExecutableMappings(Vec<ExecutableMapping>);
-
-impl ExecutableMappings {
-    pub fn for_address(&self, virtual_address: u64) -> Option<ExecutableMapping> {
-        for mapping in &self.0 {
-            if (mapping.start_addr..mapping.end_addr).contains(&virtual_address) {
-                return Some(mapping.clone());
-            }
-        }
-
-        None
-    }
-}
-
-impl ExecutableMapping {
-    fn mark_as_deleted(
-        &mut self,
-        object_files: &mut HashMap<ExecutableId, ObjectFileInfo>,
-    ) -> bool {
-        // The executable mapping can be removed at a later time, and function might be called multiple
-        // times. To avoid this, we keep track of whether this mapping has been soft deleted.
-        if self.unmapped {
-            return false;
-        }
-        self.unmapped = true;
-
-        if let Some(object_file) = object_files.get_mut(&self.executable_id) {
-            // Object files are also soft deleted, so do not try to decrease the reference count
-            // if it's already zero.
-            if object_file.references == 0 {
-                return false;
-            }
-
-            object_file.references -= 1;
-
-            if object_file.references == 0 {
-                debug!(
-                    "object file with path {} can be deleted",
-                    object_file.path.display()
-                );
-                return true;
-            }
-
-            debug_assert!(
-                object_file.references >= 0,
-                "Reference count for {} is negative: {}",
-                object_file.path.display(),
-                object_file.references,
-            );
-        }
-        false
-    }
+    ProcessExit(Pid),
+    Munmap(Pid, u64),
 }
 
 pub struct KnownExecutableInfo {
@@ -227,7 +70,7 @@ pub struct Profiler<'bpf> {
     bpf: ProfilerSkel<'bpf>,
     tracers: TracersSkel<'bpf>,
     // Profiler state
-    procs: Arc<RwLock<HashMap<i32, ProcessInfo>>>,
+    procs: Arc<RwLock<HashMap<Pid, ProcessInfo>>>,
     object_files: Arc<RwLock<HashMap<ExecutableId, ObjectFileInfo>>>,
     // Channel for new process events.
     new_proc_chan_send: Arc<Sender<Event>>,
@@ -240,7 +83,7 @@ pub struct Profiler<'bpf> {
     // Native unwinding state
     native_unwind_state: NativeUnwindState,
     // Debug options
-    filter_pids: HashMap<i32, bool>,
+    filter_pids: HashMap<Pid, bool>,
     // Profile channel
     profile_send: Arc<Sender<RawAggregatedProfile>>,
     profile_receive: Arc<Receiver<RawAggregatedProfile>>,
@@ -256,13 +99,10 @@ pub struct Profiler<'bpf> {
     native_unwind_info_bucket_sizes: Vec<u32>,
 }
 
-// Static config
-// TODO
-
 #[derive(Debug, Hash, Eq, PartialEq)]
 pub struct RawAggregatedSample {
-    pub pid: i32,
-    pub tid: i32,
+    pub pid: Pid,
+    pub tid: Pid,
     pub ustack: Option<native_stack_t>,
     pub kstack: Option<native_stack_t>,
     pub count: u64,
@@ -275,7 +115,7 @@ impl RawAggregatedSample {
     /// calculated here.
     pub fn process(
         &self,
-        procs: &HashMap<i32, ProcessInfo>,
+        procs: &HashMap<Pid, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) -> Result<AggregatedSample, anyhow::Error> {
         let Some(info) = procs.get(&self.pid) else {
@@ -426,8 +266,8 @@ impl Frame {
 
 #[derive(Default, Debug, Hash, Eq, PartialEq)]
 pub struct AggregatedSample {
-    pub pid: i32,
-    pub tid: i32,
+    pub pid: Pid,
+    pub tid: Pid,
     pub ustack: Vec<Frame>,
     pub kstack: Vec<Frame>,
     pub count: u64,
@@ -509,7 +349,7 @@ impl Default for Profiler<'_> {
 
 /// Extract the vdso object file loaded in the address space of each process.
 fn fetch_vdso_info<'a>(
-    pid: i32,
+    pid: Pid,
     start_addr: u64,
     end_addr: u64,
     offset: u64,
@@ -680,7 +520,7 @@ impl Profiler<'_> {
         }
     }
 
-    pub fn profile_pids(&mut self, pids: Vec<i32>) {
+    pub fn profile_pids(&mut self, pids: Vec<Pid>) {
         for pid in pids {
             self.filter_pids.insert(pid, true);
             self.event_new_proc(pid);
@@ -823,7 +663,7 @@ impl Profiler<'_> {
         }
     }
 
-    pub fn handle_process_exit(&mut self, pid: i32) {
+    pub fn handle_process_exit(&mut self, pid: Pid) {
         // TODO: remove ratelimits for this process.
         let mut procs = self.procs.write().expect("lock");
         match procs.get_mut(&pid) {
@@ -877,7 +717,7 @@ impl Profiler<'_> {
         }
     }
 
-    pub fn handle_munmap(&mut self, pid: i32, start_address: u64) {
+    pub fn handle_munmap(&mut self, pid: Pid, start_address: u64) {
         let mut procs = self.procs.write().expect("lock");
 
         match procs.get_mut(&pid) {
@@ -1092,7 +932,7 @@ impl Profiler<'_> {
         result
     }
 
-    fn process_is_known(&self, pid: i32) -> bool {
+    fn process_is_known(&self, pid: Pid) -> bool {
         self.procs.read().expect("lock").get(&pid).is_some()
     }
 
@@ -1199,7 +1039,7 @@ impl Profiler<'_> {
         )
     }
 
-    fn add_bpf_process(bpf: &ProfilerSkel, pid: i32) -> Result<(), libbpf_rs::Error> {
+    fn add_bpf_process(bpf: &ProfilerSkel, pid: Pid) -> Result<(), libbpf_rs::Error> {
         let key = exec_mappings_key::new(
             pid as u32, 0x0, 32, // pid bits
         );
@@ -1209,7 +1049,7 @@ impl Profiler<'_> {
 
     fn add_bpf_mappings(
         bpf: &ProfilerSkel,
-        pid: i32,
+        pid: Pid,
         mappings: &Vec<mapping_t>,
     ) -> Result<(), libbpf_rs::Error> {
         for mapping in mappings {
@@ -1226,7 +1066,7 @@ impl Profiler<'_> {
         Ok(())
     }
 
-    fn delete_bpf_mappings(bpf: &ProfilerSkel, pid: i32, mapping_begin: u64, mapping_end: u64) {
+    fn delete_bpf_mappings(bpf: &ProfilerSkel, pid: Pid, mapping_begin: u64, mapping_end: u64) {
         for address_range in summarize_address_range(mapping_begin, mapping_end - 1) {
             let key = exec_mappings_key::new(
                 pid as u32,
@@ -1242,7 +1082,7 @@ impl Profiler<'_> {
         }
     }
 
-    fn delete_bpf_process(bpf: &ProfilerSkel, pid: i32) -> Result<(), libbpf_rs::Error> {
+    fn delete_bpf_process(bpf: &ProfilerSkel, pid: Pid) -> Result<(), libbpf_rs::Error> {
         let key = exec_mappings_key::new(
             pid.try_into().unwrap(),
             0x0,
@@ -1329,7 +1169,7 @@ impl Profiler<'_> {
         }
     }
 
-    fn add_unwind_info(&mut self, pid: i32) {
+    fn add_unwind_info(&mut self, pid: Pid) {
         if !self.process_is_known(pid) {
             panic!("add_unwind_info -- expected process to be known");
         }
@@ -1350,7 +1190,7 @@ impl Profiler<'_> {
         {
             // There is no unwind information for anonymous (JIT) mappings, so let's skip them.
             // In the future we could either try to synthetise the unwind information.
-            if mapping.kind == MappingType::Anonymous {
+            if mapping.kind == ExecutableMappingType::Anonymous {
                 bpf_mappings.push(mapping_t {
                     load_address: 0,
                     begin: mapping.start_addr,
@@ -1399,7 +1239,7 @@ impl Profiler<'_> {
                         load_address,
                         begin: mapping.start_addr,
                         end: mapping.end_addr,
-                        type_: if mapping.kind == MappingType::Vdso {
+                        type_: if mapping.kind == ExecutableMappingType::Vdso {
                             MAPPING_TYPE_VDSO
                         } else {
                             MAPPING_TYPE_FILE
@@ -1419,7 +1259,7 @@ impl Profiler<'_> {
                 begin: mapping.start_addr,
                 end: mapping.end_addr,
                 executable_id: mapping.executable_id,
-                type_: if mapping.kind == MappingType::Vdso {
+                type_: if mapping.kind == ExecutableMappingType::Vdso {
                     MAPPING_TYPE_VDSO
                 } else {
                     MAPPING_TYPE_FILE
@@ -1539,7 +1379,7 @@ impl Profiler<'_> {
         }
     }
 
-    fn should_profile(&self, pid: i32) -> bool {
+    fn should_profile(&self, pid: Pid) -> bool {
         if self.exclude_self && pid == std::process::id() as i32 {
             return false;
         }
@@ -1551,7 +1391,7 @@ impl Profiler<'_> {
         self.filter_pids.contains_key(&pid)
     }
 
-    fn event_new_proc(&mut self, pid: i32) {
+    fn event_new_proc(&mut self, pid: Pid) {
         if !self.should_profile(pid) {
             return;
         }
@@ -1572,7 +1412,7 @@ impl Profiler<'_> {
         }
     }
 
-    pub fn add_proc(&mut self, pid: i32) -> anyhow::Result<()> {
+    pub fn add_proc(&mut self, pid: Pid) -> anyhow::Result<()> {
         let proc = procfs::process::Process::new(pid)?;
         let maps = proc.maps()?;
 
@@ -1656,13 +1496,13 @@ impl Profiler<'_> {
                     mappings.push(ExecutableMapping {
                         executable_id,
                         build_id: Some(build_id.clone()),
-                        kind: MappingType::FileBacked,
+                        kind: ExecutableMappingType::FileBacked,
                         start_addr: map.address.0,
                         end_addr: map.address.1,
                         offset: map.offset,
                         load_address: load_address(),
                         main_exec,
-                        unmapped: false,
+                        soft_delete: false,
                     });
 
                     match object_files.entry(executable_id) {
@@ -1690,13 +1530,13 @@ impl Profiler<'_> {
                     mappings.push(ExecutableMapping {
                         executable_id: 0, // Placeholder for JIT.
                         build_id: None,
-                        kind: MappingType::Anonymous,
+                        kind: ExecutableMappingType::Anonymous,
                         start_addr: map.address.0,
                         end_addr: map.address.1,
                         offset: map.offset,
                         load_address: 0,
                         main_exec: false,
-                        unmapped: false,
+                        soft_delete: false,
                     });
                 }
                 procfs::process::MMapPath::Vdso | procfs::process::MMapPath::Vsyscall => {
@@ -1739,13 +1579,13 @@ impl Profiler<'_> {
                         mappings.push(ExecutableMapping {
                             executable_id,
                             build_id: Some(build_id),
-                            kind: MappingType::Vdso,
+                            kind: ExecutableMappingType::Vdso,
                             start_addr: map.address.0,
                             end_addr: map.address.1,
                             offset: map.offset,
                             load_address: map.address.0,
                             main_exec: false,
-                            unmapped: false,
+                            soft_delete: false,
                         });
                     }
                 }
@@ -1958,85 +1798,5 @@ mod tests {
         ---
         "SymbolizedAggregatedSample { pid: 98765, tid: 98766, ustack: \"[NONE]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 1001 }"
         "###);
-    }
-
-    /// This tests ensures that cloning an `ObjectFileInfo` succeeds to
-    /// open the file even if it's been deleted. This works because we
-    /// always keep at least one open file descriptor to prevent the kernel
-    /// from freeing the resource, effectively removing the file from the
-    /// file system.
-    #[test]
-    fn test_object_file_clone() {
-        use std::fs::remove_file;
-        use std::io::Read;
-
-        let named_tmpfile = tempfile::NamedTempFile::new().unwrap();
-        let file_path = named_tmpfile.path();
-        let file = File::open(file_path).unwrap();
-
-        let object_file_info = ObjectFileInfo {
-            file,
-            path: file_path.to_path_buf(),
-            elf_load_segments: vec![],
-            is_dyn: false,
-            references: 1,
-            native_unwind_info_size: None,
-        };
-
-        remove_file(file_path).unwrap();
-
-        let mut object_file_info_copy = object_file_info.clone();
-        let mut buf = String::new();
-        // This would fail without the procfs hack.
-        object_file_info_copy.file.read_to_string(&mut buf).unwrap();
-    }
-
-    #[test]
-    fn test_address_normalization() {
-        let mut object_file_info = ObjectFileInfo {
-            file: File::open("/").unwrap(),
-            path: "/".into(),
-            elf_load_segments: vec![],
-            is_dyn: false,
-            references: 0,
-            native_unwind_info_size: None,
-        };
-
-        let mapping = ExecutableMapping {
-            executable_id: 0x0,
-            build_id: None,
-            kind: MappingType::FileBacked,
-            start_addr: 0x100,
-            end_addr: 0x100 + 100,
-            offset: 0x0,
-            load_address: 0x0,
-            main_exec: false,
-            unmapped: false,
-        };
-
-        // no elf segments
-        assert!(object_file_info
-            .normalized_address(0x110, &mapping)
-            .is_none());
-
-        // matches an elf segment
-        object_file_info.elf_load_segments = vec![ElfLoad {
-            p_offset: 0x1,
-            p_vaddr: 0x0,
-            p_memsz: 0x20,
-        }];
-        assert_eq!(
-            object_file_info.normalized_address(0x110, &mapping),
-            Some(0xF)
-        );
-        // does not match any elf segments
-        object_file_info.elf_load_segments = vec![ElfLoad {
-            p_offset: 0x0,
-            p_vaddr: 0x0,
-            p_memsz: 0x5,
-        }];
-        assert!(object_file_info
-            .normalized_address(0x110, &mapping)
-            .is_none());
     }
 }
