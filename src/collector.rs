@@ -4,12 +4,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, span, Level};
 
+use crate::process::ObjectFileInfo;
+use crate::process::ProcessInfo;
 use crate::profile::raw_to_processed;
 use crate::profile::{symbolize_profile, to_pprof};
 use crate::profiler::AggregatedProfile;
 use crate::profiler::AggregatedSample;
-use crate::profiler::ObjectFileInfo;
-use crate::profiler::ProcessInfo;
 use crate::profiler::RawAggregatedProfile;
 use lightswitch_object::ExecutableId;
 
