@@ -1332,6 +1332,7 @@ dependencies = [
  "data-encoding",
  "memmap2 0.9.5",
  "object",
+ "procfs",
  "ring",
 ]
 

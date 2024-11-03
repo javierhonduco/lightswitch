@@ -4,7 +4,6 @@ use lightswitch_metadata::taskname::TaskName;
 
 use lightswitch_proto::profile::pprof::Label;
 use lightswitch_proto::profile::{pprof, LabelStringOrNumber, PprofBuilder};
-
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -54,18 +53,42 @@ pub fn to_pprof(
         let kstack = sample.kstack;
         let mut location_ids = Vec::new();
 
+        // Assume none come from kernel modules...
         for kframe in kstack {
-            // TODO: Add real values, read kernel build ID, etc.
-            let mapping_id: u64 = pprof.add_mapping(
-                0x1000000,
-                0xFFFFFFFF,
-                0xFFFFFFFF,
-                0x0,
-                "[kernel]", // This is a special marker.
-                "fake_kernel_build_id",
-            );
+            let virtual_address = kframe.virtual_address;
 
-            let mut lines = vec![];
+            let Some(info) = procs.get(&0) else {
+                // todo: maybe append an error frame for debugging?
+                continue;
+            };
+
+            let Some(mapping) = info.mappings.for_address(virtual_address) else {
+                // todo: maybe append an error frame for debugging?
+                continue;
+            };
+
+            /* let mapping_id: u64 = match kernel_code_sections.find_module(kframe.virtual_address) {
+                           Some(kernel_code_section) => {
+                               let fake_executable_id = u64::from_ne_bytes(
+                                   kernel_code_section.build_id.short().as_bytes()[..8]
+                                       .try_into()
+                                       .unwrap(),
+                               );
+                               /*      let mut arr = [0u8; 8];
+                               arr.copy_from_slice(&your_slice); */
+                               pprof.add_mapping(
+                                   fake_executable_id,
+                                   kernel_code_section.start,
+                                   kernel_code_section.start + kernel_code_section.size,
+                                   0x0,
+                                   &kernel_code_section.name,
+                                   &kernel_code_section.build_id.to_string(),
+                               )
+                           }
+                           None => 1, // @nocommit, think about this one
+                       };
+            */
+            let mut lines = Vec::new();
 
             match kframe.symbolization_result {
                 Some(Ok((name, _))) => {
@@ -79,8 +102,8 @@ pub fn to_pprof(
                 None => {}
             }
 
-            let location = pprof.add_location(kframe.virtual_address, mapping_id, lines);
-            location_ids.push(location);
+            /*   let location = pprof.add_location(kframe.file_offset.unwrap_or(0), mapping_id, lines);
+            location_ids.push(location); */
         }
 
         for uframe in ustack {

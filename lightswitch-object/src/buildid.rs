@@ -44,7 +44,7 @@ impl BuildId {
         }
     }
 
-    pub fn build_id_formatted(&self) -> String {
+    pub fn short(&self) -> String {
         match self.flavour {
             BuildIdFlavour::Gnu => {
                 self.data
@@ -66,7 +66,7 @@ impl BuildId {
     }
 
     pub fn formatted(&self) -> String {
-        format!("{}-{}", self.flavour, self.build_id_formatted())
+        format!("{}-{}", self.flavour, self.short())
     }
 }
 

@@ -1534,6 +1534,11 @@ impl Profiler {
         }
     }
 
+    pub fn add_kernel_objects(&mut self) {
+        let object_files_clone = self.object_files.clone();
+        let mut object_files = object_files_clone.write();
+    }
+
     pub fn add_proc(&mut self, pid: Pid) -> anyhow::Result<()> {
         let proc = procfs::process::Process::new(pid)?;
         let maps = proc.maps()?;
