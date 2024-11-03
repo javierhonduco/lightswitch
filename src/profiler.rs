@@ -140,12 +140,12 @@ impl Default for Profiler<'_> {
 }
 
 /// Extract the vdso object file loaded in the address space of each process.
-fn fetch_vdso_info<'a>(
+fn fetch_vdso_info(
     pid: Pid,
     start_addr: u64,
     end_addr: u64,
     offset: u64,
-) -> Result<(PathBuf, ObjectFile<'a>)> {
+) -> Result<(PathBuf, ObjectFile)> {
     // Read raw memory
     let file = fs::File::open(format!("/proc/{}/mem", pid))?;
     let size = end_addr - start_addr;
