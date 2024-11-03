@@ -1,7 +1,10 @@
+use libbpf_rs::OpenObject;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fs;
 use std::mem::size_of;
+use std::mem::ManuallyDrop;
+use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
@@ -62,13 +65,14 @@ impl NativeUnwindState {
     }
 }
 
-pub struct Profiler<'bpf> {
+pub struct Profiler {
     // Prevent the links from being removed.
     _links: Vec<Link>,
-    // Prevent the map shapes from being freed.
     _inner_unwind_info_map_shapes: Vec<MapHandle>,
-    native_unwinder: ProfilerSkel<'bpf>,
-    tracers: TracersSkel<'bpf>,
+    native_unwinder_open_object: ManuallyDrop<Box<MaybeUninit<OpenObject>>>,
+    native_unwinder: ManuallyDrop<ProfilerSkel<'static>>,
+    tracers_open_object: ManuallyDrop<Box<MaybeUninit<OpenObject>>>,
+    tracers: ManuallyDrop<TracersSkel<'static>>,
     procs: Arc<RwLock<HashMap<Pid, ProcessInfo>>>,
     object_files: Arc<RwLock<HashMap<ExecutableId, ObjectFileInfo>>>,
     // Channel for new process events.
@@ -133,11 +137,21 @@ impl Default for ProfilerConfig {
     }
 }
 
-impl Default for Profiler<'_> {
+impl Default for Profiler {
     fn default() -> Self {
         let (_stop_signal_send, stop_signal_receive) = bounded(1);
 
         Self::new(ProfilerConfig::default(), stop_signal_receive)
+    }
+}
+
+impl Drop for Profiler {
+    fn drop(&mut self) {
+        unsafe { ManuallyDrop::drop(&mut self.native_unwinder) };
+        unsafe { ManuallyDrop::drop(&mut self.native_unwinder_open_object) };
+
+        unsafe { ManuallyDrop::drop(&mut self.tracers) };
+        unsafe { ManuallyDrop::drop(&mut self.tracers_open_object) };
     }
 }
 
@@ -164,7 +178,7 @@ fn fetch_vdso_info(
     Ok((dumped_vdso, object))
 }
 
-impl Profiler<'_> {
+impl Profiler {
     pub fn create_unwind_info_maps(
         open_skel: &mut OpenProfilerSkel,
         native_unwind_info_bucket_sizes: &[u32],
@@ -191,7 +205,8 @@ impl Profiler<'_> {
 
             open_skel
                 .open_object_mut()
-                .map_mut(format!("outer_map_{}", i))
+                .maps_mut()
+                .find(|map| map.name().to_string_lossy() == format!("outer_map_{}", i))
                 .unwrap()
                 .set_inner_map_fd(inner_map_shape.as_fd())
                 .expect("shoudl never fail");
@@ -207,22 +222,23 @@ impl Profiler<'_> {
         profiler_config: &ProfilerConfig,
     ) {
         open_skel
-            .maps_mut()
-            .stacks()
+            .maps
+            .stacks
             .set_max_entries(profiler_config.mapsize_stacks)
             .expect("Unable to set stacks map max_entries");
         open_skel
-            .maps_mut()
-            .aggregated_stacks()
+            .maps
+            .aggregated_stacks
             .set_max_entries(profiler_config.mapsize_aggregated_stacks)
             .expect("Unable to set aggregated_stacks map max_entries");
         open_skel
-            .maps_mut()
-            .rate_limits()
+            .maps
+            .rate_limits
             .set_max_entries(profiler_config.mapsize_rate_limits)
             .expect("Unable to set rate_limits map max_entries");
         open_skel
-            .rodata_mut()
+            .maps
+            .rodata_data
             .lightswitch_config
             .verbose_logging
             .write(profiler_config.bpf_logging);
@@ -232,27 +248,27 @@ impl Profiler<'_> {
         info!("BPF map sizes:");
         info!(
             "stacks: {}",
-            bpf.maps().stacks().info().unwrap().info.max_entries
+            bpf.maps.stacks.info().unwrap().info.max_entries
         );
         info!(
             "aggregated_stacks: {}",
-            bpf.maps()
-                .aggregated_stacks()
-                .info()
-                .unwrap()
-                .info
-                .max_entries
+            bpf.maps.aggregated_stacks.info().unwrap().info.max_entries
         );
         info!(
             "rate_limits: {}",
-            bpf.maps().rate_limits().info().unwrap().info.max_entries
+            bpf.maps.rate_limits.info().unwrap().info.max_entries
         );
     }
 
     pub fn new(profiler_config: ProfilerConfig, stop_signal_receive: Receiver<()>) -> Self {
+        let mut native_unwinder_open_object = ManuallyDrop::new(Box::new(MaybeUninit::uninit()));
+        let mut tracers_open_object = ManuallyDrop::new(Box::new(MaybeUninit::uninit()));
+
         let mut skel_builder = ProfilerSkelBuilder::default();
         skel_builder.obj_builder.debug(profiler_config.libbpf_debug);
-        let mut open_skel = skel_builder.open().expect("open skel");
+        let mut open_skel = skel_builder
+            .open(&mut native_unwinder_open_object)
+            .expect("open skel");
 
         let inner_unwind_info_map_shapes = Self::create_unwind_info_maps(
             &mut open_skel,
@@ -260,11 +276,17 @@ impl Profiler<'_> {
         );
         Self::set_profiler_map_sizes(&mut open_skel, &profiler_config);
 
-        let native_unwinder = open_skel.load().expect("load skel");
+        let native_unwinder = ManuallyDrop::new(open_skel.load().expect("load skel"));
+        // SAFETY: native_unwinder never outlives native_unwinder_open_object
+        let native_unwinder = unsafe {
+            std::mem::transmute::<ManuallyDrop<ProfilerSkel<'_>>, ManuallyDrop<ProfilerSkel<'static>>>(
+                native_unwinder,
+            )
+        };
 
         info!("native unwinder BPF program loaded");
-        let native_unwinder_maps = native_unwinder.maps();
-        let exec_mappings_fd = native_unwinder_maps.exec_mappings().as_fd();
+        let native_unwinder_maps = &native_unwinder.maps;
+        let exec_mappings_fd = native_unwinder_maps.exec_mappings.as_fd();
 
         // BPF map sizes can be overriden, this is a debugging option to print the actual size once
         // the maps are created and the BPF program is loaded.
@@ -276,14 +298,23 @@ impl Profiler<'_> {
         tracers_builder
             .obj_builder
             .debug(profiler_config.libbpf_debug);
-        let open_tracers = tracers_builder.open().expect("open skel");
+        let mut open_tracers = tracers_builder
+            .open(&mut tracers_open_object)
+            .expect("open skel");
         open_tracers
-            .maps()
-            .exec_mappings()
+            .maps
+            .exec_mappings
             .reuse_fd(exec_mappings_fd)
             .expect("reuse exec_mappings");
 
-        let tracers = open_tracers.load().expect("load skel");
+        let tracers = ManuallyDrop::new(open_tracers.load().expect("load skel"));
+        // SAFETY: tracers never outlives tracers_open_object
+        let tracers = unsafe {
+            std::mem::transmute::<ManuallyDrop<TracersSkel<'_>>, ManuallyDrop<TracersSkel<'static>>>(
+                tracers,
+            )
+        };
+
         info!("munmap and process exit tracing BPF programs loaded");
 
         let (sender, receiver) = unbounded();
@@ -304,7 +335,9 @@ impl Profiler<'_> {
         Profiler {
             _links: Vec::new(),
             _inner_unwind_info_map_shapes: inner_unwind_info_map_shapes,
+            native_unwinder_open_object,
             native_unwinder,
+            tracers_open_object,
             tracers,
             procs: Arc::new(RwLock::new(HashMap::new())),
             object_files: Arc::new(RwLock::new(HashMap::new())),
@@ -353,7 +386,7 @@ impl Profiler<'_> {
 
         // New process events.
         let chan_send = self.new_proc_chan_send.clone();
-        let perf_buffer = PerfBufferBuilder::new(self.native_unwinder.maps().events())
+        let perf_buffer = PerfBufferBuilder::new(&self.native_unwinder.maps.events)
             .pages(self.perf_buffer_bytes / page_size::get())
             .sample_cb(move |_cpu: i32, data: &[u8]| {
                 Self::handle_event(&chan_send, data);
@@ -370,23 +403,22 @@ impl Profiler<'_> {
 
         // Trace events are received here, such as memory unmaps.
         let tracers_send = self.tracers_chan_send.clone();
-        let tracers_events_perf_buffer =
-            PerfBufferBuilder::new(self.tracers.maps().tracer_events())
-                .pages(self.perf_buffer_bytes / page_size::get())
-                .sample_cb(move |_cpu: i32, data: &[u8]| {
-                    let mut event = tracer_event_t::default();
-                    plain::copy_from_bytes(&mut event, data).expect("serde tracers event");
-                    tracers_send
-                        .send(TracerEvent::from(event))
-                        .expect("handle event send");
-                })
-                .lost_cb(|_cpu, lost_count| {
-                    warn!("lost {} events from the tracers", lost_count);
-                })
-                .build()
-                // TODO: Instead of unwrap, consume and emit any error, with
-                // .expect() perhaps?
-                .unwrap();
+        let tracers_events_perf_buffer = PerfBufferBuilder::new(&self.tracers.maps.tracer_events)
+            .pages(self.perf_buffer_bytes / page_size::get())
+            .sample_cb(move |_cpu: i32, data: &[u8]| {
+                let mut event = tracer_event_t::default();
+                plain::copy_from_bytes(&mut event, data).expect("serde tracers event");
+                tracers_send
+                    .send(TracerEvent::from(event))
+                    .expect("handle event send");
+            })
+            .lost_cb(|_cpu, lost_count| {
+                warn!("lost {} events from the tracers", lost_count);
+            })
+            .build()
+            // TODO: Instead of unwrap, consume and emit any error, with
+            // .expect() perhaps?
+            .unwrap();
 
         let _tracers_poll_thread = thread::spawn(move || loop {
             tracers_events_perf_buffer
@@ -587,7 +619,13 @@ impl Profiler<'_> {
 
     /// Clears a BPF map in a iterator-stable way.
     pub fn clear_map(&self, name: &str) {
-        let map = self.native_unwinder.object().map(name).expect("map exists");
+        let map = self
+            .native_unwinder
+            .object()
+            .maps()
+            .find(|map| map.name().to_string_lossy() == name)
+            .expect("map exists");
+
         let mut total_entries = 0;
         let mut failures = 0;
         let mut previous_key: Option<Vec<u8>> = None;
@@ -617,11 +655,11 @@ impl Profiler<'_> {
 
     /// Collect the BPF unwinder statistics and aggregate the per CPU values.
     pub fn collect_unwinder_stats(&self) {
-        for key in self.native_unwinder.maps().percpu_stats().keys() {
+        for key in self.native_unwinder.maps.percpu_stats.keys() {
             let per_cpu_value = self
                 .native_unwinder
-                .maps()
-                .percpu_stats()
+                .maps
+                .percpu_stats
                 .lookup_percpu(&key, MapFlags::ANY)
                 .expect("failed to lookup stats value")
                 .expect("empty stats");
@@ -654,8 +692,8 @@ impl Profiler<'_> {
         }
 
         self.native_unwinder
-            .maps()
-            .percpu_stats()
+            .maps
+            .percpu_stats
             .update_percpu(&key, &values, MapFlags::ANY)
             .expect("zero percpu_stats");
     }
@@ -675,9 +713,9 @@ impl Profiler<'_> {
         self.teardown_perf_events();
 
         let mut result = Vec::new();
-        let maps = self.native_unwinder.maps();
-        let aggregated_stacks = maps.aggregated_stacks();
-        let stacks = maps.stacks();
+        let maps = &self.native_unwinder.maps;
+        let aggregated_stacks = &maps.aggregated_stacks;
+        let stacks = &maps.stacks;
 
         let mut all_stacks_bytes = Vec::new();
         for aggregated_stack_key_bytes in aggregated_stacks.keys() {
@@ -801,8 +839,8 @@ impl Profiler<'_> {
             };
 
             let value = unsafe { plain::as_bytes(&page_value) };
-            bpf.maps()
-                .executable_to_page()
+            bpf.maps
+                .executable_to_page
                 .update(unsafe { plain::as_bytes(&page_key) }, value, MapFlags::ANY)
                 .unwrap();
         }
@@ -829,8 +867,8 @@ impl Profiler<'_> {
             // we prefer to not have to re-read the unwind information and we might attempt
             // deleting entries that are not present.
             let _ = bpf
-                .maps()
-                .executable_to_page()
+                .maps
+                .executable_to_page
                 .delete(unsafe { plain::as_bytes(&key) });
         }
     }
@@ -840,7 +878,7 @@ impl Profiler<'_> {
         key: &exec_mappings_key,
         value: &mapping_t,
     ) -> Result<(), libbpf_rs::Error> {
-        bpf.maps().exec_mappings().update(
+        bpf.maps.exec_mappings.update(
             unsafe { plain::as_bytes(key) },
             unsafe { plain::as_bytes(value) },
             MapFlags::ANY,
@@ -884,8 +922,8 @@ impl Profiler<'_> {
 
             // TODO keep track of errors
             let _ = bpf
-                .maps()
-                .exec_mappings()
+                .maps
+                .exec_mappings
                 .delete(unsafe { plain::as_bytes(&key) });
         }
     }
@@ -896,8 +934,8 @@ impl Profiler<'_> {
             0x0,
             32, // pid bits
         );
-        bpf.maps()
-            .exec_mappings()
+        bpf.maps
+            .exec_mappings
             .delete(unsafe { plain::as_bytes(&key) }) // improve error handling
     }
 
@@ -909,7 +947,8 @@ impl Profiler<'_> {
     ) -> Result<(), libbpf_rs::Error> {
         let res = bpf
             .object_mut()
-            .map_mut(format!("outer_map_{}", bucket_id))
+            .maps_mut()
+            .find(|maps| maps.name().to_string_lossy() == format!("outer_map_{}", bucket_id))
             .unwrap()
             .delete(&executable_id.to_le_bytes());
         if res.is_ok() {
@@ -961,7 +1000,8 @@ impl Profiler<'_> {
                 .unwrap();
 
                 bpf.object_mut()
-                    .map_mut(format!("outer_map_{}", bucket_id))
+                    .maps_mut()
+                    .find(|map| map.name().to_string_lossy() == format!("outer_map_{}", bucket_id))
                     .unwrap()
                     .update(
                         &executable_id.to_le_bytes(),
@@ -1427,15 +1467,9 @@ impl Profiler<'_> {
 
     pub fn set_bpf_map_info(&mut self) {
         let native_unwinder_prog_id = program_PROGRAM_NATIVE_UNWINDER;
-        let native_unwinder_prog_fd = self
-            .native_unwinder
-            .obj
-            .prog_mut("dwarf_unwind")
-            .expect("get map")
-            .as_fd()
-            .as_raw_fd();
-        let mut maps = self.native_unwinder.maps_mut();
-        let programs = maps.programs();
+        let native_unwinder_prog_fd = self.native_unwinder.progs.dwarf_unwind.as_fd().as_raw_fd();
+        let maps = &self.native_unwinder.maps;
+        let programs = &maps.programs;
         programs
             .update(
                 &native_unwinder_prog_id.to_le_bytes(),
@@ -1456,8 +1490,9 @@ impl Profiler<'_> {
         for prog_fd in prog_fds {
             let prog = self
                 .native_unwinder
-                .obj
-                .prog_mut("on_event")
+                .object_mut()
+                .progs_mut()
+                .find(|prog| prog.name() == "on_event")
                 .expect("get prog");
             let link = prog.attach_perf_event(prog_fd);
             self._links.push(link.expect("bpf link is present"));

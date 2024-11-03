@@ -1,4 +1,5 @@
 use std::fs::read_to_string;
+use std::mem::MaybeUninit;
 use std::os::raw::c_int;
 use std::path::Path;
 use std::thread;
@@ -151,7 +152,9 @@ fn tracepoints_detected() -> bool {
 
 fn check_bpf_features() -> Result<BpfFeatures> {
     let skel_builder = FeaturesSkelBuilder::default();
-    let open_skel = match skel_builder.open() {
+    let mut a = MaybeUninit::uninit();
+
+    let open_skel = match skel_builder.open(&mut a) {
         Ok(open_skel) => open_skel,
         Err(err) => return Err(SystemInfoError::ErrorDetectingBpfFeatures(err.to_string()).into()),
     };
@@ -166,7 +169,7 @@ fn check_bpf_features() -> Result<BpfFeatures> {
 
     thread::sleep(Duration::from_millis(1));
 
-    let bpf_features_bss = bpf_features.bss();
+    let bpf_features_bss = bpf_features.maps.bss_data;
     if !bpf_features_bss.feature_check_done {
         warn!("Failed to detect available bpf features");
         return Ok(BpfFeatures {
