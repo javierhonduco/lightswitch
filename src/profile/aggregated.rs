@@ -196,10 +196,7 @@ mod tests {
             kstack: None,
             count: 1,
         };
-        insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
-        ---
-        "RawAggregatedSample { pid: 1234, tid: 1235, ustack: \"[  0: 0x000000000000ffff,  1: 0x00000000deadbeef]\", kstack: \"[NONE]\", count: 1 }"
-        "###);
+        insta::assert_yaml_snapshot!(format!("{}", sample), @r#""RawAggregatedSample { pid: 1234, tid: 1235, ustack: \"[  0: 0x000000000000ffff,  1: 0x00000000deadbeef]\", kstack: \"[NONE]\", count: 1 }""#);
 
         // No user or kernel stacks
         let sample = RawAggregatedSample {
@@ -209,10 +206,7 @@ mod tests {
             kstack: None,
             count: 1,
         };
-        insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
-        ---
-        "RawAggregatedSample { pid: 1234, tid: 1235, ustack: \"[NONE]\", kstack: \"[NONE]\", count: 1 }"
-        "###);
+        insta::assert_yaml_snapshot!(format!("{}", sample), @r#""RawAggregatedSample { pid: 1234, tid: 1235, ustack: \"[NONE]\", kstack: \"[NONE]\", count: 1 }""#);
 
         // user and kernel stacks
         let mut ustack = addrs;
@@ -261,10 +255,7 @@ mod tests {
             kstack: kstack_data,
             count: 42,
         };
-        insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
-        ---
-        "RawAggregatedSample { pid: 128821, tid: 128822, ustack: \"[  0: 0x00007f7c91c82314,  1: 0x00007f7c91c4ff93,  2: 0x00007f7c91c5d8ae,  3: 0x00007f7c91c4d2c3,  4: 0x00007f7c91c45400,  5: 0x00007f7c91c10933,  6: 0x00007f7c91c38153,  7: 0x00007f7c91c331d9,  8: 0x00007f7c91dfa501,  9: 0x00007f7c91c16b05, 10: 0x00007f7c91e22038, 11: 0x00007f7c91e23fc6]\", kstack: \"[  0: 0xffffffff8749ae51,  1: 0xffffffffc04c4804,  2: 0xffffffff874ddfd0,  3: 0xffffffff874e0843,  4: 0xffffffff874e0b8a,  5: 0xffffffff8727f600,  6: 0xffffffff8727f8a7,  7: 0xffffffff87e0116e]\", count: 42 }"
-        "###);
+        insta::assert_yaml_snapshot!(format!("{}", sample), @r#""RawAggregatedSample { pid: 128821, tid: 128822, ustack: \"[  0: 0x00007f7c91c82314,  1: 0x00007f7c91c4ff93,  2: 0x00007f7c91c5d8ae,  3: 0x00007f7c91c4d2c3,  4: 0x00007f7c91c45400,  5: 0x00007f7c91c10933,  6: 0x00007f7c91c38153,  7: 0x00007f7c91c331d9,  8: 0x00007f7c91dfa501,  9: 0x00007f7c91c16b05, 10: 0x00007f7c91e22038, 11: 0x00007f7c91e23fc6]\", kstack: \"[  0: 0xffffffff8749ae51,  1: 0xffffffffc04c4804,  2: 0xffffffff874ddfd0,  3: 0xffffffff874e0843,  4: 0xffffffff874e0b8a,  5: 0xffffffff8727f600,  6: 0xffffffff8727f8a7,  7: 0xffffffff87e0116e]\", count: 42 }""#);
     }
 
     #[test]
@@ -293,10 +284,7 @@ mod tests {
             kstack: kstack_data.clone(),
             count: 128,
         };
-        insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
-        ---
-        "SymbolizedAggregatedSample { pid: 1234567, tid: 1234568, ustack: \"[  0: ufunc3,  1: ufunc2,  2: ufunc1]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 128 }"
-        "###);
+        insta::assert_yaml_snapshot!(format!("{}", sample), @r#""SymbolizedAggregatedSample { pid: 1234567, tid: 1234568, ustack: \"[  0: ufunc3,  1: ufunc2,  2: ufunc1]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 128 }""#);
 
         let ustack_data = vec![];
 
@@ -307,9 +295,6 @@ mod tests {
             kstack: kstack_data.clone(),
             count: 1001,
         };
-        insta::assert_yaml_snapshot!(format!("{}", sample), @r###"
-        ---
-        "SymbolizedAggregatedSample { pid: 98765, tid: 98766, ustack: \"[NONE]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 1001 }"
-        "###);
+        insta::assert_yaml_snapshot!(format!("{}", sample), @r#""SymbolizedAggregatedSample { pid: 98765, tid: 98766, ustack: \"[NONE]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 1001 }""#);
     }
 }
