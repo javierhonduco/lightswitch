@@ -34,34 +34,32 @@ pub struct ElfLoad {
 }
 
 #[derive(Debug)]
-pub struct ObjectFile<'a> {
-    leaked_mmap_ptr: *const Mmap,
-    object: object::File<'a>,
+pub struct ObjectFile {
+    /// Warning! `object` must always go above `mmap` to ensure it will be dropped
+    /// before. Rust guarantees that fields are dropped in the order they are defined.
+    object: object::File<'static>, // Its lifetime is tied to the `mmap` below.
+    mmap: Box<Mmap>,
     code_hash: Digest,
 }
 
-impl Drop for ObjectFile<'_> {
-    fn drop(&mut self) {
-        unsafe {
-            let _to_free = Box::from_raw(self.leaked_mmap_ptr as *mut Mmap);
-        }
-    }
-}
-
-impl ObjectFile<'_> {
+impl ObjectFile {
     pub fn new(path: &Path) -> Result<Self> {
         let file = fs::File::open(path)?;
-        let mmap = unsafe { Mmap::map(&file) }?;
-        let mmap = Box::new(mmap);
-        let leaked = Box::leak(mmap);
-        let object = object::File::parse(&**leaked)?;
+        // Rust offers no guarantees on whether a "move" is done virtually or by memcpying,
+        // so to ensure that the memory value is valid we store it in the heap.
+        // Safety: Memory mapping files can cause issues if the file is modified or unmapped.
+        let mmap = Box::new(unsafe { Mmap::map(&file) }?);
+        let object = object::File::parse(&**mmap)?;
+        // Safety: The lifetime of `object` will outlive `mmap`'s. We ensure `mmap` lives as long as
+        // `object` by defining `object` before.
+        let object =
+            unsafe { std::mem::transmute::<object::File<'_>, object::File<'static>>(object) };
         let Some(code_hash) = code_hash(&object) else {
             return Err(anyhow!("code hash is None"));
         };
-
         Ok(ObjectFile {
-            leaked_mmap_ptr: leaked as *const Mmap,
             object,
+            mmap,
             code_hash,
         })
     }
@@ -115,7 +113,7 @@ impl ObjectFile<'_> {
     }
 
     pub fn elf_load_segments(&self) -> Result<Vec<ElfLoad>> {
-        let mmap = unsafe { &**self.leaked_mmap_ptr };
+        let mmap = &**self.mmap;
 
         match FileKind::parse(mmap) {
             Ok(FileKind::Elf32) => {
