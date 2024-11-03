@@ -18,18 +18,17 @@ members = [
 memmap2 = "0.9.5"
 anyhow = "1.0.93"
 object = "0.36.5"
-# TODO: Move off this fork once all the changes we need land upstream.
-libbpf-rs = { package = "libbpf-rs-lightswitch", version = "0.23.3", features = ["static"] }
-tracing = "0.1.40"
+libbpf-rs = { version = "0.25.0-beta.0", features = ["static"] }
+tracing = "0.1.41"
 thiserror = "2.0.3"
-errno = "0.3.9"
+errno = "0.3.10"
 perf-event-open-sys = "4.0.0"
 procfs = "0.17.0"
 nix = { version = "0.29.0" }
 # workspace dev dependencies have to be defined here
 rand = "0.8.5"
 # workspace build dependencies have to be defined here
-libbpf-cargo = "0.23.3"
+libbpf-cargo = { version = "0.25.0-beta.0" }
 glob = "0.3.1"
 
 [dependencies]
@@ -37,10 +36,10 @@ gimli = "0.31.1"
 lazy_static = "1.5.0"
 plain = "0.2.3"
 page_size = "0.6.0"
-clap = { version = "4.5.20", features = ["derive", "string"] }
+clap = { version = "4.5.21", features = ["derive", "string"] }
 blazesym = "0.2.0-rc.2"
-tracing-subscriber = "0.3.18"
-inferno = "0.11.21"
+tracing-subscriber = "0.3.19"
+inferno = "0.12.0"
 primal = "0.3.3"
 prost = "0.13" # Needed to encode protocol buffers to bytes.
 reqwest = { version = "0.12", features = ["blocking"] }
