@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-lru = "0.12.4"
+lru = "0.12.5"
 nix = { workspace = true, features = ["user", "process"] }
 anyhow = { workspace = true }
 procfs = { workspace = true }
