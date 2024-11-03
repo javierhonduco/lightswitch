@@ -2,9 +2,9 @@ use lightswitch_metadata_provider::metadata_label::MetadataLabelValue;
 use lightswitch_metadata_provider::metadata_provider::{TaskKey, ThreadSafeGlobalMetadataProvider};
 use lightswitch_metadata_provider::taskname::TaskName;
 
+use lightswitch_object::kernel_gnu_build_id;
 use lightswitch_proto::profile::pprof::Label;
 use lightswitch_proto::profile::{pprof, LabelStringOrNumber, PprofBuilder};
-
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -49,20 +49,33 @@ pub fn to_pprof(
     let mut pprof = PprofBuilder::new(profile_start, profile_duration, profile_frequency_hz);
     let mut task_to_labels: HashMap<i32, Vec<Label>> = HashMap::new();
 
+    let mut kernel_start_address = 0x0;
+    let mut kernel_end_address = 0x0;
+
+    for ksym in KsymIter::from_kallsyms() {
+        if ksym.symbol_name == "_stext" {
+            kernel_start_address = ksym.start_addr;
+        }
+
+        if ksym.symbol_name == "_etext" {
+            kernel_end_address = ksym.start_addr;
+        }
+    }
+
     for sample in profile {
         let ustack = sample.ustack;
         let kstack = sample.kstack;
         let mut location_ids = Vec::new();
 
+        // Assume none come from kernel modules...
         for kframe in kstack {
-            // TODO: Add real values, read kernel build ID, etc.
             let mapping_id: u64 = pprof.add_mapping(
-                0x1000000,
-                0xFFFFFFFF,
-                0xFFFFFFFF,
+                0x0, // Placeholder executable ID as we don't know it.
+                kernel_start_address,
+                kernel_end_address,
                 0x0,
-                "[kernel]", // This is a special marker.
-                "fake_kernel_build_id",
+                "[kernel]",                                  // This is a special marker.
+                &kernel_gnu_build_id().unwrap().to_string(), // <- compute once instead
             );
 
             let mut lines = vec![];
