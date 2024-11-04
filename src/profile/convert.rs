@@ -3,12 +3,13 @@ use lightswitch_metadata_provider::metadata_provider::{TaskKey, ThreadSafeGlobal
 use lightswitch_metadata_provider::taskname::TaskName;
 
 use lightswitch_proto::profile::pprof::Label;
-use lightswitch_proto::profile::{LabelStringOrNumber, PprofBuilder};
+use lightswitch_proto::profile::{pprof, LabelStringOrNumber, PprofBuilder};
 
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::time::SystemTime;
 use tracing::{debug, error, span, Level};
 
 use crate::ksym::Ksym;
@@ -39,10 +40,13 @@ pub fn to_pprof(
     procs: &HashMap<i32, ProcessInfo>,
     objs: &HashMap<ExecutableId, ObjectFileInfo>,
     metadata_provider: &ThreadSafeGlobalMetadataProvider,
-) -> PprofBuilder {
-    // TODO: pass right duration and frequency.
-    let mut pprof = PprofBuilder::new(Duration::from_secs(5), 27);
+    profile_duration: Duration,
+    profile_frequency_hz: u64,
+) -> pprof::Profile {
+    // Not exactly when the profile session really started but works for now.
+    let profile_start = SystemTime::now();
 
+    let mut pprof = PprofBuilder::new(profile_start, profile_duration, profile_frequency_hz);
     let mut task_to_labels: HashMap<i32, Vec<Label>> = HashMap::new();
 
     for sample in profile {
@@ -161,7 +165,8 @@ pub fn to_pprof(
         });
         pprof.add_sample(location_ids, sample.count as i64, labels);
     }
-    pprof
+
+    pprof.build()
 }
 
 /// Converts a collection of symbolized aggregated profiles to their folded representation that most flamegraph renderers use.
