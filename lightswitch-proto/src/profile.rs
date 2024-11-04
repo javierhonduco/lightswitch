@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{anyhow, Result};
 
 pub struct PprofBuilder {
+    time_nanos: i64,
     duration: Duration,
     freq_in_hz: i64,
 
@@ -38,10 +39,14 @@ pub enum LabelStringOrNumber {
 }
 
 impl PprofBuilder {
-    pub fn new(duration: Duration, freq_in_hz: i64) -> Self {
+    pub fn new(profile_start: SystemTime, duration: Duration, freq_in_hz: u64) -> Self {
         Self {
+            time_nanos: profile_start
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as i64,
             duration,
-            freq_in_hz,
+            freq_in_hz: freq_in_hz as i64,
 
             known_mappings: HashMap::new(),
             mappings: Vec::new(),
@@ -274,7 +279,7 @@ impl PprofBuilder {
         label
     }
 
-    pub fn profile(mut self) -> pprof::Profile {
+    pub fn build(mut self) -> pprof::Profile {
         let sample_type = pprof::ValueType {
             r#type: self.get_or_insert_string("samples"),
             unit: self.get_or_insert_string("count"),
@@ -299,11 +304,7 @@ impl PprofBuilder {
             string_table: self.string_table,
             drop_frames: 0,
             keep_frames: 0,
-            // TODO: change this to send the time when the profile was collected.
-            time_nanos: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos() as i64,
+            time_nanos: self.time_nanos,
             duration_nanos: self.duration.as_nanos() as i64,
             period_type: Some(period_type),
             period: 1_000_000_000 / self.freq_in_hz,
@@ -324,7 +325,7 @@ mod tests {
 
     #[test]
     fn test_string_table() {
-        let mut pprof = PprofBuilder::new(Duration::from_secs(5), 27);
+        let mut pprof = PprofBuilder::new(SystemTime::now(), Duration::from_secs(5), 27);
         assert_eq!(pprof.get_or_insert_string("hi"), 1);
         assert_eq!(pprof.get_or_insert_string("salut"), 2);
         assert_eq!(pprof.string_table, vec!["", "hi", "salut"]);
@@ -337,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_mappings() {
-        let mut pprof = PprofBuilder::new(Duration::from_secs(5), 27);
+        let mut pprof = PprofBuilder::new(SystemTime::now(), Duration::from_secs(5), 27);
         assert_eq!(
             pprof.add_mapping(0, 0x100, 0x200, 0x0, "file.so", "sha256-abc"),
             1
@@ -355,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_locations() {
-        let mut pprof = PprofBuilder::new(Duration::from_secs(5), 27);
+        let mut pprof = PprofBuilder::new(SystemTime::now(), Duration::from_secs(5), 27);
         let _ = pprof.add_line("hahahaha-first-line");
         let (line, function_id) = pprof.add_line("test-line");
 
@@ -382,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_sample() {
-        let mut pprof = PprofBuilder::new(Duration::from_secs(5), 27);
+        let mut pprof = PprofBuilder::new(SystemTime::now(), Duration::from_secs(5), 27);
         let labels = vec![
             pprof.new_label("key", LabelStringOrNumber::String("value".into())),
             pprof.new_label("key", LabelStringOrNumber::Number(123, "pid".into())),
@@ -414,7 +415,7 @@ mod tests {
         use rand::Rng;
 
         let mut rng = rand::thread_rng();
-        let mut pprof = PprofBuilder::new(Duration::from_secs(5), 27);
+        let mut pprof = PprofBuilder::new(SystemTime::now(), Duration::from_secs(5), 27);
         let raw_samples = vec![
             (vec![123], 200),
             (vec![0, 20, 30, 40, 50], 900),
@@ -445,6 +446,6 @@ mod tests {
         }
 
         assert!(pprof.validate().is_ok());
-        pprof.profile();
+        pprof.build();
     }
 }

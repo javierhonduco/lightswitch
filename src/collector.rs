@@ -70,7 +70,9 @@ impl Collector for NullCollector {
 pub struct StreamingCollector {
     local_symbolizer: bool,
     pprof_ingest_url: String,
-    timeout: Duration,
+    http_client_timeout: Duration,
+    profile_duration: Duration,
+    profile_frequency_hz: u64,
     procs: HashMap<i32, ProcessInfo>,
     objs: HashMap<ExecutableId, ObjectFileInfo>,
     metadata_provider: ThreadSafeGlobalMetadataProvider,
@@ -80,12 +82,16 @@ impl StreamingCollector {
     pub fn new(
         local_symbolizer: bool,
         pprof_ingest_url: &str,
+        profile_duration: Duration,
+        profile_frequency_hz: u64,
         metadata_provider: ThreadSafeGlobalMetadataProvider,
     ) -> Self {
         Self {
             local_symbolizer,
             pprof_ingest_url: pprof_ingest_url.into(),
-            timeout: Duration::from_secs(30),
+            http_client_timeout: Duration::from_secs(30),
+            profile_duration,
+            profile_frequency_hz,
             metadata_provider,
             ..Default::default()
         }
@@ -107,14 +113,20 @@ impl Collector for StreamingCollector {
             profile = symbolize_profile(&profile, procs, objs);
         }
 
-        let pprof_builder = to_pprof(profile, procs, objs, &self.metadata_provider);
-        let pprof = pprof_builder.profile();
+        let pprof_profile = to_pprof(
+            profile,
+            procs,
+            objs,
+            &self.metadata_provider,
+            self.profile_duration,
+            self.profile_frequency_hz,
+        );
 
-        let client_builder = reqwest::blocking::Client::builder().timeout(self.timeout);
+        let client_builder = reqwest::blocking::Client::builder().timeout(self.http_client_timeout);
         let client = client_builder.build().unwrap();
         let response = client
             .post(self.pprof_ingest_url.clone())
-            .body(pprof.encode_to_vec())
+            .body(pprof_profile.encode_to_vec())
             .send();
 
         tracing::debug!("http response: {:?}", response);

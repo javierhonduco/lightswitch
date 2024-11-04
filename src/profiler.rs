@@ -6,13 +6,11 @@ use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-
-use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
-
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
+use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
 use itertools::Itertools;
 use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
@@ -88,7 +86,7 @@ pub struct Profiler<'bpf> {
     /// For how long to profile.
     duration: Duration,
     /// Per-CPU sampling frequency in Hz.
-    sample_freq: u16,
+    sample_freq: u64,
     /// Size of the perf buffer.
     perf_buffer_bytes: usize,
     /// For how long to profile until the aggregated in-kernel profiles are read.
@@ -103,8 +101,9 @@ pub struct ProfilerConfig {
     pub libbpf_debug: bool,
     pub bpf_logging: bool,
     pub duration: Duration,
-    pub sample_freq: u16,
+    pub sample_freq: u64,
     pub perf_buffer_bytes: usize,
+    pub session_duration: Duration,
     pub mapsize_info: bool,
     pub mapsize_stacks: u32,
     pub mapsize_aggregated_stacks: u32,
@@ -121,6 +120,7 @@ impl Default for ProfilerConfig {
             duration: Duration::MAX,
             sample_freq: 19,
             perf_buffer_bytes: 512 * 1024,
+            session_duration: Duration::from_secs(5),
             mapsize_info: false,
             mapsize_stacks: 100000,
             mapsize_aggregated_stacks: 10000,
@@ -314,7 +314,7 @@ impl Profiler<'_> {
             duration: profiler_config.duration,
             sample_freq: profiler_config.sample_freq,
             perf_buffer_bytes: profiler_config.perf_buffer_bytes,
-            session_duration: Duration::from_secs(5),
+            session_duration: profiler_config.session_duration,
             exclude_self: profiler_config.exclude_self,
             native_unwind_info_bucket_sizes: profiler_config.native_unwind_info_bucket_sizes,
         }
@@ -331,12 +331,11 @@ impl Profiler<'_> {
         self.profile_send.send(profile).expect("handle send");
     }
 
-    pub fn run(mut self, collector: ThreadSafeCollector) {
+    pub fn run(mut self, collector: ThreadSafeCollector) -> Duration {
         // In this case, we only want to calculate maximum sampling buffer sizes based on the
         // number of "online" CPUs, not "possible" CPUs, which they sometimes differ.
         let num_cpus = get_online_cpus().expect("get online CPUs").len() as u64;
-        let max_samples_per_session =
-            self.sample_freq as u64 * num_cpus * self.session_duration.as_secs();
+        let max_samples_per_session = self.sample_freq * num_cpus * self.session_duration.as_secs();
         if max_samples_per_session >= MAX_AGGREGATED_STACKS_ENTRIES.into() {
             warn!("samples might be lost due to too many samples in a profile session");
         }
@@ -409,6 +408,7 @@ impl Profiler<'_> {
             }
         });
 
+        let start = Instant::now();
         let total_duration_tick = tick(self.duration);
         let session_tick = tick(self.session_duration);
 
@@ -461,6 +461,8 @@ impl Profiler<'_> {
                 default(Duration::from_millis(100)) => {},
             }
         }
+
+        start.elapsed()
     }
 
     pub fn handle_process_exit(&mut self, pid: Pid) {
@@ -1440,9 +1442,8 @@ impl Profiler<'_> {
     pub fn setup_perf_events(&mut self) {
         let mut prog_fds = Vec::new();
         for i in get_online_cpus().expect("get online CPUs") {
-            let perf_fd =
-                unsafe { setup_perf_event(i.try_into().unwrap(), self.sample_freq as u64) }
-                    .expect("setup perf event");
+            let perf_fd = unsafe { setup_perf_event(i.try_into().unwrap(), self.sample_freq) }
+                .expect("setup perf event");
             prog_fds.push(perf_fd);
         }
 

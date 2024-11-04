@@ -31,7 +31,7 @@ use lightswitch::unwind_info::compact_unwind_info;
 use lightswitch::unwind_info::CompactUnwindInfoBuilder;
 use lightswitch_object::ObjectFile;
 
-const SAMPLE_FREQ_RANGE: RangeInclusive<usize> = 1..=1009;
+const SAMPLE_FREQ_RANGE: RangeInclusive<u64> = 1..=1009;
 const PPROF_INGEST_URL: &str = "http://localhost:4567/pprof/new";
 
 fn parse_duration(arg: &str) -> Result<Duration, std::num::ParseIntError> {
@@ -39,8 +39,8 @@ fn parse_duration(arg: &str) -> Result<Duration, std::num::ParseIntError> {
     Ok(Duration::from_secs(seconds))
 }
 
-fn sample_freq_in_range(s: &str) -> Result<u16, String> {
-    let sample_freq: usize = s
+fn sample_freq_in_range(s: &str) -> Result<u64, String> {
+    let sample_freq: u64 = s
         .parse()
         .map_err(|_| format!("`{s}' isn't a valid frequency"))?;
     if !SAMPLE_FREQ_RANGE.contains(&sample_freq) {
@@ -50,8 +50,8 @@ fn sample_freq_in_range(s: &str) -> Result<u16, String> {
             SAMPLE_FREQ_RANGE.end()
         ));
     }
-    if !is_prime(sample_freq.try_into().unwrap()) {
-        let ba_result = primes_before_after(sample_freq);
+    if !is_prime(sample_freq) {
+        let ba_result = primes_before_after(sample_freq as usize);
         match ba_result {
             Ok((prime_before, prime_after)) => {
                 return Err(format!(
@@ -62,7 +62,7 @@ fn sample_freq_in_range(s: &str) -> Result<u16, String> {
             Err(_) => println!("primes_before_after should not have failed"),
         }
     }
-    Ok(sample_freq as u16)
+    Ok(sample_freq)
 }
 
 // Clap value_parser() in the form of: Fn(&str) -> Result<T,E>
@@ -85,7 +85,7 @@ fn value_is_power_of_two(s: &str) -> Result<usize, String> {
 fn primes_before_after(non_prime: usize) -> Result<(usize, usize), String> {
     // If a prime number passed in, return Err
     if is_prime(non_prime.try_into().unwrap()) {
-        return Err(format!("{} IS prime", non_prime));
+        return Err(format!("{} is prime", non_prime));
     }
     // What is the count (not value) of the prime just before our non_prime?
     let n_before: usize = primal::StreamingSieve::prime_pi(non_prime);
@@ -168,7 +168,7 @@ struct Cli {
     #[arg(long, default_value_t = ProfilerConfig::default().sample_freq, value_name = "SAMPLE_FREQ_IN_HZ",
       value_parser = sample_freq_in_range,
     )]
-    sample_freq: u16,
+    sample_freq: u64,
     /// Output file for Flame Graph in SVG format
     #[arg(long, default_value_t, value_enum)]
     profile_format: ProfileFormat,
@@ -300,6 +300,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         ProfileSender::Remote => Box::new(StreamingCollector::new(
             args.symbolizer == Symbolizer::Local,
             PPROF_INGEST_URL,
+            ProfilerConfig::default().session_duration,
+            args.sample_freq,
             metadata_provider.clone(),
         )) as Box<dyn Collector + Send>,
     }));
@@ -328,7 +330,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut p: Profiler<'_> = Profiler::new(profiler_config, stop_signal_receive);
     p.profile_pids(args.pids);
-    p.run(collector.clone());
+    let profile_duration = p.run(collector.clone());
 
     let collector = collector.lock().unwrap();
     let (mut profile, procs, objs) = collector.finish();
@@ -370,9 +372,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         ProfileFormat::Pprof => {
             let mut buffer = Vec::new();
-            let proto = to_pprof(profile, procs, objs, &metadata_provider);
-            proto.validate().unwrap();
-            proto.profile().encode(&mut buffer).unwrap();
+            let pprof_profile = to_pprof(
+                profile,
+                procs,
+                objs,
+                &metadata_provider,
+                profile_duration,
+                args.sample_freq,
+            );
+            pprof_profile.encode(&mut buffer).unwrap();
             let profile_name = args.profile_name.unwrap_or_else(|| "profile.pb".into());
             let profile_path = profile_path.join(profile_name);
             let mut pprof_file = File::create(&profile_path).unwrap();
@@ -453,12 +461,10 @@ mod tests {
         let result = Cli::try_parse_from(myargs.iter());
         match result {
             Ok(config) => {
-                // println!("{:?}", config);
-                assert_eq!(config.sample_freq, desired_freq.parse::<u16>().unwrap());
+                assert_eq!(config.sample_freq, desired_freq.parse::<u64>().unwrap());
             }
             Err(err) => {
                 let actual_message = err.to_string();
-                // println!("Errored with: {}", actual_message);
                 assert!(actual_message.contains(expected_msg.as_str()));
             }
         }
@@ -466,13 +472,13 @@ mod tests {
 
     #[rstest]
     #[case(49, (47,53), "")]
-    #[case(97, (0, 0), "97 IS prime")]
+    #[case(97, (0, 0), "97 is prime")]
     #[case(100, (97,101), "")]
     #[case(398, (397,401), "")]
     #[case(500, (499,503), "")]
     #[case(1000, (997, 1009), "")]
     #[case(1001, (997, 1009), "")]
-    #[case(1009, (0, 0), "1009 IS prime")]
+    #[case(1009, (0, 0), "1009 is prime")]
     fn test_primes_before_after(
         #[case] non_prime: usize,
         #[case] expected_tuple: (usize, usize),
