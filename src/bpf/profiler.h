@@ -127,12 +127,6 @@ const volatile struct lightswitch_config_t lightswitch_config = {
     }                                                                          \
   })
 
-// The addresses of a native stack trace.
-typedef struct {
-  u64 len;
-  u64 addresses[MAX_STACK_DEPTH];
-} stack_trace_t;
-
 // Represents an executable mapping.
 typedef struct {
   u64 executable_id;
@@ -164,9 +158,10 @@ typedef struct __attribute__((packed)) {
 _Static_assert(sizeof(stack_unwind_row_t) == 8,
                "unwind row has the expected size");
 
+// The addresses of a native stack trace.
 typedef struct {
-  unsigned long long addresses[MAX_STACK_DEPTH];
-  unsigned long long len;
+  u64 len;
+  u64 addresses[MAX_STACK_DEPTH];
 } native_stack_t;
 
 typedef struct {
