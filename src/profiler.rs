@@ -65,6 +65,8 @@ impl NativeUnwindState {
 pub struct Profiler<'bpf> {
     // Prevent the links from being removed.
     _links: Vec<Link>,
+    // Prevent the map shapes from being freed.
+    _inner_unwind_info_map_shapes: Vec<MapHandle>,
     native_unwinder: ProfilerSkel<'bpf>,
     tracers: TracersSkel<'bpf>,
     procs: Arc<RwLock<HashMap<Pid, ProcessInfo>>>,
@@ -166,7 +168,9 @@ impl Profiler<'_> {
     pub fn create_unwind_info_maps(
         open_skel: &mut OpenProfilerSkel,
         native_unwind_info_bucket_sizes: &[u32],
-    ) {
+    ) -> Vec<MapHandle> {
+        let mut map_shapes = Vec::with_capacity(native_unwind_info_bucket_sizes.len());
+
         // Create the maps that hold unwind information for the native unwinder.
         for (i, native_unwind_info_bucket_size) in
             native_unwind_info_bucket_sizes.iter().enumerate()
@@ -192,9 +196,10 @@ impl Profiler<'_> {
                 .set_inner_map_fd(inner_map_shape.as_fd())
                 .expect("shoudl never fail");
 
-            // Ensure the map file descriptor won't be closed.
-            std::mem::forget(inner_map_shape);
+            map_shapes.push(inner_map_shape);
         }
+
+        map_shapes
     }
 
     pub fn set_profiler_map_sizes(
@@ -249,7 +254,7 @@ impl Profiler<'_> {
         skel_builder.obj_builder.debug(profiler_config.libbpf_debug);
         let mut open_skel = skel_builder.open().expect("open skel");
 
-        Self::create_unwind_info_maps(
+        let inner_unwind_info_map_shapes = Self::create_unwind_info_maps(
             &mut open_skel,
             &profiler_config.native_unwind_info_bucket_sizes,
         );
@@ -298,6 +303,7 @@ impl Profiler<'_> {
 
         Profiler {
             _links: Vec::new(),
+            _inner_unwind_info_map_shapes: inner_unwind_info_map_shapes,
             native_unwinder,
             tracers,
             procs: Arc::new(RwLock::new(HashMap::new())),
