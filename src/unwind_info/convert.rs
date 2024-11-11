@@ -138,11 +138,11 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                         match row.cfa() {
                             CfaRule::RegisterAndOffset { register, offset } => {
                                 if register == &RBP_X86 {
-                                    compact_row.cfa_type = CfaType::FramePointerOffset as u8;
+                                    compact_row.cfa_type = CfaType::FramePointerOffset;
                                 } else if register == &RSP_X86 {
-                                    compact_row.cfa_type = CfaType::StackPointerOffset as u8;
+                                    compact_row.cfa_type = CfaType::StackPointerOffset;
                                 } else {
-                                    compact_row.cfa_type = CfaType::UnsupportedRegisterOffset as u8;
+                                    compact_row.cfa_type = CfaType::UnsupportedRegisterOffset;
                                 }
 
                                 match u16::try_from(*offset) {
@@ -150,7 +150,7 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                                         compact_row.cfa_offset = off;
                                     }
                                     Err(_) => {
-                                        compact_row.cfa_type = CfaType::OffsetDidNotFit as u8;
+                                        compact_row.cfa_type = CfaType::OffsetDidNotFit;
                                     }
                                 }
                             }
@@ -167,29 +167,29 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                                     compact_row.cfa_offset = PltType::Plt2 as u16;
                                 }
 
-                                compact_row.cfa_type = CfaType::Expression as u8;
+                                compact_row.cfa_type = CfaType::Expression;
                             }
                         };
 
                         match row.register(RBP_X86) {
                             gimli::RegisterRule::Undefined => {}
                             gimli::RegisterRule::Offset(offset) => {
-                                compact_row.rbp_type = RbpType::CfaOffset as u8;
+                                compact_row.rbp_type = RbpType::CfaOffset;
 
                                 match i16::try_from(offset) {
                                     Ok(off) => {
                                         compact_row.rbp_offset = off;
                                     }
                                     Err(_) => {
-                                        compact_row.rbp_type = RbpType::OffsetDidNotFit as u8;
+                                        compact_row.rbp_type = RbpType::OffsetDidNotFit;
                                     }
                                 }
                             }
                             gimli::RegisterRule::Register(_reg) => {
-                                compact_row.rbp_type = RbpType::Register as u8;
+                                compact_row.rbp_type = RbpType::Register;
                             }
                             gimli::RegisterRule::Expression(_) => {
-                                compact_row.rbp_type = RbpType::Expression as u8;
+                                compact_row.rbp_type = RbpType::Expression;
                             }
                             _ => {
                                 // print!(", rbp unsupported {:?}", rbp);
@@ -199,7 +199,7 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                         if row.register(fde.cie().return_address_register())
                             == gimli::RegisterRule::Undefined
                         {
-                            compact_row.rbp_type = RbpType::UndefinedReturnAddress as u8;
+                            compact_row.rbp_type = RbpType::UndefinedReturnAddress;
                         }
                     }
                     _ => continue,
