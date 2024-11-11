@@ -13,12 +13,12 @@ members = [
 
 [workspace.dependencies]
 memmap2 = "0.9.5"
-anyhow = "1.0.92"
+anyhow = "1.0.93"
 object = "0.36.5"
 # TODO: Move to a release.
 libbpf-rs = { git = "https://github.com/libbpf/libbpf-rs", rev="4ebf2ac7cd509e9442aff9b9f92164f252adf2a3", features = ["static"] }
 tracing = "0.1.40"
-thiserror = "1.0.67"
+thiserror = "2.0.3"
 errno = "0.3.9"
 perf-event-open-sys = "4.0.0"
 procfs = "0.17.0"
@@ -35,7 +35,7 @@ lazy_static = "1.5.0"
 plain = "0.2.3"
 page_size = "0.6.0"
 clap = { version = "4.5.20", features = ["derive", "string"] }
-blazesym = "0.2.0-rc.1"
+blazesym = "0.2.0-rc.2"
 tracing-subscriber = "0.3.18"
 inferno = "0.11.21"
 primal = "0.3.3"
@@ -66,7 +66,7 @@ insta = { version = "1.41.1", features = ["yaml"] }
 rstest = "0.23.0"
 rand = { workspace = true }
 criterion = "0.5.1"
-tempfile = "3.13.0"
+tempfile = "3.14.0"
 
 [build-dependencies]
 libbpf-cargo = { workspace = true }
