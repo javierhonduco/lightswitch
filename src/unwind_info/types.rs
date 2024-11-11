@@ -1,8 +1,10 @@
 use lazy_static::lazy_static;
 
 #[repr(u8)]
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub enum CfaType {
-    // Unknown = 0,
+    #[default]
+    Unknown = 0,
     FramePointerOffset = 1,
     StackPointerOffset = 2,
     Expression = 3,
@@ -12,8 +14,10 @@ pub enum CfaType {
 }
 
 #[repr(u8)]
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub enum RbpType {
-    // Unknown = 0,
+    #[default]
+    Unknown = 0,
     CfaOffset = 1,
     Register = 2,
     Expression = 3,
@@ -31,8 +35,8 @@ pub enum PltType {
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct CompactUnwindRow {
     pub pc: u64,
-    pub cfa_type: u8,
-    pub rbp_type: u8,
+    pub cfa_type: CfaType,
+    pub rbp_type: RbpType,
     pub cfa_offset: u16,
     pub rbp_offset: i16,
 }
@@ -41,7 +45,7 @@ impl CompactUnwindRow {
     pub fn end_of_function_marker(last_addr: u64) -> CompactUnwindRow {
         CompactUnwindRow {
             pc: last_addr,
-            cfa_type: CfaType::EndFdeMarker as u8,
+            cfa_type: CfaType::EndFdeMarker,
             ..Default::default()
         }
     }

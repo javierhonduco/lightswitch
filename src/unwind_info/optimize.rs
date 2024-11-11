@@ -16,7 +16,7 @@ pub fn remove_unnecesary_markers(unwind_info: &mut Vec<CompactUnwindRow>) {
 
         if let Some(last_row_unwrapped) = last_row {
             let previous_is_redundant_marker = (last_row_unwrapped.cfa_type
-                == CfaType::EndFdeMarker as u8)
+                == CfaType::EndFdeMarker)
                 && last_row_unwrapped.pc == row.pc;
             if previous_is_redundant_marker {
                 new_i -= 1;
@@ -26,7 +26,7 @@ pub fn remove_unnecesary_markers(unwind_info: &mut Vec<CompactUnwindRow>) {
         let mut current_is_redundant_marker = false;
         if let Some(last_row_unwrapped) = last_row {
             current_is_redundant_marker =
-                (row.cfa_type == CfaType::EndFdeMarker as u8) && last_row_unwrapped.pc == row.pc;
+                (row.cfa_type == CfaType::EndFdeMarker) && last_row_unwrapped.pc == row.pc;
         }
 
         if !current_is_redundant_marker {

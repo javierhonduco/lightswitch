@@ -82,8 +82,8 @@ impl From<&CompactUnwindRow> for stack_unwind_row_t {
             // https://github.com/rust-lang/rust-bindgen/issues/923#issuecomment-2385554573
             pc_low: (row.pc & LOW_PC_MASK as u64) as u16,
             cfa_offset: row.cfa_offset,
-            cfa_type: row.cfa_type,
-            rbp_type: row.rbp_type,
+            cfa_type: row.cfa_type as u8,
+            rbp_type: row.rbp_type as u8,
             rbp_offset: row.rbp_offset,
         }
     }
