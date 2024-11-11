@@ -4,6 +4,7 @@ use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::process;
+use std::time::Instant;
 
 use tracing::debug;
 
@@ -177,9 +178,129 @@ impl ObjectFileInfo {
     }
 }
 
+use std::collections::BinaryHeap;
+
+struct DeletionScheduler {
+    heap: BinaryHeap<ToDelete>,
+}
+
+impl DeletionScheduler {
+    pub fn new() -> Self {
+        DeletionScheduler {
+            heap: BinaryHeap::new(),
+        }
+    }
+
+    pub fn add(&mut self, item: ToDelete) {
+        self.heap.push(item);
+    }
+
+    pub fn peek(&self) -> Option<&ToDelete> {
+        self.heap.peek()
+    }
+
+    pub fn pop(&mut self) -> Option<ToDelete> {
+        self.heap.pop()
+    }
+
+    pub fn pop_pending(&mut self) -> Vec<ToDelete> {
+        let mut r = Vec::new();
+
+        match self.peek() {
+            Some(ToDelete::Mapping(time, _)) | Some(ToDelete::Process(time, _)) => {
+                if time.elapsed() > Duration::from_millis(0) {
+                    r.push(self.pop().unwrap())
+                }
+            }
+            None => {}
+        }
+
+        r
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum ToDelete {
+    Mapping(Instant, u64),
+    Process(Instant, Pid),
+}
+
+impl PartialOrd for ToDelete {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ToDelete {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let a = match self {
+            ToDelete::Mapping(time, _) => time,
+            ToDelete::Process(time, _) => time,
+        };
+        let b = match other {
+            ToDelete::Mapping(time, _) => time,
+            ToDelete::Process(time, _) => time,
+        };
+        // we want a reversed comparison
+        b.cmp(a)
+    }
+}
+
+impl ToDelete {
+    pub fn from_executable_id(executable_id: u64, when: Option<Instant>) -> Self {
+        Self::Mapping(when.unwrap_or(Instant::now()), executable_id)
+    }
+
+    pub fn from_pid(pid: Pid, when: Option<Instant>) -> Self {
+        Self::Process(when.unwrap_or(Instant::now()), pid)
+    }
+}
+use std::time::Duration;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_scheduled_deletion() {
+        let mut d = DeletionScheduler::new();
+        let time = Instant::now();
+        d.add(ToDelete::Process(
+            time + Duration::from_secs(0),
+            314,
+        ));
+        d.add(ToDelete::Mapping(
+            time + Duration::from_secs(100),
+            0xC0FFEE,
+        ));
+        d.add(ToDelete::Process(
+            time + Duration::from_secs(200),
+            628,
+        ));
+
+        assert!(matches!(d.pop(), Some(ToDelete::Process(_, 314))));
+        assert!(matches!(
+            d.pop(),
+            Some(ToDelete::Mapping(_, 0xC0FFEE))
+        ));
+        assert!(matches!(d.pop(), Some(ToDelete::Process(_, 628))));
+
+        d.add(ToDelete::Process(
+            time - Duration::from_secs(5),
+            314,
+        ));
+        d.add(ToDelete::Process(
+            time + Duration::from_secs(5),
+            628,
+        ));
+        assert_eq!(
+            d.pop_pending(),
+            vec![ToDelete::Process(
+                time - Duration::from_secs(5),
+                314
+            )]
+        );
+    }
 
     /// This tests ensures that cloning an `ObjectFileInfo` succeeds to
     /// open the file even if it's been deleted. This works because we

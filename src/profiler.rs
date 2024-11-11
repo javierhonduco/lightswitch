@@ -1,4 +1,6 @@
+use std::cmp::Reverse;
 use std::collections::hash_map::Entry;
+use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::fs;
 use std::mem::size_of;
@@ -97,6 +99,8 @@ pub struct Profiler<'bpf> {
     exclude_self: bool,
     /// Sizes for the unwind information buckets.
     native_unwind_info_bucket_sizes: Vec<u32>,
+    // stuff
+    //  to_delete: BinaryHeap<ToDelete>,
 }
 
 pub struct ProfilerConfig {
@@ -323,6 +327,7 @@ impl Profiler<'_> {
             session_duration: profiler_config.session_duration,
             exclude_self: profiler_config.exclude_self,
             native_unwind_info_bucket_sizes: profiler_config.native_unwind_info_bucket_sizes,
+            //         to_delete: BinaryHeap::new(),
         }
     }
 
@@ -477,6 +482,7 @@ impl Profiler<'_> {
         match procs.get_mut(&pid) {
             Some(proc_info) => {
                 debug!("marking process {} as exited", pid);
+                //    self.to_delete.push(ToDelete::from_pid(pid));
                 proc_info.status = ProcessStatus::Exited;
 
                 // Delete process, todo track errors.
@@ -540,6 +546,8 @@ impl Profiler<'_> {
                                 .known_executables
                                 .entry(mapping.executable_id)
                             {
+                                //     self.to_delete.push(ToDelete::from_executable_id(mapping.executable_id));
+
                                 // Delete unwind info.
                                 Self::delete_bpf_pages(
                                     &self.native_unwinder,
