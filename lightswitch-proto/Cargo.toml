@@ -2,6 +2,9 @@
 name = "lightswitch-proto"
 version = "0.1.0"
 edition = "2021"
+description = "Protocol buffers wrappers for use in profiling tools"
+license = "MIT"
+repository = "https://github.com/javierhonduco/lightswitch"
 
 [dependencies]
 prost = "0.13"
