@@ -83,6 +83,8 @@
               cargo-insta
               ## Remove unused deps
               cargo-shear
+              ## Release to crates.io
+              cargo-release
               # Commented out because this is typically not cached and it's rarely used
               # ocamlPackages.magic-trace
             ];

@@ -1306,7 +1306,7 @@ dependencies = [
  "anyhow",
  "cargo_metadata",
  "clap",
- "libbpf-rs 0.23.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libbpf-rs",
  "memmap2 0.5.10",
  "regex",
  "semver",
@@ -1325,17 +1325,6 @@ dependencies = [
  "libbpf-sys",
  "libc",
  "strum_macros",
- "vsprintf",
-]
-
-[[package]]
-name = "libbpf-rs"
-version = "0.23.3"
-source = "git+https://github.com/libbpf/libbpf-rs?rev=4ebf2ac7cd509e9442aff9b9f92164f252adf2a3#4ebf2ac7cd509e9442aff9b9f92164f252adf2a3"
-dependencies = [
- "bitflags",
- "libbpf-sys",
- "libc",
  "vsprintf",
 ]
 
@@ -1386,7 +1375,7 @@ dependencies = [
  "itertools 0.13.0",
  "lazy_static",
  "libbpf-cargo",
- "libbpf-rs 0.23.3 (git+https://github.com/libbpf/libbpf-rs?rev=4ebf2ac7cd509e9442aff9b9f92164f252adf2a3)",
+ "libbpf-rs",
  "libbpf-sys",
  "lightswitch-capabilities",
  "lightswitch-metadata",
@@ -1418,7 +1407,7 @@ dependencies = [
  "errno",
  "glob",
  "libbpf-cargo",
- "libbpf-rs 0.23.3 (git+https://github.com/libbpf/libbpf-rs?rev=4ebf2ac7cd509e9442aff9b9f92164f252adf2a3)",
+ "libbpf-rs",
  "libc",
  "nix",
  "perf-event-open-sys",

@@ -2,6 +2,9 @@
 name = "lightswitch-capabilities"
 version = "0.1.0"
 edition = "2021"
+description = "Discover which BPF features are available"
+license = "MIT"
+repository = "https://github.com/javierhonduco/lightswitch"
 
 [dependencies]
 libc = "0.2.162"
@@ -11,7 +14,7 @@ libbpf-rs = { workspace = true}
 perf-event-open-sys = { workspace = true}
 errno = { workspace = true}
 tracing = { workspace = true}
-nix = { workspace = true}
+nix = { workspace = true, features = ["feature"] }
 
 [build-dependencies]
 libbpf-cargo = { workspace = true}
