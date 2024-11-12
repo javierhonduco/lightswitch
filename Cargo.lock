@@ -1418,7 +1418,7 @@ dependencies = [
  "errno",
  "glob",
  "libbpf-cargo",
- "libbpf-rs 0.23.3 (git+https://github.com/libbpf/libbpf-rs?rev=4ebf2ac7cd509e9442aff9b9f92164f252adf2a3)",
+ "libbpf-rs 0.23.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc",
  "nix",
  "perf-event-open-sys",

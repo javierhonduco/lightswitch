@@ -2,16 +2,21 @@
 name = "lightswitch-capabilities"
 version = "0.1.0"
 edition = "2021"
+description = "Discover which BPF features are available"
+license = "MIT"
+repository = "https://github.com/javierhonduco/lightswitch"
 
 [dependencies]
 libc = "0.2.162"
 anyhow = { workspace = true}
 thiserror = { workspace = true}
-libbpf-rs = { workspace = true}
+# TODO: change to the workspace version once the blocker is removed and we can upgrade
+# to a published version everywhere.
+libbpf-rs = { version = "0.23.0", features = ["static"] }
 perf-event-open-sys = { workspace = true}
 errno = { workspace = true}
 tracing = { workspace = true}
-nix = { workspace = true}
+nix = { workspace = true, features = ["feature"] }
 
 [build-dependencies]
 libbpf-cargo = { workspace = true}

@@ -2,6 +2,9 @@
 name = "lightswitch-object"
 version = "0.1.0"
 edition = "2021"
+description = "Deals with object files"
+license = "MIT"
+repository = "https://github.com/javierhonduco/lightswitch"
 
 [dependencies]
 data-encoding = "2.6.0"
