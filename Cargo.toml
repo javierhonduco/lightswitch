@@ -7,7 +7,7 @@ edition = "2021"
 members = [
     "lightswitch-proto",
     "lightswitch-capabilities",
-    "lightswitch-metadata-provider",
+    "lightswitch-metadata",
     "lightswitch-object"
 ]
 
@@ -45,7 +45,7 @@ ctrlc = "3.4.5"
 crossbeam-channel = "0.5.13"
 libbpf-sys = "1.5.0"
 itertools = "0.13.0"
-lightswitch-metadata-provider = {path = "lightswitch-metadata-provider"}
+lightswitch-metadata = {path = "lightswitch-metadata"}
 lightswitch-proto = { path = "lightswitch-proto"}
 lightswitch-capabilities = {path = "lightswitch-capabilities"}
 lightswitch-object = {path = "lightswitch-object"}

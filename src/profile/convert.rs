@@ -1,6 +1,6 @@
-use lightswitch_metadata_provider::metadata_label::MetadataLabelValue;
-use lightswitch_metadata_provider::metadata_provider::{TaskKey, ThreadSafeGlobalMetadataProvider};
-use lightswitch_metadata_provider::taskname::TaskName;
+use lightswitch_metadata::metadata_label::MetadataLabelValue;
+use lightswitch_metadata::metadata_provider::{TaskKey, ThreadSafeGlobalMetadataProvider};
+use lightswitch_metadata::taskname::TaskName;
 
 use lightswitch_proto::profile::pprof::Label;
 use lightswitch_proto::profile::{pprof, LabelStringOrNumber, PprofBuilder};

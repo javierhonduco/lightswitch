@@ -80,8 +80,8 @@ impl GlobalMetadataProvider {
         let pid = task_key.pid;
         let mut task_metadata = vec![
             MetadataLabel::from_number_value("pid".into(), task_key.tid.into(), "task-id".into()),
-            MetadataLabel::from_string_value("thread-name".into(), task_name.current_thread),
-            MetadataLabel::from_string_value("process-name".into(), task_name.main_thread),
+            MetadataLabel::from_string_value("thread.name".into(), task_name.current_thread),
+            MetadataLabel::from_string_value("process.name".into(), task_name.main_thread),
             MetadataLabel::from_number_value("pid".into(), pid.into(), "task-tgid".into()),
         ];
 
@@ -119,12 +119,12 @@ mod tests {
             labels[0].value,
             MetadataLabelValue::Number(tid.into(), "task-id".into())
         );
-        assert_eq!(labels[1].key, "thread-name");
+        assert_eq!(labels[1].key, "thread.name");
         assert_eq!(
             labels[1].value,
             MetadataLabelValue::String(expected.current_thread)
         );
-        assert_eq!(labels[2].key, "process-name");
+        assert_eq!(labels[2].key, "process.name");
         assert_eq!(
             labels[2].value,
             MetadataLabelValue::String(expected.main_thread)

@@ -12,25 +12,27 @@ pub enum SystemMetadataError {
     ErrorRetrievingSystemInfo(String),
 }
 
-fn get_kernel_release(uname: &utsname::UtsName) -> String {
-    format!(
-        "{}:{}",
-        uname.sysname().to_string_lossy(),
-        uname.release().to_string_lossy()
-    )
-}
-
 impl SystemMetadata {
     pub fn get_metadata(&self) -> Result<Vec<MetadataLabel>, SystemMetadataError> {
         let uname = utsname::uname()
             .map_err(|e| SystemMetadataError::ErrorRetrievingSystemInfo(e.desc().to_string()))?;
-        let kernel_release_label =
-            MetadataLabel::from_string_value("kernel_release".into(), get_kernel_release(&uname));
-        let machine_label = MetadataLabel::from_string_value(
-            "machine".into(),
+        let kernel_release_label = MetadataLabel::from_string_value(
+            "kernel.release".into(),
+            uname.release().to_string_lossy().to_string(),
+        );
+        let architecture_label = MetadataLabel::from_string_value(
+            "kernel.architecture".into(),
             uname.machine().to_string_lossy().to_string(),
         );
-        Ok(vec![kernel_release_label, machine_label])
+        let hostname_label = MetadataLabel::from_string_value(
+            "hostname".into(),
+            uname.nodename().to_string_lossy().to_string(),
+        );
+        Ok(vec![
+            kernel_release_label,
+            architecture_label,
+            hostname_label,
+        ])
     }
 }
 
@@ -52,24 +54,27 @@ mod tests {
         assert!(result.is_ok());
         let labels = result.unwrap();
 
-        assert_eq!(labels.len(), 2);
+        assert_eq!(labels.len(), 3);
         let kernel_release = &labels[0];
         let machine = &labels[1];
+        let hostname = &labels[2];
 
-        assert_eq!(kernel_release.key, "kernel_release");
+        assert_eq!(kernel_release.key, "kernel.release");
         assert_eq!(
             kernel_release.value,
-            MetadataLabelValue::String(format!(
-                "{}:{}",
-                expected.sysname().to_string_lossy(),
-                expected.release().to_string_lossy()
-            ))
+            MetadataLabelValue::String(expected.release().to_string_lossy().to_string())
         );
 
-        assert_eq!(machine.key, "machine");
+        assert_eq!(machine.key, "kernel.architecture");
         assert_eq!(
             machine.value,
             MetadataLabelValue::String(expected.machine().to_string_lossy().to_string())
+        );
+
+        assert_eq!(hostname.key, "hostname");
+        assert_eq!(
+            hostname.value,
+            MetadataLabelValue::String(expected.nodename().to_string_lossy().to_string())
         );
     }
 }

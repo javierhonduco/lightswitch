@@ -1389,7 +1389,7 @@ dependencies = [
  "libbpf-rs 0.23.3 (git+https://github.com/libbpf/libbpf-rs?rev=4ebf2ac7cd509e9442aff9b9f92164f252adf2a3)",
  "libbpf-sys",
  "lightswitch-capabilities",
- "lightswitch-metadata-provider",
+ "lightswitch-metadata",
  "lightswitch-object",
  "lightswitch-proto",
  "memmap2 0.9.5",
@@ -1427,7 +1427,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lightswitch-metadata-provider"
+name = "lightswitch-metadata"
 version = "0.1.0"
 dependencies = [
  "anyhow",
