@@ -13,7 +13,7 @@ use crate::profile::RawAggregatedProfile;
 use crate::profile::{symbolize_profile, to_pprof};
 use lightswitch_object::ExecutableId;
 
-use lightswitch_metadata_provider::metadata_provider::ThreadSafeGlobalMetadataProvider;
+use lightswitch_metadata::metadata_provider::ThreadSafeGlobalMetadataProvider;
 
 pub trait Collector {
     fn collect(

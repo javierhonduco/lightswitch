@@ -11,7 +11,7 @@ use clap::Parser;
 use crossbeam_channel::bounded;
 use inferno::flamegraph;
 use lightswitch::collector::{AggregatorCollector, Collector, NullCollector, StreamingCollector};
-use lightswitch_metadata_provider::metadata_provider::GlobalMetadataProvider;
+use lightswitch_metadata::metadata_provider::GlobalMetadataProvider;
 use nix::unistd::Uid;
 use prost::Message;
 use tracing::{error, info, Level};
@@ -19,7 +19,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
 use lightswitch_capabilities::system_info::SystemInfo;
-use lightswitch_metadata_provider::metadata_provider::ThreadSafeGlobalMetadataProvider;
+use lightswitch_metadata::metadata_provider::ThreadSafeGlobalMetadataProvider;
 
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::{fold_profile, to_pprof};
