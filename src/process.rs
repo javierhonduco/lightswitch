@@ -167,7 +167,7 @@ impl ObjectFileInfo {
         let offset = virtual_address - mapping.start_addr + mapping.offset;
 
         for segment in &self.elf_load_segments {
-            let address_range = segment.p_vaddr..(segment.p_vaddr + segment.p_memsz);
+            let address_range = segment.p_vaddr..(segment.p_vaddr + segment.p_filesz);
             if address_range.contains(&offset) {
                 return Some(offset - segment.p_offset + segment.p_vaddr);
             }
@@ -244,7 +244,7 @@ mod tests {
         object_file_info.elf_load_segments = vec![ElfLoad {
             p_offset: 0x1,
             p_vaddr: 0x0,
-            p_memsz: 0x20,
+            p_filesz: 0x20,
         }];
         assert_eq!(
             object_file_info.normalized_address(0x110, &mapping),
@@ -254,7 +254,7 @@ mod tests {
         object_file_info.elf_load_segments = vec![ElfLoad {
             p_offset: 0x0,
             p_vaddr: 0x0,
-            p_memsz: 0x5,
+            p_filesz: 0x5,
         }];
         assert!(object_file_info
             .normalized_address(0x110, &mapping)
