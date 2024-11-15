@@ -158,6 +158,10 @@
           packages = rec {
             default = test-cpp-progs;
             cpp-progs = test-cpp-progs;
+            go-progs = test-go;
+            cgo-progs = test-cgo;
+            static-musl-cpp-progs = test-static-musl-cpp-progs;
+            f77-progs = test-f77-progs;
           };
         }
       );
