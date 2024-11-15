@@ -30,7 +30,7 @@ pub type ExecutableId = u64;
 pub struct ElfLoad {
     pub p_offset: u64,
     pub p_vaddr: u64,
-    pub p_memsz: u64,
+    pub p_filesz: u64,
 }
 
 #[derive(Debug)]
@@ -127,7 +127,7 @@ impl ObjectFile {
                         elf_loads.push(ElfLoad {
                             p_offset: segment.p_offset(endian) as u64,
                             p_vaddr: segment.p_vaddr(endian) as u64,
-                            p_memsz: segment.p_memsz(endian) as u64,
+                            p_filesz: segment.p_filesz(endian) as u64,
                         });
                     }
                 }
@@ -144,7 +144,7 @@ impl ObjectFile {
                         elf_loads.push(ElfLoad {
                             p_offset: segment.p_offset(endian),
                             p_vaddr: segment.p_vaddr(endian),
-                            p_memsz: segment.p_memsz(endian),
+                            p_filesz: segment.p_filesz(endian),
                         });
                     }
                 }
