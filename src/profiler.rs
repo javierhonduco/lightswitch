@@ -132,7 +132,10 @@ impl Default for ProfilerConfig {
             mapsize_aggregated_stacks: 10000,
             mapsize_rate_limits: 5000,
             exclude_self: false,
-            native_unwind_info_bucket_sizes: vec![1_000, 10_000, 50_000, 100_000, 1_500_000],
+            native_unwind_info_bucket_sizes: vec![
+                1_000, 10_000, 20_000, 40_000, 80_000, 160_000, 320_000, 640_000, 1_280_000,
+                2_560_000, 3_840_000, 5_120_000, 7_680_000,
+            ],
         }
     }
 }

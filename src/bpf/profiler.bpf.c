@@ -34,43 +34,32 @@ struct {
   __type(value, unwind_state_t);
 } heap SEC(".maps");
 
-// Maps to store unwind information. We have an 'outer' map for every
-// bucket size we have. The bucket capacities are defined in userspace
-// and they'll determine how many unwind entries fit in every bucket.
-struct {
-  __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
-  __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);
-  __type(key, u64);
-  __type(value, u32);
-} outer_map_0 SEC(".maps");
 
-struct {
-  __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
-  __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);
-  __type(key, u64);
-  __type(value, u32);
-} outer_map_1 SEC(".maps");
+// Maps to store unwind information. There are 'outer' maps for every
+// bucket size. The bucket sizes are defined in userspace and they'll
+// determine how many unwind entries fit in the 'inner' BPF array maps
 
-struct {
-  __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
-  __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);
-  __type(key, u64);
-  __type(value, u32);
-} outer_map_2 SEC(".maps");
+#define NEW_OUTER_MAP(__map_id)                         \
+  struct {                                              \
+    __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);            \
+    __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);  \
+    __type(key, u64);                                   \
+    __type(value, u32);                                 \
+  } outer_map_##__map_id SEC(".maps");
 
-struct {
-  __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
-  __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);
-  __type(key, u64);
-  __type(value, u32);
-} outer_map_3 SEC(".maps");
-
-struct {
-  __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
-  __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);
-  __type(key, u64);
-  __type(value, u32);
-} outer_map_4 SEC(".maps");
+NEW_OUTER_MAP(0);
+NEW_OUTER_MAP(1);
+NEW_OUTER_MAP(2);
+NEW_OUTER_MAP(3);
+NEW_OUTER_MAP(4);
+NEW_OUTER_MAP(5);
+NEW_OUTER_MAP(6);
+NEW_OUTER_MAP(7);
+NEW_OUTER_MAP(8);
+NEW_OUTER_MAP(9);
+NEW_OUTER_MAP(10);
+NEW_OUTER_MAP(11);
+NEW_OUTER_MAP(12);
 
 struct {
   __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
@@ -151,6 +140,22 @@ void* find_map_for_bucket(u32 bucket_id) {
     outer_map = &outer_map_3;
   } else if (bucket_id == 4) {
     outer_map = &outer_map_4;
+  } else if (bucket_id == 5) {
+    outer_map = &outer_map_5;
+  } else if (bucket_id == 6) {
+    outer_map = &outer_map_6;
+  } else if (bucket_id == 7) {
+    outer_map = &outer_map_7;
+  } else if (bucket_id == 8) {
+    outer_map = &outer_map_8;
+  } else if (bucket_id == 9) {
+    outer_map = &outer_map_9;
+  } else if (bucket_id == 10) {
+    outer_map = &outer_map_10;
+  } else if (bucket_id == 11) {
+    outer_map = &outer_map_11;
+  } else if (bucket_id == 12) {
+    outer_map = &outer_map_12;
   }
 
   return outer_map;
