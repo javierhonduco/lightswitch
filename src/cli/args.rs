@@ -42,6 +42,14 @@ pub(crate) enum Symbolizer {
     None,
 }
 
+#[derive(PartialEq, clap::ValueEnum, Debug, Clone, Default)]
+pub(crate) enum DebugInfo {
+    #[default]
+    None,
+    Copy,
+    Backend,
+}
+
 #[derive(Parser, Debug)]
 pub(crate) struct CliArgs {
     /// Specific PIDs to profile
@@ -126,4 +134,6 @@ pub(crate) struct CliArgs {
     pub(crate) exclude_self: bool,
     #[arg(long, default_value_t, value_enum)]
     pub(crate) symbolizer: Symbolizer,
+    #[arg(long, default_value_t, value_enum)]
+    pub(crate) debug_info: DebugInfo,
 }
