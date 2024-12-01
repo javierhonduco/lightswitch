@@ -41,6 +41,7 @@ struct {
   __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
   __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);
   __type(key, u64);
+  __uint(map_flags, BPF_F_NO_PREALLOC);
   __type(value, u32);
 } outer_map_0 SEC(".maps");
 
@@ -48,6 +49,7 @@ struct {
   __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
   __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);
   __type(key, u64);
+  __uint(map_flags, BPF_F_NO_PREALLOC);
   __type(value, u32);
 } outer_map_1 SEC(".maps");
 

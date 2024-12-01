@@ -1,10 +1,11 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fs;
+use std::io::{Read, Write};
 use std::mem::size_of;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -20,6 +21,7 @@ use libbpf_rs::MapHandle;
 use libbpf_rs::MapType;
 use libbpf_rs::{Link, MapFlags, PerfBufferBuilder};
 use procfs;
+use reqwest::StatusCode;
 use tracing::{debug, error, info, span, warn, Level};
 
 use crate::bpf::profiler_bindings::*;
@@ -37,7 +39,7 @@ use crate::unwind_info::compact_unwind_info;
 use crate::unwind_info::log_unwind_info_sections;
 use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::{get_online_cpus, summarize_address_range};
-use lightswitch_object::{ExecutableId, ObjectFile};
+use lightswitch_object::{BuildId, ExecutableId, ObjectFile};
 
 pub enum TracerEvent {
     ProcessExit(Pid),
@@ -97,6 +99,155 @@ pub struct Profiler<'bpf> {
     exclude_self: bool,
     /// Sizes for the unwind information buckets.
     native_unwind_info_bucket_sizes: Vec<u32>,
+    /// Deals with debug information
+    debug_info_manager: Box<dyn DebugInfoManager>,
+}
+
+pub trait DebugInfoManager {
+    fn add_if_not_present(
+        &self,
+        build_id: &BuildId,
+        executable_id: ExecutableId,
+        file: &mut std::fs::File,
+    ) -> anyhow::Result<()>;
+    fn debug_info_path(&self) -> Option<PathBuf>;
+}
+
+struct DebugInfoNullBackend {}
+
+impl DebugInfoManager for DebugInfoNullBackend {
+    fn add_if_not_present(
+        &self,
+        build_id: &BuildId,
+        executable_id: ExecutableId,
+        file: &mut std::fs::File,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn debug_info_path(&self) -> Option<PathBuf> {
+        None
+    }
+}
+
+struct DebugInfoFilesystemBackend {
+    path: PathBuf,
+}
+
+impl DebugInfoManager for DebugInfoFilesystemBackend {
+    fn add_if_not_present(
+        &self,
+        build_id: &BuildId,
+        executable_id: ExecutableId,
+        file: &mut std::fs::File,
+    ) -> anyhow::Result<()> {
+        // try to find, else extract
+        if self.find_in_fs(build_id) {
+            return Ok(());
+        }
+
+        self.add_to_fs(build_id, executable_id, file)
+    }
+
+    fn debug_info_path(&self) -> Option<PathBuf> {
+        Some(PathBuf::from("/"))
+    }
+}
+
+impl DebugInfoFilesystemBackend {
+    fn find_in_fs(&self, build_id: &BuildId) -> bool {
+        self.path.join(build_id.to_string()).exists()
+    }
+
+    fn add_to_fs(
+        &self,
+        build_id: &BuildId,
+        executable_id: ExecutableId,
+        file: &mut std::fs::File,
+    ) -> anyhow::Result<()> {
+        // TODO: add support for other methods, such as hardlinks, etc.
+        let mut writer = std::fs::File::create(self.path.join(build_id.to_string()))?;
+        std::io::copy(file, &mut writer)?;
+        Ok(())
+    }
+}
+
+const DEFAULT_DEBUG_INFO_URL: &str = "http://localhost:4567";
+
+struct DebugInfoStoreBackend {
+    http_client_timeout: Duration,
+    debug_info_url: String,
+}
+
+impl DebugInfoManager for DebugInfoStoreBackend {
+    // find(executableId) ->
+    // - check local fs (local mode) -> Path
+    // - ask debug info -> store in local fs (local mode + debuginfod) -> Path
+    // - ask server (continuous profiling mode) -> Ok()
+    // add(openFile, executableId)
+    // - if debuginfo! extract and upload
+
+    // probably should be done async in a thread?
+    fn add_if_not_present(
+        &self,
+        build_id: &BuildId,
+        executable_id: ExecutableId,
+        file: &mut std::fs::File,
+    ) -> anyhow::Result<()> {
+        // try to find, else extract
+        if self.find_in_backend(build_id) {
+            return Ok(());
+        }
+
+        self.upload_to_backend(build_id, executable_id, file)?;
+        Ok(())
+    }
+
+    fn debug_info_path(&self) -> Option<PathBuf> {
+        Some(PathBuf::from("/"))
+    }
+}
+
+impl DebugInfoStoreBackend {
+    /// Whether the backend knows about some debug information.
+    fn find_in_backend(&self, build_id: &BuildId) -> bool {
+        let client_builder = reqwest::blocking::Client::builder().timeout(self.http_client_timeout);
+        let client = client_builder.build().unwrap();
+        let response = client
+            .get(format!(
+                "{}/debuginfo/{}",
+                self.debug_info_url.clone(),
+                build_id
+            ))
+            .send();
+
+        response.unwrap().status() == StatusCode::OK
+    }
+
+    /// Send the debug information to the backend.
+    fn upload_to_backend(
+        &self,
+        build_id: &BuildId,
+        executable_id: ExecutableId,
+        file: &mut std::fs::File,
+    ) -> anyhow::Result<()> {
+        let client_builder = reqwest::blocking::Client::builder().timeout(self.http_client_timeout);
+        let client = client_builder.build().unwrap();
+        let mut debug_info = String::new();
+        file.read_to_string(&mut debug_info).unwrap();
+
+        let response = client
+            .post(format!(
+                "{}/debuginfoadd/{}/{}",
+                self.debug_info_url.clone(),
+                build_id,
+                executable_id
+            ))
+            .body(debug_info)
+            .send()?;
+        println!("wrote debug info to server {:?}", response);
+        Ok(())
+    }
 }
 
 pub struct ProfilerConfig {
@@ -323,6 +474,11 @@ impl Profiler<'_> {
             session_duration: profiler_config.session_duration,
             exclude_self: profiler_config.exclude_self,
             native_unwind_info_bucket_sizes: profiler_config.native_unwind_info_bucket_sizes,
+            debug_info_manager: Box::new(DebugInfoFilesystemBackend {
+                /*     http_client_timeout: Duration::from_millis(500),
+                debug_info_url: DEFAULT_DEBUG_INFO_URL.into(), */
+                path: PathBuf::from("/tmp/debuginfo-tmp"),
+            }),
         }
     }
 
@@ -451,7 +607,7 @@ impl Profiler<'_> {
                 recv(self.new_proc_chan_receive) -> read => {
                         if let Ok(event) = read {
                             if event.type_ == event_type_EVENT_NEW_PROCESS {
-                                self.event_new_proc(event.pid);
+                                self.event_new_proc(event.pid); // new hame?
                                 // Ensure we only remove the rate limits only if the above works.
                                 // This is probably suited for a batched operation.
                                 // let _ = self
@@ -1074,7 +1230,6 @@ impl Profiler<'_> {
                 },
             });
 
-            // This is not released (see note "deadlock")
             let object_files = self.object_files.read().unwrap();
             let executable = object_files.get(&mapping.executable_id).unwrap();
             let executable_path = executable.open_file_path();
@@ -1250,7 +1405,7 @@ impl Profiler<'_> {
 
                     // We want to open the file as quickly as possible to minimise the chances of races
                     // if the file is deleted.
-                    let file = match fs::File::open(&abs_path) {
+                    let mut file = match fs::File::open(&abs_path) {
                         Ok(f) => f,
                         Err(e) => {
                             debug!("failed to open file {} due to {:?}", abs_path, e);
@@ -1312,6 +1467,18 @@ impl Profiler<'_> {
                         main_exec,
                         soft_delete: false,
                     });
+
+                    // If the object file has debug info, add it to our store.
+                    if object_file.has_debug_info() {
+                        let res = self.debug_info_manager.add_if_not_present(
+                            &build_id,
+                            executable_id,
+                            &mut file,
+                        );
+                        debug!("debug info manager add result {:?}", res);
+                    } else {
+                        debug!("could not find debug information for {}", abs_path);
+                    }
 
                     match object_files.entry(executable_id) {
                         Entry::Vacant(entry) => match object_file.elf_load_segments() {
