@@ -30,6 +30,8 @@ use crate::bpf::profiler_skel::{OpenProfilerSkel, ProfilerSkel, ProfilerSkelBuil
 use crate::bpf::tracers_bindings::*;
 use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
+use crate::debug_info::DebugInfoManager;
+use crate::debug_info::DebugInfoNullBackend;
 use crate::perf_events::setup_perf_event;
 use crate::process::{
     ExecutableMapping, ExecutableMappingType, ExecutableMappings, ObjectFileInfo, Pid, ProcessInfo,
@@ -101,6 +103,8 @@ pub struct Profiler {
     exclude_self: bool,
     /// Sizes for the unwind information buckets.
     native_unwind_info_bucket_sizes: Vec<u32>,
+    /// Deals with debug information
+    debug_info_manager: Box<dyn DebugInfoManager>,
 }
 
 pub struct ProfilerConfig {
@@ -116,6 +120,7 @@ pub struct ProfilerConfig {
     pub mapsize_rate_limits: u32,
     pub exclude_self: bool,
     pub native_unwind_info_bucket_sizes: Vec<u32>,
+    pub debug_info_manager: Box<dyn DebugInfoManager>,
 }
 
 impl Default for ProfilerConfig {
@@ -136,6 +141,7 @@ impl Default for ProfilerConfig {
                 1_000, 10_000, 20_000, 40_000, 80_000, 160_000, 320_000, 640_000, 1_280_000,
                 2_560_000, 3_840_000, 5_120_000, 7_680_000,
             ],
+            debug_info_manager: Box::new(DebugInfoNullBackend {}),
         }
     }
 }
@@ -359,6 +365,7 @@ impl Profiler {
             session_duration: profiler_config.session_duration,
             exclude_self: profiler_config.exclude_self,
             native_unwind_info_bucket_sizes: profiler_config.native_unwind_info_bucket_sizes,
+            debug_info_manager: profiler_config.debug_info_manager,
         }
     }
 
@@ -1117,7 +1124,6 @@ impl Profiler {
                 },
             });
 
-            // This is not released (see note "deadlock")
             let object_files = self.object_files.read().unwrap();
             let executable = object_files.get(&mapping.executable_id).unwrap();
             let executable_path = executable.open_file_path();
@@ -1293,7 +1299,7 @@ impl Profiler {
 
                     // We want to open the file as quickly as possible to minimise the chances of races
                     // if the file is deleted.
-                    let file = match fs::File::open(&abs_path) {
+                    let mut file = match fs::File::open(&abs_path) {
                         Ok(f) => f,
                         Err(e) => {
                             debug!("failed to open file {} due to {:?}", abs_path, e);
@@ -1355,6 +1361,18 @@ impl Profiler {
                         main_exec,
                         soft_delete: false,
                     });
+
+                    // If the object file has debug info, add it to our store.
+                    if object_file.has_debug_info() {
+                        let res = self.debug_info_manager.add_if_not_present(
+                            &build_id,
+                            executable_id,
+                            &mut file,
+                        );
+                        debug!("debug info manager add result {:?}", res);
+                    } else {
+                        debug!("could not find debug information for {}", abs_path);
+                    }
 
                     match object_files.entry(executable_id) {
                         Entry::Vacant(entry) => match object_file.elf_load_segments() {
