@@ -6,11 +6,13 @@ use std::io::Write;
 use std::panic;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use clap::Parser;
 use crossbeam_channel::bounded;
 use inferno::flamegraph;
 use lightswitch::collector::{AggregatorCollector, Collector, NullCollector, StreamingCollector};
+use lightswitch::debug_info::DebugInfoManager;
 use lightswitch_metadata::metadata_provider::GlobalMetadataProvider;
 use nix::unistd::Uid;
 use prost::Message;
@@ -21,6 +23,9 @@ use tracing_subscriber::FmtSubscriber;
 use lightswitch_capabilities::system_info::SystemInfo;
 use lightswitch_metadata::metadata_provider::ThreadSafeGlobalMetadataProvider;
 
+use lightswitch::debug_info::{
+    DebugInfoFilesystemBackend, DebugInfoNullBackend, DebugInfoRemoteBackend,
+};
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::{fold_profile, to_pprof};
 use lightswitch::profiler::{Profiler, ProfilerConfig};
@@ -32,12 +37,13 @@ mod args;
 mod validators;
 
 use crate::args::CliArgs;
+use crate::args::DebugInfo;
 use crate::args::LoggingLevel;
 use crate::args::ProfileFormat;
 use crate::args::ProfileSender;
 use crate::args::Symbolizer;
 
-const DEFAULT_PPROF_INGEST_URL: &str = "http://localhost:4567/pprof/new";
+const DEFAULT_SERVER_URL: &str = "http://localhost:4567";
 
 /// Exit the main thread if any thread panics. We prefer this behaviour because pretty much every
 /// thread is load bearing for the correct functioning.
@@ -98,24 +104,34 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    let server_url = args.server_url.unwrap_or(DEFAULT_SERVER_URL.into());
+
     let metadata_provider: ThreadSafeGlobalMetadataProvider =
         Arc::new(Mutex::new(GlobalMetadataProvider::default()));
 
-    let collector = Arc::new(Mutex::new(match args.sender {
-        ProfileSender::None => Box::new(NullCollector::new()) as Box<dyn Collector + Send>,
-        ProfileSender::LocalDisk => {
-            Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
-        }
-        ProfileSender::Remote => Box::new(StreamingCollector::new(
-            args.symbolizer == Symbolizer::Local,
-            args.server_url
-                .as_ref()
-                .map_or(DEFAULT_PPROF_INGEST_URL, |v| v),
-            ProfilerConfig::default().session_duration,
-            args.sample_freq,
-            metadata_provider.clone(),
-        )) as Box<dyn Collector + Send>,
-    }));
+    let collector: Arc<Mutex<Box<dyn Collector + Send>>> =
+        Arc::new(Mutex::new(match args.sender {
+            ProfileSender::None => Box::new(NullCollector::new()),
+            ProfileSender::LocalDisk => Box::new(AggregatorCollector::new()),
+            ProfileSender::Remote => Box::new(StreamingCollector::new(
+                args.symbolizer == Symbolizer::Local,
+                &server_url,
+                ProfilerConfig::default().session_duration,
+                args.sample_freq,
+                metadata_provider.clone(),
+            )),
+        }));
+
+    let debug_info_manager: Box<dyn DebugInfoManager> = match args.debug_info {
+        DebugInfo::None => Box::new(DebugInfoNullBackend {}),
+        DebugInfo::Copy => Box::new(DebugInfoFilesystemBackend {
+            path: PathBuf::from("/tmp"),
+        }),
+        DebugInfo::Backend => Box::new(DebugInfoRemoteBackend {
+            http_client_timeout: Duration::from_millis(500),
+            server_url,
+        }),
+    };
 
     let profiler_config = ProfilerConfig {
         libbpf_debug: args.libbpf_debug,
@@ -128,6 +144,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         mapsize_aggregated_stacks: args.mapsize_aggregated_stacks,
         mapsize_rate_limits: args.mapsize_rate_limits,
         exclude_self: args.exclude_self,
+        debug_info_manager,
         ..Default::default()
     };
 
@@ -260,7 +277,7 @@ mod tests {
         cmd.arg("--help");
         cmd.assert().success();
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
-        insta::assert_yaml_snapshot!(actual, @r#""Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-debug\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --profile-path <PROFILE_PATH>\n          Path for the generated profile\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n          \n          [default: local-disk]\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n\n      --server-url <SERVER_URL>\n          \n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-stacks <MAPSIZE_STACKS>\n          max number of individual stacks to capture before aggregation\n          \n          [default: 100000]\n\n      --mapsize-aggregated-stacks <MAPSIZE_AGGREGATED_STACKS>\n          max number of unique stacks after aggregation\n          \n          [default: 10000]\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          max number of rate limit entries\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n      --symbolizer <SYMBOLIZER>\n          [default: local]\n          [possible values: local, none]\n\n  -h, --help\n          Print help (see a summary with '-h')\n""#);
+        insta::assert_yaml_snapshot!(actual, @r#""Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-debug\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --profile-path <PROFILE_PATH>\n          Path for the generated profile\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n          \n          [default: local-disk]\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n\n      --server-url <SERVER_URL>\n          \n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-stacks <MAPSIZE_STACKS>\n          max number of individual stacks to capture before aggregation\n          \n          [default: 100000]\n\n      --mapsize-aggregated-stacks <MAPSIZE_AGGREGATED_STACKS>\n          max number of unique stacks after aggregation\n          \n          [default: 10000]\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          max number of rate limit entries\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n      --symbolizer <SYMBOLIZER>\n          [default: local]\n          [possible values: local, none]\n\n      --debug-info <DEBUG_INFO>\n          [default: none]\n          [possible values: none, copy, backend]\n\n  -h, --help\n          Print help (see a summary with '-h')\n""#);
     }
 
     #[rstest]
