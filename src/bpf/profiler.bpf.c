@@ -182,13 +182,13 @@ find_page(mapping_t *mapping, u64 object_relative_pc, u64 *left, u64 *right) {
     void *inner_map = bpf_map_lookup_elem(outer_map, &mapping->executable_id);
     if (inner_map != NULL) {
       *left = found_page->left;
-      *right = found_page->size;
+      *right = found_page->size; // check if this is really the size or what
       return inner_map;
     }
   }
 
   LOG("[error] could not find page");
-  bump_unwind_error_chunk_not_found();
+  bump_unwind_error_chunk_not_found(); // bad name!!
   return NULL;
 }
 

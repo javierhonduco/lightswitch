@@ -111,7 +111,7 @@ mod tests {
 
         for address_range in summarize_address_range(mapping1.begin, mapping1.end - 1) {
             let key =
-                exec_mappings_key::new(510530, address_range.addr, 32 + address_range.prefix_len);
+                exec_mappings_key::new(510530, address_range.addr, address_range.prefix_len);
             map.update(
                 unsafe { plain::as_bytes(&key) },
                 unsafe { plain::as_bytes(&mapping1) },
@@ -122,7 +122,7 @@ mod tests {
 
         for address_range in summarize_address_range(mapping2.begin, mapping2.end - 1) {
             let key =
-                exec_mappings_key::new(510530, address_range.addr, 32 + address_range.prefix_len);
+                exec_mappings_key::new(510530, address_range.addr, address_range.prefix_len);
             map.update(
                 unsafe { plain::as_bytes(&key) },
                 unsafe { plain::as_bytes(&mapping2) },
@@ -131,7 +131,7 @@ mod tests {
             .unwrap();
         }
 
-        let mut key = exec_mappings_key::new(510530, 0x0, 32 + 64);
+        let mut key = exec_mappings_key::new(510530, 0x0, 64);
 
         // Test non existent key.
         key.data = (0x0_u64).to_be();

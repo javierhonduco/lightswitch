@@ -889,9 +889,7 @@ impl Profiler {
     }
 
     fn add_bpf_process(bpf: &ProfilerSkel, pid: Pid) -> Result<(), libbpf_rs::Error> {
-        let key = exec_mappings_key::new(
-            pid as u32, 0x0, 32, // pid bits
-        );
+        let key = exec_mappings_key::new_process(pid);
         Self::add_bpf_mapping(bpf, &key, &mapping_t::default())?;
         Ok(())
     }
@@ -903,11 +901,7 @@ impl Profiler {
     ) -> Result<(), libbpf_rs::Error> {
         for mapping in mappings {
             for address_range in summarize_address_range(mapping.begin, mapping.end - 1) {
-                let key = exec_mappings_key::new(
-                    pid as u32,
-                    address_range.addr,
-                    32 + address_range.prefix_len,
-                );
+                let key = exec_mappings_key::new(pid, address_range.addr, address_range.prefix_len);
 
                 Self::add_bpf_mapping(bpf, &key, mapping)?
             }
@@ -917,11 +911,7 @@ impl Profiler {
 
     fn delete_bpf_mappings(bpf: &ProfilerSkel, pid: Pid, mapping_begin: u64, mapping_end: u64) {
         for address_range in summarize_address_range(mapping_begin, mapping_end - 1) {
-            let key = exec_mappings_key::new(
-                pid as u32,
-                address_range.addr,
-                32 + address_range.prefix_len,
-            );
+            let key = exec_mappings_key::new(pid, address_range.addr, address_range.prefix_len);
 
             // TODO keep track of errors
             let _ = bpf
@@ -932,11 +922,7 @@ impl Profiler {
     }
 
     fn delete_bpf_process(bpf: &ProfilerSkel, pid: Pid) -> Result<(), libbpf_rs::Error> {
-        let key = exec_mappings_key::new(
-            pid.try_into().unwrap(),
-            0x0,
-            32, // pid bits
-        );
+        let key = exec_mappings_key::new_process(pid);
         bpf.maps
             .exec_mappings
             .delete(unsafe { plain::as_bytes(&key) }) // improve error handling
