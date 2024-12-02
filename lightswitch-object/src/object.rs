@@ -39,7 +39,6 @@ pub struct ObjectFile {
     /// before. Rust guarantees that fields are dropped in the order they are defined.
     object: object::File<'static>, // Its lifetime is tied to the `mmap` below.
     mmap: Box<Mmap>,
-    code_hash: Digest,
 }
 
 impl ObjectFile {
@@ -54,21 +53,13 @@ impl ObjectFile {
         // `object` by defining `object` before.
         let object =
             unsafe { std::mem::transmute::<object::File<'_>, object::File<'static>>(object) };
-        let Some(code_hash) = code_hash(&object) else {
-            return Err(anyhow!("code hash is None"));
-        };
-        Ok(ObjectFile {
-            object,
-            mmap,
-            code_hash,
-        })
+
+        Ok(ObjectFile { object, mmap })
     }
 
-    /// Returns an identifier for the executable using the first 8 bytes of the Sha256 of the code section.
+    /// Returns an identifier for the executable using the first 8 bytes of the build id.
     pub fn id(&self) -> Result<ExecutableId> {
-        let mut buffer = [0; 8];
-        let _ = self.code_hash.as_ref().read(&mut buffer)?;
-        Ok(u64::from_ne_bytes(buffer))
+        Ok(u64::from_ne_bytes(self.build_id()?.bytes().try_into()?))
     }
 
     /// Returns the executable build ID if present. If no GNU build ID and no Go build ID
@@ -77,11 +68,12 @@ impl ObjectFile {
         let object = &self.object;
         let gnu_build_id = object.build_id()?;
 
+        // Most GCC and Clang compiled binaries.
         if let Some(data) = gnu_build_id {
             return Ok(BuildId::gnu_from_bytes(data));
         }
 
-        // Golang (the Go toolchain does not interpret these bytes as we do).
+        // Golang.
         for section in object.sections() {
             if section.name()? == ".note.go.buildid" {
                 if let Ok(data) = section.data() {
@@ -91,7 +83,11 @@ impl ObjectFile {
         }
 
         // No build id (Rust, some compilers and Linux distributions).
-        Ok(BuildId::sha256_from_digest(&self.code_hash))
+        let Some(code_hash) = code_hash(object) else {
+            return Err(anyhow!("code hash is None"));
+        };
+
+        Ok(BuildId::sha256_from_digest(&code_hash))
     }
 
     /// Returns whether the object has debug symbols.
