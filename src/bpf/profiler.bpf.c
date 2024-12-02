@@ -422,7 +422,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       if (!in_previous_page) {
         LOG("[error] binary search failed with %llx, pc: %llx", table_idx, unwind_state->ip);
         if (table_idx == BINARY_SEARCH_EXHAUSTED_ITERATIONS) {
-          bump_unwind_error_binary_search_exausted_iterations();
+          bump_unwind_error_binary_search_exhausted_iterations();
         }
         return 1;
       }

@@ -55,8 +55,8 @@ impl Add for unwinder_stats_t {
             error_previous_rbp_zero: self.error_previous_rbp_zero + other.error_previous_rbp_zero,
             error_should_never_happen: self.error_should_never_happen
                 + other.error_should_never_happen,
-            error_binary_search_exausted_iterations: self.error_binary_search_exausted_iterations
-                + other.error_binary_search_exausted_iterations,
+            error_binary_search_exhausted_iterations: self.error_binary_search_exhausted_iterations
+                + other.error_binary_search_exhausted_iterations,
             error_chunk_not_found: self.error_chunk_not_found + other.error_chunk_not_found,
             error_mapping_does_not_contain_pc: self.error_mapping_does_not_contain_pc
                 + other.error_mapping_does_not_contain_pc,
