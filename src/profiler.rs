@@ -967,8 +967,8 @@ impl Profiler {
         res
     }
 
-    fn is_bucket_full(unwind_info_bucket_usage: &[usize], bucket_id: usize) -> bool {
-        unwind_info_bucket_usage[bucket_id] >= MAX_OUTER_UNWIND_MAP_ENTRIES as usize
+    fn is_bucket_full(unwind_info_bucket_usage: &[usize], bucket_id: u32) -> bool {
+        unwind_info_bucket_usage[bucket_id as usize] >= MAX_OUTER_UNWIND_MAP_ENTRIES as usize
     }
 
     fn bucket_for_unwind_info(
@@ -1085,44 +1085,32 @@ impl Profiler {
                 load_address = mapping.load_address;
             }
 
-            match self
-                .native_unwind_state
-                .known_executables
-                .get(&mapping.executable_id)
-            {
-                Some(_) => {
-                    // == Add mapping
-                    bpf_mappings.push(mapping_t {
-                        executable_id: mapping.executable_id,
-                        load_address,
-                        begin: mapping.start_addr,
-                        end: mapping.end_addr,
-                        type_: if mapping.kind == ExecutableMappingType::Vdso {
-                            MAPPING_TYPE_VDSO
-                        } else {
-                            MAPPING_TYPE_FILE
-                        },
-                    });
-                    debug!("unwind info CACHED for executable {:?}", obj_path);
-                    continue;
-                }
-                None => {
-                    debug!("unwind info not found for executable {:?}", obj_path);
-                }
-            }
-
             // == Add mapping
             bpf_mappings.push(mapping_t {
+                executable_id: mapping.executable_id,
                 load_address,
                 begin: mapping.start_addr,
                 end: mapping.end_addr,
-                executable_id: mapping.executable_id,
                 type_: if mapping.kind == ExecutableMappingType::Vdso {
                     MAPPING_TYPE_VDSO
                 } else {
                     MAPPING_TYPE_FILE
                 },
             });
+
+            match self
+                .native_unwind_state
+                .known_executables
+                .get(&mapping.executable_id)
+            {
+                Some(_) => {
+                    debug!("unwind info cached for executable {:?}", obj_path);
+                    continue;
+                }
+                None => {
+                    debug!("unwind info NOT cached for executable {:?}", obj_path);
+                }
+            }
 
             let object_files = self.object_files.read().unwrap();
             let executable = object_files.get(&mapping.executable_id).unwrap();
@@ -1175,7 +1163,7 @@ impl Profiler {
             ) {
                 if Self::is_bucket_full(
                     &self.native_unwind_state.unwind_info_bucket_usage,
-                    bucket_id as usize,
+                    bucket_id,
                 ) {
                     warn!(
                         "unwind info bucket for {} is full, pid {} won't be profiled properly",
@@ -1219,12 +1207,11 @@ impl Profiler {
             }
 
             debug!(
-                "======== Unwind rows for executable {}: {} with id {}",
+                "======== Unwind rows for executable {}: {}",
                 obj_path.display(),
                 &found_unwind_info.len(),
-                self.native_unwind_state.known_executables.len(),
             );
-        } // Added all mappings
+        }
 
         // Add mappings to BPF maps.
         if let Err(e) = Self::add_bpf_mappings(&self.native_unwinder, pid, &bpf_mappings) {

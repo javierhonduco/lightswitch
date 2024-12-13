@@ -39,7 +39,9 @@
           nativeBuildInputs = with pkgs; [
             pkg-config
           ];
-          rust-toolchain = pkgs.rust-bin.nightly.latest.default;
+          rust-toolchain = pkgs.rust-bin.nightly.latest.default.override {
+            extensions = [ "rust-analyzer" ];
+          };
           craneLib = (crane.mkLib nixpkgs.legacyPackages.${system}).overrideToolchain rust-toolchain;
           lightswitch = craneLib.buildPackage {
             src = ./.;
