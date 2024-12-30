@@ -1,5 +1,6 @@
 use libbpf_rs::OpenObject;
 use std::collections::hash_map::Entry;
+use std::collections::hash_map::OccupiedEntry;
 use std::collections::HashMap;
 use std::fs;
 use std::mem::size_of;
@@ -532,31 +533,13 @@ impl Profiler {
                             .known_executables
                             .entry(mapping.executable_id)
                         {
-                            Self::delete_bpf_pages(
-                                &self.native_unwinder,
-                                mapping.start_addr,
-                                mapping.end_addr,
-                                mapping.executable_id,
-                            );
-                            Self::delete_bpf_mappings(
-                                &self.native_unwinder,
+                            Self::delete_bpf_native_unwind_all(
                                 pid,
-                                mapping.start_addr,
-                                mapping.end_addr,
-                            );
-                            let res = Self::delete_bpf_unwind_info_map(
                                 &mut self.native_unwinder,
-                                entry.get().bucket_id,
-                                mapping.executable_id,
+                                mapping,
+                                entry,
                                 &mut self.native_unwind_state.unwind_info_bucket_usage,
                             );
-                            if res.is_err() {
-                                info!("deleting the BPF unwind info array failed with {:?}", res);
-                            }
-
-                            // The object file (`object_files`) is not removed here as we still need it for
-                            // normalization before sending the profiles.
-                            entry.remove_entry();
                         }
                     }
                 }
@@ -582,35 +565,13 @@ impl Profiler {
                                 .known_executables
                                 .entry(mapping.executable_id)
                             {
-                                // Delete unwind info.
-                                Self::delete_bpf_pages(
-                                    &self.native_unwinder,
-                                    mapping.start_addr,
-                                    mapping.end_addr,
-                                    mapping.executable_id,
-                                );
-                                Self::delete_bpf_mappings(
-                                    &self.native_unwinder,
+                                Self::delete_bpf_native_unwind_all(
                                     pid,
-                                    mapping.start_addr,
-                                    mapping.end_addr,
-                                );
-                                let res = Self::delete_bpf_unwind_info_map(
                                     &mut self.native_unwinder,
-                                    entry.get().bucket_id,
-                                    mapping.executable_id,
+                                    mapping,
+                                    entry,
                                     &mut self.native_unwind_state.unwind_info_bucket_usage,
                                 );
-                                if res.is_err() {
-                                    info!(
-                                        "deleting the BPF unwind info array failed with {:?}",
-                                        res
-                                    );
-                                }
-
-                                // The object file (`object_files`) is not removed here as we still need it for
-                                // normalization before sending the profiles.
-                                entry.remove_entry();
                             }
                         }
                     }
@@ -965,6 +926,39 @@ impl Profiler {
             unwind_info_bucket_usage[bucket_id as usize] -= 1;
         }
         res
+    }
+
+    /// Called when a process exits or a mapping gets unmapped. Removing the
+    /// process entry is the responsibility of the caller.
+    fn delete_bpf_native_unwind_all(
+        pid: Pid,
+        native_unwinder: &mut ProfilerSkel,
+        mapping: &ExecutableMapping,
+        entry: OccupiedEntry<ExecutableId, KnownExecutableInfo>,
+        unwind_info_bucket_usage: &mut [usize],
+    ) {
+        Self::delete_bpf_mappings(native_unwinder, pid, mapping.start_addr, mapping.end_addr);
+
+        Self::delete_bpf_pages(
+            native_unwinder,
+            mapping.start_addr,
+            mapping.end_addr,
+            mapping.executable_id,
+        );
+
+        let res = Self::delete_bpf_unwind_info_map(
+            native_unwinder,
+            entry.get().bucket_id,
+            mapping.executable_id,
+            unwind_info_bucket_usage,
+        );
+        if res.is_err() {
+            info!("deleting the BPF unwind info array failed with {:?}", res);
+        }
+
+        // The object file (`object_files`) is not removed here as we still need it for
+        // normalization before sending the profiles.
+        entry.remove_entry();
     }
 
     fn is_bucket_full(unwind_info_bucket_usage: &[usize], bucket_id: usize) -> bool {
