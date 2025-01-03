@@ -136,4 +136,12 @@ pub(crate) struct CliArgs {
     pub(crate) symbolizer: Symbolizer,
     #[arg(long, default_value_t, value_enum)]
     pub(crate) debug_info_backend: DebugInfoBackend,
+    #[arg(
+        long,
+        default_value_t = ProfilerConfig::default().max_native_unwind_info_size_mb,
+        help = "approximate max size in megabytes used for the BPF maps that hold unwind information"
+    )]
+    pub(crate) max_native_unwind_info_size_mb: i32,
+    #[arg(long, help = "enable parking_lot's deadlock detector")]
+    pub(crate) enable_deadlock_detector: bool,
 }

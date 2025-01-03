@@ -192,26 +192,21 @@ find_page(mapping_t *mapping, u64 object_relative_pc, u64 *left, u64 *right) {
   return NULL;
 }
 
-
-static __always_inline void event_new_process(struct bpf_perf_event_data *ctx, int per_process_id) {
-  Event event = {
-      .type = EVENT_NEW_PROCESS,
-      .pid = per_process_id,
-  };
-
-  bool *is_rate_limited = bpf_map_lookup_elem(&rate_limits, &event);
+static __always_inline void send_event(Event *event, struct bpf_perf_event_data *ctx) {
+  bool *is_rate_limited = bpf_map_lookup_elem(&rate_limits, event);
   if (is_rate_limited != NULL && *is_rate_limited) {
-    LOG("[debug] event_new_process was rate limited");
+    LOG("[debug] send_event was rate limited");
     return;
   }
 
-  if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &event, sizeof(Event)) < 0) {
+  if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, event, sizeof(Event)) < 0) {
     bump_unwind_error_sending_new_process_event();
   }
 
-  LOG("[debug] event_new_process event sent");
+  LOG("[debug] event type %d sent", event->type);
   bool rate_limited = true;
-  bpf_map_update_elem(&rate_limits, &event, &rate_limited, BPF_ANY);
+
+  bpf_map_update_elem(&rate_limits, event, &rate_limited, BPF_ANY);
 }
 
 // Kernel addresses have the top bits set.
@@ -398,7 +393,12 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     u64 right = 0;
     void *inner = find_page(mapping, object_relative_pc_high, &left, &right);
     if (inner == NULL) {
-      // TODO: add counter
+      Event event = {
+          .type = EVENT_NEED_UNWIND_INFO,
+          .pid = per_process_id,
+          .address = unwind_state->ip,
+      };
+      send_event(&event, ctx);
       return 1;
     }
 
@@ -672,7 +672,11 @@ int on_event(struct bpf_perf_event_data *ctx) {
     return 0;
   }
 
-  event_new_process(ctx, per_process_id);
+  Event event = {
+      .type = EVENT_NEW_PROCESS,
+      .pid = per_process_id,
+  };
+  send_event(&event, ctx);
   return 0;
 }
 
