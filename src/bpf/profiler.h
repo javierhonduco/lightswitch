@@ -184,12 +184,13 @@ typedef struct {
 
 enum event_type {
   EVENT_NEW_PROCESS = 1,
-  // EVENT_NEED_UNWIND_INFO = 2, need a way to signal of new loaded mappings
+  EVENT_NEED_UNWIND_INFO = 2,
 };
 
 typedef struct {
   enum event_type type;
   int pid; // use right name here (tgid?)
+  u64 address;
 } Event;
 
 enum program {
