@@ -1,4 +1,5 @@
 mod convert;
+pub mod manager;
 mod optimize;
 pub mod pages;
 pub mod persist;
