@@ -33,6 +33,7 @@ pub enum PltType {
 }
 
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
+#[repr(C)]
 pub struct CompactUnwindRow {
     pub pc: u64,
     pub cfa_type: CfaType,
