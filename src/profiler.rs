@@ -20,6 +20,7 @@ use itertools::Itertools;
 use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
 use libbpf_rs::skel::{OpenSkel, Skel};
+use libbpf_rs::ErrorKind;
 use libbpf_rs::MapCore;
 use libbpf_rs::MapHandle;
 use libbpf_rs::MapType;
@@ -408,7 +409,7 @@ impl Profiler {
 
         self.tracers.attach().expect("attach tracers");
 
-        // New process events.
+        // Unwinder events.
         let chan_send = self.new_proc_chan_send.clone();
         let perf_buffer = PerfBufferBuilder::new(&self.native_unwinder.maps.events)
             .pages(self.perf_buffer_bytes / page_size::get())
@@ -417,15 +418,21 @@ impl Profiler {
             })
             .lost_cb(Self::handle_lost_events)
             .build()
-            // TODO: Instead of unwrap, consume and emit any error, with
-            // .expect() perhaps?
-            .unwrap();
+            .expect("set up perf buffer for unwinder events");
 
-        let _poll_thread = thread::spawn(move || loop {
-            perf_buffer.poll(Duration::from_millis(100)).expect("poll");
+        let _unwinder_poll_thread = thread::spawn(move || loop {
+            match perf_buffer.poll(Duration::from_millis(100)) {
+                Ok(_) => {}
+                Err(err) => {
+                    if err.kind() != ErrorKind::Interrupted {
+                        error!("polling events perf buffer failed with {:?}", err);
+                        break;
+                    }
+                }
+            }
         });
 
-        // Trace events are received here, such as memory unmaps.
+        // Tracer events.
         let tracers_send = self.tracers_chan_send.clone();
         let tracers_events_perf_buffer = PerfBufferBuilder::new(&self.tracers.maps.tracer_events)
             .pages(self.perf_buffer_bytes / page_size::get())
@@ -440,14 +447,18 @@ impl Profiler {
                 warn!("lost {} events from the tracers", lost_count);
             })
             .build()
-            // TODO: Instead of unwrap, consume and emit any error, with
-            // .expect() perhaps?
-            .unwrap();
+            .expect("set up perf buffer for tracer events");
 
         let _tracers_poll_thread = thread::spawn(move || loop {
-            tracers_events_perf_buffer
-                .poll(Duration::from_millis(100))
-                .expect("poll");
+            match tracers_events_perf_buffer.poll(Duration::from_millis(100)) {
+                Ok(_) => {}
+                Err(err) => {
+                    if err.kind() != ErrorKind::Interrupted {
+                        error!("polling tracers perf buffer failed with {:?}", err);
+                        break;
+                    }
+                }
+            }
         });
 
         let profile_receive = self.profile_receive.clone();
