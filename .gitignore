@@ -1,7 +1,0 @@
-/target
-flame.svg
-profile.pb
-**/bpf/*_skel.rs
-.vmtest.log
-/result
-.vscode/
