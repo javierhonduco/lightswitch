@@ -73,6 +73,11 @@ impl NativeUnwindState {
             last_eviction: Instant::now(),
         }
     }
+
+    /// Checks whether the given `executable_id` is loaded in the BPF maps.
+    fn is_known(&self, executable_id: ExecutableId) -> bool {
+        self.known_executables.contains_key(&executable_id)
+    }
 }
 
 pub struct Profiler {
@@ -1169,7 +1174,6 @@ impl Profiler {
                 continue;
             }
             let object_file_info = object_file_info.unwrap();
-            let obj_path = object_file_info.path.clone();
 
             // TODO: rework this logic as it's quite kludgy at the moment and this is broken with
             // some loaders. Particularly, Rust statically linked with musl does not work. We must
@@ -1183,32 +1187,6 @@ impl Profiler {
                 load_address = mapping.load_address;
             }
             std::mem::drop(object_file);
-
-            match self
-                .native_unwind_state
-                .known_executables
-                .get(&mapping.executable_id)
-            {
-                Some(_) => {
-                    // Add mapping.
-                    bpf_mappings.push(mapping_t {
-                        executable_id: mapping.executable_id,
-                        load_address,
-                        begin: mapping.start_addr,
-                        end: mapping.end_addr,
-                        type_: if mapping.kind == ExecutableMappingType::Vdso {
-                            MAPPING_TYPE_VDSO
-                        } else {
-                            MAPPING_TYPE_FILE
-                        },
-                    });
-                    debug!("unwind info CACHED for executable {:?}", obj_path);
-                    continue;
-                }
-                None => {
-                    debug!("unwind info not found for executable {:?}", obj_path);
-                }
-            }
 
             // Add mapping.
             bpf_mappings.push(mapping_t {
@@ -1245,6 +1223,16 @@ impl Profiler {
     }
 
     fn add_unwind_information_for_executable(&mut self, executable_id: ExecutableId) {
+        if self.native_unwind_state.is_known(executable_id) {
+            debug!("unwind info CACHED for executable id: {:x}", executable_id);
+            return;
+        } else {
+            debug!(
+                "unwind info not found for executable id: {:x}",
+                executable_id
+            );
+        }
+
         let object_files = self.object_files.read();
         let executable_info = object_files.get(&executable_id).unwrap();
         let executable_path_open = executable_info.open_file_path();
