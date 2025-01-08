@@ -42,6 +42,14 @@ pub(crate) enum Symbolizer {
     None,
 }
 
+#[derive(PartialEq, clap::ValueEnum, Debug, Clone, Default)]
+pub(crate) enum DebugInfoBackend {
+    #[default]
+    None,
+    Copy,
+    Remote,
+}
+
 #[derive(Parser, Debug)]
 pub(crate) struct CliArgs {
     /// Specific PIDs to profile
@@ -126,4 +134,14 @@ pub(crate) struct CliArgs {
     pub(crate) exclude_self: bool,
     #[arg(long, default_value_t, value_enum)]
     pub(crate) symbolizer: Symbolizer,
+    #[arg(long, default_value_t, value_enum)]
+    pub(crate) debug_info_backend: DebugInfoBackend,
+    #[arg(
+        long,
+        default_value_t = ProfilerConfig::default().max_native_unwind_info_size_mb,
+        help = "approximate max size in megabytes used for the BPF maps that hold unwind information"
+    )]
+    pub(crate) max_native_unwind_info_size_mb: i32,
+    #[arg(long, help = "enable parking_lot's deadlock detector")]
+    pub(crate) enable_deadlock_detector: bool,
 }

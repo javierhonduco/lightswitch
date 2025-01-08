@@ -103,7 +103,7 @@ struct unwinder_stats_t {
   u64 error_mapping_not_found;
   u64 error_mapping_does_not_contain_pc;
   u64 error_chunk_not_found;
-  u64 error_binary_search_exausted_iterations;
+  u64 error_binary_search_exhausted_iterations;
   u64 error_sending_new_process_event;
   u64 error_cfa_offset_did_not_fit;
   u64 error_rbp_offset_did_not_fit;
@@ -184,12 +184,13 @@ typedef struct {
 
 enum event_type {
   EVENT_NEW_PROCESS = 1,
-  // EVENT_NEED_UNWIND_INFO = 2, need a way to signal of new loaded mappings
+  EVENT_NEED_UNWIND_INFO = 2,
 };
 
 typedef struct {
   enum event_type type;
   int pid; // use right name here (tgid?)
+  u64 address;
 } Event;
 
 enum program {

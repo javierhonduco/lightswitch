@@ -94,6 +94,11 @@ impl ObjectFile {
         Ok(BuildId::sha256_from_digest(&self.code_hash))
     }
 
+    /// Returns whether the object has debug symbols.
+    pub fn has_debug_info(&self) -> bool {
+        self.object.has_debug_symbols()
+    }
+
     pub fn is_dynamic(&self) -> bool {
         self.object.kind() == ObjectKind::Dynamic
     }
