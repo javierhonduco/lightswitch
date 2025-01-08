@@ -30,8 +30,7 @@ pub enum TaskMetadataProviderError {
 }
 
 pub trait TaskMetadataProvider {
-    /// Return a vector of labels that apply to
-    ///  the provided task_key.
+    /// Return a vector of labels that apply to the provided task_key.
     fn get_metadata(
         &self,
         task_key: TaskKey,
@@ -45,8 +44,7 @@ pub enum SystemMetadataProviderError {
     ErrorRetrievingMetadata(String),
 }
 pub trait SystemMetadataProvider {
-    /// Return a vector of labels that apply to the
-    /// current host system.
+    /// Return a vector of labels that apply to the current host system.
     fn get_metadata(&self) -> Result<Vec<MetadataLabel>, SystemMetadataProviderError>;
 }
 
