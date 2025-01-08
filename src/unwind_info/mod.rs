@@ -1,6 +1,7 @@
 mod convert;
 mod optimize;
 pub mod pages;
+pub mod persist;
 pub mod types;
 
 pub use convert::compact_unwind_info;

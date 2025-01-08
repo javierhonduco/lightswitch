@@ -30,6 +30,7 @@ rand = "0.8.5"
 # workspace build dependencies have to be defined here
 libbpf-cargo = { version = "0.25.0-beta.0" }
 glob = "0.3.1"
+ring = "0.17.8"
 
 [dependencies]
 gimli = "0.31.1"
@@ -62,6 +63,7 @@ errno = { workspace = true }
 procfs = { workspace = true }
 nix = { workspace = true, features = ["user"] }
 parking_lot = { version = "0.12.3", features = ["deadlock_detection"] }
+ring = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { version = "2.0.16" }
