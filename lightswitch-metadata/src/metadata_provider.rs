@@ -4,6 +4,8 @@ use crate::taskname::TaskName;
 
 use anyhow::Result;
 use lru::LruCache;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
@@ -15,8 +17,8 @@ pub struct TaskKey {
     pub tid: i32,
 }
 
-impl std::fmt::Display for TaskKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for TaskKey {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "pid={}, tid={}", self.pid, self.tid)
     }
 }
