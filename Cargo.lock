@@ -1380,6 +1380,7 @@ dependencies = [
  "prost",
  "rand",
  "reqwest",
+ "ring",
  "rstest",
  "tempfile",
  "thiserror 2.0.3",

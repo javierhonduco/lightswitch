@@ -8,7 +8,7 @@ repository = "https://github.com/javierhonduco/lightswitch"
 
 [dependencies]
 data-encoding = "2.6.0"
-ring = "0.17.8"
+ring = { workspace = true }
 memmap2 = { workspace = true }
 object = { workspace = true }
 anyhow = { workspace = true }

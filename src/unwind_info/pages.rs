@@ -130,7 +130,8 @@ mod tests {
             let search_here = &unwind_info[(found.index as usize)..(found.len as usize)];
             let found_row = search_here.iter().find(|el| el.pc == pc).unwrap();
             // And that the high and low bits were done ok
-            assert_eq!((found_row.pc & low_bits_mask) + pc_high, found_row.pc);
+            let pc = found_row.pc;
+            assert_eq!((pc & low_bits_mask) + pc_high, pc);
         }
     }
 }

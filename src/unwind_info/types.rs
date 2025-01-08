@@ -1,5 +1,8 @@
 use lazy_static::lazy_static;
 
+// Important: Any changes to the structures below must bump the file
+// version in unwind_info/persist.rs
+
 #[repr(u8)]
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub enum CfaType {
@@ -33,7 +36,7 @@ pub enum PltType {
 }
 
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
-#[repr(C)]
+#[repr(C, packed)]
 pub struct CompactUnwindRow {
     pub pc: u64,
     pub cfa_type: CfaType,
