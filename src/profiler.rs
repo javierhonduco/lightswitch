@@ -910,29 +910,38 @@ impl Profiler {
         bpf: &ProfilerSkel,
         start_address: u64,
         end_address: u64,
-        executable_id: u64,
+        executable_id: ExecutableId,
     ) {
-        let start_address_high = start_address & HIGH_PC_MASK;
-        let end_address_high = end_address & HIGH_PC_MASK;
+        let range = start_address..end_address;
+        let mut success_count = 0;
+        let mut failure_count = 0;
 
-        for file_offset in
-            (start_address_high..end_address_high).step_by(UNWIND_INFO_PAGE_SIZE as usize)
-        {
+        for file_offset in range.clone().step_by(UNWIND_INFO_PAGE_SIZE as usize) {
             let key = page_key_t {
-                file_offset,
+                file_offset: file_offset & HIGH_PC_MASK,
                 executable_id,
             };
 
-            // TODO: ensure that at least one entry can be removed. Some might fail as
-            // we prefer to not have to re-read the unwind information and we might attempt
-            // deleting entries that are not present.
             let ret = bpf
                 .maps
                 .executable_to_page
                 .delete(unsafe { plain::as_bytes(&key) });
-            if ret.is_err() {
-                error!("failed removing BPF pages");
+
+            if ret.is_ok() {
+                success_count += 1;
+            } else {
+                failure_count += 1;
             }
+        }
+
+        // Some might fail as we prefer to not have to re-read the unwind information
+        // and we might attempt deleting entries that are not present.
+        if success_count == 0 {
+            let total = success_count + failure_count;
+            error!(
+                "failed to remove {} / {} BPF pages (range: {:?}) start_address_high {} end_address_high {}",
+                failure_count, total, range, start_address, end_address
+            );
         }
     }
 
