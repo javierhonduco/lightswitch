@@ -83,7 +83,6 @@ impl NativeUnwindState {
 pub struct Profiler {
     // Prevent the links from being removed.
     _links: Vec<Link>,
-    _inner_unwind_info_map_shapes: Vec<MapHandle>,
     native_unwinder_open_object: ManuallyDrop<Box<MaybeUninit<OpenObject>>>,
     native_unwinder: ManuallyDrop<ProfilerSkel<'static>>,
     tracers_open_object: ManuallyDrop<Box<MaybeUninit<OpenObject>>>,
@@ -213,7 +212,7 @@ impl Profiler {
     ) -> Vec<MapHandle> {
         let mut map_shapes = Vec::with_capacity(native_unwind_info_bucket_sizes.len());
 
-        // Create the maps that hold unwind information for the native unwinder.
+        // Create the map shapes that hold unwind information for the native unwinder.
         for (i, native_unwind_info_bucket_size) in
             native_unwind_info_bucket_sizes.iter().enumerate()
         {
@@ -223,7 +222,7 @@ impl Profiler {
             };
             let inner_map_shape = MapHandle::create(
                 MapType::Array,
-                Some(format!("inner_{}", i)),
+                Some(format!("inner_shape_{}", i)),
                 4,
                 8,
                 *native_unwind_info_bucket_size,
@@ -305,6 +304,9 @@ impl Profiler {
         Self::set_profiler_map_sizes(&mut open_skel, &profiler_config);
 
         let native_unwinder = ManuallyDrop::new(open_skel.load().expect("load skel"));
+        // The unwind information shapes are no longer needed after the native unwinder is loaded.
+        std::mem::drop(inner_unwind_info_map_shapes);
+
         // SAFETY: native_unwinder never outlives native_unwinder_open_object
         let native_unwinder = unsafe {
             std::mem::transmute::<ManuallyDrop<ProfilerSkel<'_>>, ManuallyDrop<ProfilerSkel<'static>>>(
@@ -362,7 +364,6 @@ impl Profiler {
 
         Profiler {
             _links: Vec::new(),
-            _inner_unwind_info_map_shapes: inner_unwind_info_map_shapes,
             native_unwinder_open_object,
             native_unwinder,
             tracers_open_object,
