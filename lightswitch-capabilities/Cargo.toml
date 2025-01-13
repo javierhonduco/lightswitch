@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/javierhonduco/lightswitch"
 
 [dependencies]
-libc = "0.2.167"
+libc = "0.2.169"
 anyhow = { workspace = true}
 thiserror = { workspace = true}
 libbpf-rs = { workspace = true}
