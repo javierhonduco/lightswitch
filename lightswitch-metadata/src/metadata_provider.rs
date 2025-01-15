@@ -5,7 +5,44 @@ use crate::types::{MetadataLabel, SystemMetadataProvider, TaskKey, TaskMetadataP
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
-use tracing::warn;
+use thiserror::Error;
+use tracing::{error, warn};
+
+#[derive(Debug, Clone, Copy)]
+pub struct TaskKey {
+    pub pid: i32,
+    pub tid: i32,
+}
+
+impl Display for TaskKey {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "pid={}, tid={}", self.pid, self.tid)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum TaskMetadataProviderError {
+    #[error("Failed to retrieve metadata for task_key={0}, error={1}")]
+    ErrorRetrievingMetadata(TaskKey, String),
+}
+
+pub trait TaskMetadataProvider {
+    /// Return a vector of labels that apply to the provided task_key.
+    fn get_metadata(
+        &self,
+        task_key: TaskKey,
+    ) -> Result<Vec<MetadataLabel>, TaskMetadataProviderError>;
+}
+
+#[derive(Debug, Error)]
+pub enum SystemMetadataProviderError {
+    #[error("Failed to retrieve system metadata, error={0}")]
+    ErrorRetrievingMetadata(String),
+}
+pub trait SystemMetadataProvider {
+    /// Return a vector of labels that apply to the current host system.
+    fn get_metadata(&self) -> Result<Vec<MetadataLabel>, SystemMetadataProviderError>;
+}
 
 pub struct GlobalMetadataProvider {
     process_label_cache: LruCache<TaskKey, Vec<MetadataLabel>>,
