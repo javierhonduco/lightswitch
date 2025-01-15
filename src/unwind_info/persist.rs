@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use plain::Plain;
 use ring::digest::{Context, SHA256};
 use std::io::Read;
@@ -40,18 +39,18 @@ unsafe impl Plain for Header {}
 unsafe impl Plain for CompactUnwindRow {}
 
 /// Writes compact information to a given writer.
-struct Writer {
+pub struct Writer {
     executable_path: PathBuf,
 }
 
 impl Writer {
-    fn new(executable_path: &Path) -> Self {
+    pub fn new(executable_path: &Path) -> Self {
         Writer {
             executable_path: executable_path.to_path_buf(),
         }
     }
 
-    fn write<W: Write + Seek>(self, writer: &mut W) -> anyhow::Result<()> {
+    pub fn write<W: Write + Seek>(self, writer: &mut W) -> anyhow::Result<Vec<CompactUnwindRow>> {
         let unwind_info = self.read_unwind_info()?;
         // Write dummy header.
         self.write_header(writer, 0, None)?;
@@ -59,7 +58,7 @@ impl Writer {
         // Write real header.
         writer.seek(SeekFrom::Start(0))?;
         self.write_header(writer, unwind_info.len(), Some(digest))?;
-        Ok(())
+        Ok(unwind_info)
     }
 
     fn read_unwind_info(&self) -> anyhow::Result<Vec<CompactUnwindRow>> {
@@ -119,7 +118,7 @@ pub enum ReaderError {
 }
 
 /// Reads compact information of a bytes slice.
-struct Reader<'a> {
+pub struct Reader<'a> {
     header: Header,
     data: &'a [u8],
 }

@@ -3,7 +3,9 @@ use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
 use std::collections::hash_map::OccupiedEntry;
 use std::collections::HashMap;
+use std::env::temp_dir;
 use std::fs;
+use std::io::ErrorKind;
 use std::mem::size_of;
 use std::mem::ManuallyDrop;
 use std::mem::MaybeUninit;
@@ -20,7 +22,6 @@ use itertools::Itertools;
 use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
 use libbpf_rs::skel::{OpenSkel, Skel};
-use libbpf_rs::ErrorKind;
 use libbpf_rs::MapCore;
 use libbpf_rs::MapHandle;
 use libbpf_rs::MapType;
@@ -41,8 +42,8 @@ use crate::process::{
     ProcessStatus,
 };
 use crate::profile::*;
-use crate::unwind_info::compact_unwind_info;
 use crate::unwind_info::log_unwind_info_sections;
+use crate::unwind_info::manager::UnwindInfoManager;
 use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::{get_online_cpus, summarize_address_range};
 use lightswitch_object::{ExecutableId, ObjectFile};
@@ -121,9 +122,11 @@ pub struct Profiler {
     /// evictions which might reduce the quality of the profiles and in more work
     /// for the profiler.
     max_native_unwind_info_size_mb: i32,
+    unwind_info_manager: UnwindInfoManager,
 }
 
 pub struct ProfilerConfig {
+    pub cache_dir: PathBuf,
     pub libbpf_debug: bool,
     pub bpf_logging: bool,
     pub duration: Duration,
@@ -142,7 +145,9 @@ pub struct ProfilerConfig {
 
 impl Default for ProfilerConfig {
     fn default() -> Self {
+        let cache_dir = temp_dir().join("lightswitch");
         Self {
+            cache_dir,
             libbpf_debug: false,
             bpf_logging: false,
             duration: Duration::MAX,
@@ -288,6 +293,25 @@ impl Profiler {
     }
 
     pub fn new(profiler_config: ProfilerConfig, stop_signal_receive: Receiver<()>) -> Self {
+        debug!("Cache directory {}", profiler_config.cache_dir.display());
+        if let Err(e) = fs::create_dir(&profiler_config.cache_dir) {
+            if e.kind() != ErrorKind::AlreadyExists {
+                error!(
+                    "could not create cache dir at {}",
+                    profiler_config.cache_dir.display()
+                );
+            }
+        }
+        let unwind_cache_dir = profiler_config.cache_dir.join("unwind-info").to_path_buf();
+        if let Err(e) = fs::create_dir(&unwind_cache_dir) {
+            if e.kind() != ErrorKind::AlreadyExists {
+                error!(
+                    "could not create cache dir at {}",
+                    unwind_cache_dir.display()
+                );
+            }
+        }
+
         let mut native_unwinder_open_object = ManuallyDrop::new(Box::new(MaybeUninit::uninit()));
         let mut tracers_open_object = ManuallyDrop::new(Box::new(MaybeUninit::uninit()));
 
@@ -387,6 +411,7 @@ impl Profiler {
             native_unwind_info_bucket_sizes: profiler_config.native_unwind_info_bucket_sizes,
             debug_info_manager: profiler_config.debug_info_manager,
             max_native_unwind_info_size_mb: profiler_config.max_native_unwind_info_size_mb,
+            unwind_info_manager: UnwindInfoManager::new(&unwind_cache_dir, None),
         }
     }
 
@@ -430,7 +455,7 @@ impl Profiler {
             match perf_buffer.poll(Duration::from_millis(100)) {
                 Ok(_) => {}
                 Err(err) => {
-                    if err.kind() != ErrorKind::Interrupted {
+                    if err.kind() != libbpf_rs::ErrorKind::Interrupted {
                         error!("polling events perf buffer failed with {:?}", err);
                         break;
                     }
@@ -459,7 +484,7 @@ impl Profiler {
             match tracers_events_perf_buffer.poll(Duration::from_millis(100)) {
                 Ok(_) => {}
                 Err(err) => {
-                    if err.kind() != ErrorKind::Interrupted {
+                    if err.kind() != libbpf_rs::ErrorKind::Interrupted {
                         error!("polling tracers perf buffer failed with {:?}", err);
                         break;
                     }
@@ -1257,32 +1282,34 @@ impl Profiler {
         )
         .entered();
 
-        let unwind_info: Vec<CompactUnwindRow> =
-            match compact_unwind_info(&executable_path_open.to_string_lossy()) {
-                Ok(unwind_info) => unwind_info,
-                Err(e) => {
-                    let executable_path_str = executable_path;
-                    let known_naughty = executable_path_str.contains("libicudata");
+        let unwind_info = self
+            .unwind_info_manager
+            .fetch_unwind_info(&executable_path_open, executable_id);
+        let unwind_info: Vec<CompactUnwindRow> = match unwind_info {
+            Ok(unwind_info) => unwind_info,
+            Err(e) => {
+                let executable_path_str = executable_path;
+                let known_naughty = executable_path_str.contains("libicudata");
 
-                    // tracing doesn't support a level chosen at runtime: https://github.com/tokio-rs/tracing/issues/2730
-                    if known_naughty {
-                        debug!(
-                            "failed to get unwind information for {} with {}",
-                            executable_path_str, e
-                        );
-                    } else {
-                        info!(
-                            "failed to get unwind information for {} with {}",
-                            executable_path_str, e
-                        );
+                // tracing doesn't support a level chosen at runtime: https://github.com/tokio-rs/tracing/issues/2730
+                if known_naughty {
+                    debug!(
+                        "failed to get unwind information for {} with {}",
+                        executable_path_str, e
+                    );
+                } else {
+                    info!(
+                        "failed to get unwind information for {} with {}",
+                        executable_path_str, e
+                    );
 
-                        if let Err(e) = log_unwind_info_sections(&executable_path_open) {
-                            warn!("log_unwind_info_sections failed with {}", e);
-                        }
+                    if let Err(e) = log_unwind_info_sections(&executable_path_open) {
+                        warn!("log_unwind_info_sections failed with {}", e);
                     }
-                    return;
                 }
-            };
+                return;
+            }
+        };
         span.exit();
 
         let bucket =
@@ -1536,7 +1563,7 @@ impl Profiler {
                     let object_file = match ObjectFile::new(&PathBuf::from(abs_path.clone())) {
                         Ok(f) => f,
                         Err(e) => {
-                            warn!("object_file {} failed with {:?}", abs_path, e);
+                            warn!("object_file {} failed with {}", abs_path, e);
                             // Rather than returning here, we prefer to be able to profile some
                             // parts of the binary
                             continue;

@@ -32,4 +32,4 @@ jobs:
     - name: Run `nix fmt`
       run: nix fmt -- --check .
     - name: Run `cargo shear`
-      run: nix fmt -- --check .
+      run: nix develop --command cargo shear
