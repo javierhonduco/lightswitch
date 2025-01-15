@@ -36,7 +36,6 @@ pub trait TaskMetadataProvider {
         task_key: TaskKey,
     ) -> Result<Vec<MetadataLabel>, TaskMetadataProviderError>;
 }
-pub type ThreadSafeTaskMetadataProvider = Arc<Mutex<Box<dyn TaskMetadataProvider + Send>>>;
 
 #[derive(Debug, Error)]
 pub enum SystemMetadataProviderError {
@@ -48,13 +47,11 @@ pub trait SystemMetadataProvider {
     fn get_metadata(&self) -> Result<Vec<MetadataLabel>, SystemMetadataProviderError>;
 }
 
-pub type ThreadSafeSystemMetadataProvider = Arc<Mutex<Box<dyn SystemMetadataProvider + Send>>>;
-
 pub struct GlobalMetadataProvider {
     pid_label_cache: LruCache</*pid*/ i32, Vec<MetadataLabel>>,
     default_system_metadata: SystemMetadata,
-    custom_system_metadata_providers: Vec<ThreadSafeSystemMetadataProvider>,
-    custom_task_metadata_providers: Vec<ThreadSafeTaskMetadataProvider>,
+    custom_system_metadata_providers: Vec<Box<dyn SystemMetadataProvider + Send>>,
+    custom_task_metadata_providers: Vec<Box<dyn TaskMetadataProvider + Send>>,
 }
 
 pub type ThreadSafeGlobalMetadataProvider = Arc<Mutex<GlobalMetadataProvider>>;
@@ -77,14 +74,14 @@ impl GlobalMetadataProvider {
 
     pub fn register_task_metadata_providers(
         &mut self,
-        providers: Vec<ThreadSafeTaskMetadataProvider>,
+        providers: Vec<Box<dyn TaskMetadataProvider + Send>>,
     ) {
         self.custom_task_metadata_providers.extend(providers);
     }
 
     pub fn register_system_metadata_providers(
         &mut self,
-        providers: Vec<ThreadSafeSystemMetadataProvider>,
+        providers: Vec<Box<dyn SystemMetadataProvider + Send>>,
     ) {
         self.custom_system_metadata_providers.extend(providers);
     }
@@ -97,7 +94,7 @@ impl GlobalMetadataProvider {
             .unwrap_or_default();
 
         for provider in &self.custom_system_metadata_providers {
-            match provider.lock().unwrap().get_metadata() {
+            match provider.get_metadata() {
                 Ok(custom_system_labels) => {
                     labels.extend(custom_system_labels.into_iter());
                 }
@@ -108,7 +105,7 @@ impl GlobalMetadataProvider {
         }
 
         for provider in &self.custom_task_metadata_providers {
-            match provider.lock().unwrap().get_metadata(task_key) {
+            match provider.get_metadata(task_key) {
                 Ok(custom_task_labels) => {
                     labels.extend(custom_task_labels.into_iter());
                 }
