@@ -1553,7 +1553,7 @@ impl Profiler {
 
                     // We want to open the file as quickly as possible to minimise the chances of races
                     // if the file is deleted.
-                    let mut file = match fs::File::open(&abs_path) {
+                    let file = match fs::File::open(&abs_path) {
                         Ok(f) => f,
                         Err(e) => {
                             debug!("failed to open file {} due to {:?}", abs_path, e);
@@ -1628,7 +1628,7 @@ impl Profiler {
                             &name,
                             &build_id,
                             executable_id,
-                            &mut file,
+                            &abs_path,
                         );
                         debug!("debug info manager add result {:?}", res);
                     } else {
