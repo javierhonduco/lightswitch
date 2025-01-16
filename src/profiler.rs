@@ -1411,7 +1411,6 @@ impl Profiler {
             Self::unwind_info_size_mb(self.native_unwind_info_bucket_sizes[bucket_id as usize]);
         let total_memory_used_after_mb = total_memory_used_mb + this_unwind_info_mb;
         let to_free_mb = std::cmp::max(0, total_memory_used_after_mb as i32 - max_memory_mb) as u32;
-
         let should_evict = !executables_to_evict.is_empty() || to_free_mb != 0;
         let cant_evict =
             self.native_unwind_state.last_eviction.elapsed() < std::time::Duration::from_secs(5);
@@ -1420,6 +1419,11 @@ impl Profiler {
         if should_evict && cant_evict {
             return false;
         }
+
+        debug!(
+            "unwind information size to free {} MB (used {} MB / {} MB)",
+            to_free_mb, total_memory_used_mb, max_memory_mb
+        );
 
         // Figure out what are the unwind info we should evict to stay below the memory limit.
         let mut could_be_freed_mb = 0;
