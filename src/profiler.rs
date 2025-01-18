@@ -11,7 +11,7 @@ use std::mem::ManuallyDrop;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -82,6 +82,7 @@ impl NativeUnwindState {
 }
 
 pub struct Profiler {
+    cache_dir: PathBuf,
     // Prevent the links from being removed.
     _links: Vec<Link>,
     native_unwinder_open_object: ManuallyDrop<Box<MaybeUninit<OpenObject>>>,
@@ -193,6 +194,7 @@ fn fetch_vdso_info(
     start_addr: u64,
     end_addr: u64,
     offset: u64,
+    cache_dir: &Path,
 ) -> Result<(PathBuf, ObjectFile)> {
     // Read raw memory
     let file = fs::File::open(format!("/proc/{}/mem", pid))?;
@@ -201,7 +203,7 @@ fn fetch_vdso_info(
     file.read_exact_at(&mut buf, start_addr + offset)?;
 
     // Write to a temporary place
-    let dumped_vdso = PathBuf::from("/tmp/lightswitch-dumped-vdso");
+    let dumped_vdso = cache_dir.join("dumped-vdso");
     fs::write(&dumped_vdso, &buf)?;
 
     // Pass that to the object parser
@@ -387,6 +389,7 @@ impl Profiler {
         let profile_receive = Arc::new(receiver);
 
         Profiler {
+            cache_dir: profiler_config.cache_dir,
             _links: Vec::new(),
             native_unwinder_open_object,
             native_unwinder,
@@ -1408,7 +1411,6 @@ impl Profiler {
             Self::unwind_info_size_mb(self.native_unwind_info_bucket_sizes[bucket_id as usize]);
         let total_memory_used_after_mb = total_memory_used_mb + this_unwind_info_mb;
         let to_free_mb = std::cmp::max(0, total_memory_used_after_mb as i32 - max_memory_mb) as u32;
-
         let should_evict = !executables_to_evict.is_empty() || to_free_mb != 0;
         let cant_evict =
             self.native_unwind_state.last_eviction.elapsed() < std::time::Duration::from_secs(5);
@@ -1417,6 +1419,11 @@ impl Profiler {
         if should_evict && cant_evict {
             return false;
         }
+
+        debug!(
+            "unwind information size to free {} MB (used {} MB / {} MB)",
+            to_free_mb, total_memory_used_mb, max_memory_mb
+        );
 
         // Figure out what are the unwind info we should evict to stay below the memory limit.
         let mut could_be_freed_mb = 0;
@@ -1550,7 +1557,7 @@ impl Profiler {
 
                     // We want to open the file as quickly as possible to minimise the chances of races
                     // if the file is deleted.
-                    let mut file = match fs::File::open(&abs_path) {
+                    let file = match fs::File::open(&abs_path) {
                         Ok(f) => f,
                         Err(e) => {
                             debug!("failed to open file {} due to {:?}", abs_path, e);
@@ -1625,7 +1632,7 @@ impl Profiler {
                             &name,
                             &build_id,
                             executable_id,
-                            &mut file,
+                            &abs_path,
                         );
                         debug!("debug info manager add result {:?}", res);
                     } else {
@@ -1674,9 +1681,13 @@ impl Profiler {
                     // be careful, the kernel might be upgraded since last time we ran, and that cache might not be
                     // valid anymore.
 
-                    if let Ok((vdso_path, object_file)) =
-                        fetch_vdso_info(pid, map.address.0, map.address.1, map.offset)
-                    {
+                    if let Ok((vdso_path, object_file)) = fetch_vdso_info(
+                        pid,
+                        map.address.0,
+                        map.address.1,
+                        map.offset,
+                        &self.cache_dir,
+                    ) {
                         let mut object_files = object_files_clone.write();
                         let Ok(executable_id) = object_file.id() else {
                             debug!("vDSO object file id failed");

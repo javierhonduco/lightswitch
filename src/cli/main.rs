@@ -163,6 +163,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         mapsize_rate_limits: args.mapsize_rate_limits,
         exclude_self: args.exclude_self,
         debug_info_manager,
+        max_native_unwind_info_size_mb: args.max_native_unwind_info_size_mb,
         ..Default::default()
     };
 
