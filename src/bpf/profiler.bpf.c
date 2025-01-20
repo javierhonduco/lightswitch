@@ -209,6 +209,25 @@ static __always_inline void send_event(Event *event, struct bpf_perf_event_data 
   bpf_map_update_elem(&rate_limits, event, &rate_limited, BPF_ANY);
 }
 
+#ifdef __TARGET_ARCH_x86
+static __always_inline u64 remove_pac(u64 addr) {
+  return addr;
+}
+#endif
+
+#ifdef __TARGET_ARCH_arm64
+// Arm64 supports pointer authentication, we need to remove the signatured during
+// unwinding.
+static __always_inline u64 remove_pac(u64 addr) {
+  // The signature is stored in the top 55 - virtual address size bits [0], which
+  // is typically 48 bytes, hence we need to clear the top 7 bits. Clearing 8 bits
+  // as they are all the non-addressable anyways.
+  // - [0]: https://docs.kernel.org/arch/arm64/pointer-authentication.html#basic-support
+  addr &= 0x0000FFFFFFFFFFFF;
+  return addr;
+}
+#endif
+
 // Kernel addresses have the top bits set.
 static __always_inline bool in_kernel(u64 ip) { return ip & (1UL << 63); }
 
@@ -234,8 +253,8 @@ static __always_inline bool is_kthread() {
 
 // avoid R0 invalid mem access 'scalar'
 // Port of `task_pt_regs` in BPF.
-static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp) {
-  if (ip == NULL || sp == NULL || bp == NULL) {
+static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u64 *lr) {
+  if (ip == NULL || sp == NULL || bp == NULL || lr == NULL) {
     return false;
   }
 
@@ -258,12 +277,14 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp) {
   }
 
   void *ptr = stack + THREAD_SIZE - TOP_OF_KERNEL_STACK_PADDING;
-  bpf_user_pt_regs_t *regs = ((bpf_user_pt_regs_t *)ptr) - 1;
+  struct pt_regs *regs = ((struct pt_regs *)ptr) - 1;
 
   *ip = PT_REGS_IP_CORE(regs);
   *sp = PT_REGS_SP_CORE(regs);
   *bp = PT_REGS_FP_CORE(regs);
-
+#ifdef __TARGET_ARCH_arm64
+  *lr = PT_REGS_RET_CORE(regs);
+#endif
   return true;
 }
 
@@ -525,13 +546,45 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       return 1;
     }
 
-    // HACK(javierhonduco): This is an architectural shortcut we can take. As we
-    // only support x86_64 at the minute, we can assume that the return address
-    // is *always* 8 bytes ahead of the previous stack pointer.
-    u64 previous_rip_addr =
-        previous_rsp - 8; // the saved return address is 8 bytes ahead of the
-                          // previous stack pointer
+    // Set rbp register.
+    u64 previous_rbp = 0;
+    u64 previous_rbp_addr = previous_rsp + found_rbp_offset;
+
+    if (found_rbp_type == RBP_TYPE_UNCHANGED) {
+      previous_rbp = unwind_state->bp;
+    } else {
+      LOG("\t(bp_offset: %d, bp value stored at %llx)", found_rbp_offset,
+          previous_rbp_addr);
+      int ret =
+          bpf_probe_read_user(&previous_rbp, 8, (void *)(previous_rbp_addr));
+      if (ret != 0) {
+        LOG("[error] previous_rbp should not be zero. This can mean "
+            "that the read has failed %d.",
+            ret);
+        bump_unwind_error_previous_rbp_zero();
+        return 1;
+      }
+    }
+
     u64 previous_rip = 0;
+    u64 previous_rip_addr = 0;
+
+#ifdef __TARGET_ARCH_x86
+    // The return address is guaranteed to be 8 bytes ahead of
+    // the previous stack pointer in x86_64.
+    previous_rip_addr = previous_rsp - 8;
+#endif
+
+#ifdef __TARGET_ARCH_arm64
+    // Special handling for leaf frame.
+    if (unwind_state->stack.len == 0) {
+      previous_rip = unwind_state->lr;
+    } else {
+      // This is guaranteed by the Aarch64 ABI.
+      previous_rip_addr = previous_rbp_addr + 8;
+    }
+#endif
+
     int err =
         bpf_probe_read_user(&previous_rip, 8, (void *)(previous_rip_addr));
 
@@ -547,29 +600,11 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       return 1;
     }
 
-    // Set rbp register.
-    u64 previous_rbp = 0;
-    if (found_rbp_type == RBP_TYPE_UNCHANGED) {
-      previous_rbp = unwind_state->bp;
-    } else {
-      u64 previous_rbp_addr = previous_rsp + found_rbp_offset;
-      LOG("\t(bp_offset: %d, bp value stored at %llx)", found_rbp_offset,
-          previous_rbp_addr);
-      int ret =
-          bpf_probe_read_user(&previous_rbp, 8, (void *)(previous_rbp_addr));
-      if (ret != 0) {
-        LOG("[error] previous_rbp should not be zero. This can mean "
-            "that the read has failed %d.",
-            ret);
-        bump_unwind_error_previous_rbp_zero();
-        return 1;
-      }
-    }
 
     LOG("\tprevious ip: %llx (@ %llx)", previous_rip, previous_rip_addr);
     LOG("\tprevious sp: %llx", previous_rsp);
     // Set rsp and rip registers
-    unwind_state->ip = previous_rip;
+    unwind_state->ip = remove_pac(previous_rip);
     unwind_state->sp = previous_rsp;
     // Set rbp
     LOG("\tprevious bp: %llx", previous_rbp);
@@ -627,7 +662,7 @@ static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_
   unwind_state->stack_key.kernel_stack_id = 0;
 
   if (in_kernel(PT_REGS_IP(regs))) {
-    if (!retrieve_task_registers(&unwind_state->ip, &unwind_state->sp, &unwind_state->bp)) {
+    if (!retrieve_task_registers(&unwind_state->ip, &unwind_state->sp, &unwind_state->bp, &unwind_state->lr)) {
       // in kernelspace, but failed, probs a kworker
       // todo: bump counter
       return false;
@@ -637,6 +672,7 @@ static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_
     unwind_state->ip = PT_REGS_IP(regs);
     unwind_state->sp = PT_REGS_SP(regs);
     unwind_state->bp = PT_REGS_FP(regs);
+    unwind_state->lr = remove_pac(PT_REGS_RET(regs));
   }
 
   return true;

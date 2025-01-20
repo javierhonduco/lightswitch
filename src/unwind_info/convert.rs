@@ -3,6 +3,7 @@ use std::fs::File;
 use anyhow::Result;
 use gimli::{CfaRule, CieOrFde, EhFrame, UnwindContext, UnwindSection};
 use memmap2::Mmap;
+use object::Architecture;
 use object::{Object, ObjectSection};
 use thiserror::Error;
 use tracing::{debug, error, span, Level};
@@ -76,11 +77,25 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
 
         let eh_frame_data = &eh_frame_section.uncompressed_data()?;
 
-        let eh_frame = EhFrame::new(eh_frame_data, endian);
+        let mut eh_frame = EhFrame::new(eh_frame_data, endian);
+        if object_file.architecture() == Architecture::Aarch64 {
+            eh_frame.set_vendor(gimli::Vendor::AArch64);
+        }
         let mut entries_iter = eh_frame.entries(&bases);
 
         let mut cur_cie = None;
         let mut pc_and_fde_offset = Vec::new();
+
+        let frame_pointer = if object_file.architecture() == Architecture::Aarch64 {
+            ARM64_FP
+        } else {
+            X86_FP
+        };
+        let stack_pointer = if object_file.architecture() == Architecture::Aarch64 {
+            ARM64_SP
+        } else {
+            X86_SP
+        };
 
         while let Ok(Some(entry)) = entries_iter.next() {
             match entry {
@@ -137,9 +152,9 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                         compact_row.pc = row.start_address();
                         match row.cfa() {
                             CfaRule::RegisterAndOffset { register, offset } => {
-                                if register == &RBP_X86 {
+                                if register == &frame_pointer {
                                     compact_row.cfa_type = CfaType::FramePointerOffset;
-                                } else if register == &RSP_X86 {
+                                } else if register == &stack_pointer {
                                     compact_row.cfa_type = CfaType::StackPointerOffset;
                                 } else {
                                     compact_row.cfa_type = CfaType::UnsupportedRegisterOffset;
@@ -171,7 +186,7 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                             }
                         };
 
-                        match row.register(RBP_X86) {
+                        match row.register(frame_pointer) {
                             gimli::RegisterRule::Undefined => {}
                             gimli::RegisterRule::Offset(offset) => {
                                 compact_row.rbp_type = RbpType::CfaOffset;

@@ -47,3 +47,5 @@ jobs:
         run: nix develop --command echo 0
       - name: Run `cargo check`
         run: nix develop --ignore-environment --command cargo check
+      - name: Run `cargo test`
+        run: nix develop --command cargo test --workspace

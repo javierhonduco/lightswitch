@@ -177,6 +177,7 @@ typedef struct {
   unsigned long long ip;
   unsigned long long sp;
   unsigned long long bp;
+  unsigned long long lr;
   int tail_calls;
 
   stack_count_key_t stack_key;
