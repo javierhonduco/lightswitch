@@ -45,7 +45,8 @@ use crate::profile::*;
 use crate::unwind_info::log_unwind_info_sections;
 use crate::unwind_info::manager::UnwindInfoManager;
 use crate::unwind_info::types::CompactUnwindRow;
-use crate::util::{get_online_cpus, summarize_address_range};
+use crate::util::Architecture;
+use crate::util::{architecture, get_online_cpus, summarize_address_range};
 use lightswitch_object::{ExecutableId, ObjectFile};
 
 pub enum TracerEvent {
@@ -1275,7 +1276,13 @@ impl Profiler {
         let executable_info = object_files.get(&executable_id).unwrap();
         let executable_path_open = executable_info.open_file_path();
         let executable_path = executable_info.path.to_string_lossy().to_string();
+        let needs_synthesis = executable_info.is_vdso && architecture() == Architecture::Arm64;
         std::mem::drop(object_files);
+
+        if needs_synthesis {
+            debug!("arm64 vDSO don't typically contain unwind information and synthesising it is not implemented yet");
+            return;
+        }
 
         let span = span!(
             Level::DEBUG,
@@ -1652,6 +1659,7 @@ impl Profiler {
                                     is_dyn: object_file.is_dynamic(),
                                     references: 1,
                                     native_unwind_info_size: None,
+                                    is_vdso: false,
                                 });
                             }
                             Err(e) => {
@@ -1715,6 +1723,7 @@ impl Profiler {
                                 is_dyn: object_file.is_dynamic(),
                                 references: 1,
                                 native_unwind_info_size: None,
+                                is_vdso: true,
                             },
                         );
                         mappings.push(ExecutableMapping {
