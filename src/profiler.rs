@@ -1591,12 +1591,9 @@ impl Profiler {
                         return Err(anyhow!("Go applications are not supported yet"));
                     }
 
-                    let Ok(build_id) = object_file.build_id() else {
-                        continue;
-                    };
-
+                    let build_id = object_file.build_id();
                     let Ok(executable_id) = object_file.id() else {
-                        debug!("could not get id for object file: {}", abs_path);
+                        info!("could not get id for object file: {}", abs_path);
                         continue;
                     };
 
@@ -1637,7 +1634,7 @@ impl Profiler {
                         };
                         let res = self.debug_info_manager.add_if_not_present(
                             &name,
-                            &build_id,
+                            build_id,
                             executable_id,
                             &abs_path,
                         );
@@ -1701,10 +1698,6 @@ impl Profiler {
                             debug!("vDSO object file id failed");
                             continue;
                         };
-                        let Ok(build_id) = object_file.build_id() else {
-                            debug!("vDSO object file build_id failed");
-                            continue;
-                        };
                         let Ok(file) = std::fs::File::open(&vdso_path) else {
                             debug!("vDSO object file open failed");
                             continue;
@@ -1713,6 +1706,7 @@ impl Profiler {
                             debug!("vDSO elf_load_segments failed");
                             continue;
                         };
+                        let build_id = object_file.build_id().clone();
 
                         object_files.insert(
                             executable_id,

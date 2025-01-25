@@ -51,7 +51,7 @@ itertools = "0.14.0"
 lightswitch-metadata = { path = "lightswitch-metadata", version = "0.1.0" }
 lightswitch-proto = { path = "lightswitch-proto", version = "0.1.0" }
 lightswitch-capabilities = { path = "lightswitch-capabilities", version = "0.1.0" }
-lightswitch-object = { path = "lightswitch-object", version = "0.1.0" }
+lightswitch-object = { path = "lightswitch-object", version = "0.2.0" }
 memmap2 = { workspace = true }
 anyhow = { workspace = true }
 object = { workspace = true }
