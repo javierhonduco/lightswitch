@@ -1,0 +1,73 @@
+name: release
+on:
+  push:
+    tags:
+      - "v*.*.*"
+    # branches:
+    #   - main
+  # pull_request:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        config: [
+          {os: ubuntu-22.04, target: x86_64-unknown-linux-gnu},
+          {os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu}
+        ]
+
+    runs-on: ${{ matrix.config.os }}
+    env:
+      TARGET: "${{ matrix.config.target }}"
+    permissions:
+        id-token: write
+        contents: read
+
+    steps:
+    - uses: actions/checkout@main
+    - uses: DeterminateSystems/nix-installer-action@main
+    - uses: DeterminateSystems/magic-nix-cache-action@main
+    - name: Set up nix dev env
+      run: nix develop --command echo 0
+    - name: Run `cargo test`
+      run: nix develop --command cargo test --workspace
+    - name: Build container image
+      run: nix build .#container
+    - name: Upload container
+      uses: actions/upload-artifact@main
+      with:
+        name: lightswitch-container-${{ matrix.config.target }}
+        path: ./result
+    - name: Build `lightswitch` statically linked with glibc
+      run: nix develop --ignore-environment --keep TARGET --command bash -c 'RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target $TARGET'
+    - name: Upload static binary
+      uses: actions/upload-artifact@main
+      with:
+        name: lightswitch-static-glibc-${{ matrix.config.target }}
+        path: ./target/${{ matrix.config.target }}/release/lightswitch
+
+  release:
+    runs-on: ubuntu-22.04
+    needs: [build]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Display artifacts structure
+        run: tree -h
+      - name: Rename artifacts
+        run: |
+          mkdir renamed
+          cp lightswitch-container-x86_64-unknown-linux-gnu/result renamed/lightswitch-container-x86_64-unknown-linux-gnu
+          cp lightswitch-static-glibc-x86_64-unknown-linux-gnu/lightswitch renamed/lightswitch-static-glibc-x86_64-unknown-linux-gnu
+          cp lightswitch-container-aarch64-unknown-linux-gnu/result renamed/lightswitch-container-aarch64-unknown-linux-gnu
+          cp lightswitch-static-glibc-aarch64-unknown-linux-gnu/lightswitch renamed/lightswitch-static-glibc-aarch64-unknown-linux-gnu
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            renamed/lightswitch-container-x86_64-unknown-linux-gnu
+            renamed/lightswitch-static-glibc-x86_64-unknown-linux-gnu
+            renamed/lightswitch-container-aarch64-unknown-linux-gnu
+            renamed/lightswitch-static-glibc-aarch64-unknown-linux-gnu
