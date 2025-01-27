@@ -1,6 +1,6 @@
 [package]
 name = "lightswitch-metadata"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Provides metadata used by profilers and debuggers"
 license = "MIT"
