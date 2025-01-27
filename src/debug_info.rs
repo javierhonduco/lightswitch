@@ -8,7 +8,6 @@ use reqwest::StatusCode;
 use tracing::instrument;
 
 use lightswitch_object::BuildId;
-use lightswitch_object::ExecutableId;
 
 /// Handles with debug information.
 ///
@@ -21,7 +20,6 @@ pub trait DebugInfoManager {
         &self,
         name: &str,
         build_id: &BuildId,
-        executable_id: ExecutableId,
         debug_info: &Path,
     ) -> anyhow::Result<()>;
     fn debug_info_path(&self) -> Option<PathBuf>;
@@ -33,7 +31,6 @@ impl DebugInfoManager for DebugInfoBackendNull {
         &self,
         _name: &str,
         _build_id: &BuildId,
-        _executable_id: ExecutableId,
         _debug_info: &Path,
     ) -> anyhow::Result<()> {
         Ok(())
@@ -54,7 +51,6 @@ impl DebugInfoManager for DebugInfoBackendFilesystem {
         &self,
         _name: &str,
         build_id: &BuildId,
-        executable_id: ExecutableId,
         debug_info: &Path,
     ) -> anyhow::Result<()> {
         // try to find, else extract
@@ -62,7 +58,7 @@ impl DebugInfoManager for DebugInfoBackendFilesystem {
             return Ok(());
         }
 
-        self.add_to_fs(build_id, executable_id, debug_info)
+        self.add_to_fs(build_id, debug_info)
     }
 
     fn debug_info_path(&self) -> Option<PathBuf> {
@@ -75,12 +71,7 @@ impl DebugInfoBackendFilesystem {
         self.path.join(build_id.to_string()).exists()
     }
 
-    fn add_to_fs(
-        &self,
-        build_id: &BuildId,
-        _executable_id: ExecutableId,
-        debug_info: &Path,
-    ) -> anyhow::Result<()> {
+    fn add_to_fs(&self, build_id: &BuildId, debug_info: &Path) -> anyhow::Result<()> {
         // TODO: add support for other methods beyond copying. For example
         // hardlinks could be used and only fall back to copying if the src
         // and dst filesystems differ.
@@ -102,7 +93,6 @@ impl DebugInfoManager for DebugInfoBackendRemote {
         &self,
         name: &str,
         build_id: &BuildId,
-        executable_id: ExecutableId,
         debug_info: &Path,
     ) -> anyhow::Result<()> {
         // TODO: add a local cache to not have to reach to the backend
@@ -112,7 +102,7 @@ impl DebugInfoManager for DebugInfoBackendRemote {
         }
 
         // TODO: do this in another thread.
-        self.upload_to_backend(name, build_id, executable_id, debug_info)?;
+        self.upload_to_backend(name, build_id, debug_info)?;
         Ok(())
     }
 
@@ -144,7 +134,6 @@ impl DebugInfoBackendRemote {
         &self,
         name: &str,
         build_id: &BuildId,
-        executable_id: ExecutableId,
         debug_info: &Path,
     ) -> anyhow::Result<()> {
         let client_builder = reqwest::blocking::Client::builder().timeout(self.http_client_timeout);
@@ -152,11 +141,10 @@ impl DebugInfoBackendRemote {
 
         let response = client
             .post(format!(
-                "{}/debuginfo/new/{}/{}/{}",
+                "{}/debuginfo/new/{}/{}",
                 self.server_url.clone(),
                 name,
-                build_id,
-                executable_id
+                build_id
             ))
             .body(File::open(debug_info)?)
             .send()?;
