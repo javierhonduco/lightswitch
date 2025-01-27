@@ -1632,12 +1632,9 @@ impl Profiler {
                             Some(os_name) => os_name.to_string_lossy().to_string(),
                             None => "error".to_string(),
                         };
-                        let res = self.debug_info_manager.add_if_not_present(
-                            &name,
-                            build_id,
-                            executable_id,
-                            &abs_path,
-                        );
+                        let res = self
+                            .debug_info_manager
+                            .add_if_not_present(&name, build_id, &abs_path);
                         debug!("debug info manager add result {:?}", res);
                     } else {
                         debug!(
