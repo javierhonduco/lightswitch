@@ -872,7 +872,7 @@ impl Profiler {
     }
 
     fn add_bpf_unwind_info(inner: &MapHandle, unwind_info: &[CompactUnwindRow]) {
-        let chunk_size = 25_000;
+        let chunk_size = std::cmp::min(500_000, unwind_info.len()); // 500k entries fit in 8MB.
         let mut keys: Vec<u8> = Vec::with_capacity(std::mem::size_of::<u32>() * chunk_size);
         let mut values: Vec<u8> =
             Vec::with_capacity(std::mem::size_of::<stack_unwind_row_t>() * chunk_size);
