@@ -4,6 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use anyhow::anyhow;
 use reqwest::StatusCode;
 use tracing::instrument;
 
@@ -84,9 +85,29 @@ impl DebugInfoBackendFilesystem {
 
 #[derive(Debug)]
 pub struct DebugInfoBackendRemote {
-    pub http_client_timeout: Duration,
     pub server_url: String,
+    pub query_client: reqwest::blocking::Client,
+    pub upload_client: reqwest::blocking::Client,
 }
+
+impl DebugInfoBackendRemote {
+    pub fn new(
+        server_url: String,
+        query_timeout: Duration,
+        upload_timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        Ok(DebugInfoBackendRemote {
+            server_url,
+            query_client: reqwest::blocking::Client::builder()
+                .timeout(query_timeout)
+                .build()?,
+            upload_client: reqwest::blocking::Client::builder()
+                .timeout(upload_timeout)
+                .build()?,
+        })
+    }
+}
+
 impl DebugInfoManager for DebugInfoBackendRemote {
     #[instrument(level = "debug")]
     fn add_if_not_present(
@@ -115,9 +136,8 @@ impl DebugInfoBackendRemote {
     /// Whether the backend knows about some debug information.
     #[instrument(level = "debug")]
     fn find_in_backend(&self, build_id: &BuildId) -> anyhow::Result<bool> {
-        let client_builder = reqwest::blocking::Client::builder().timeout(self.http_client_timeout);
-        let client = client_builder.build()?;
-        let response = client
+        let response = self
+            .query_client
             .get(format!(
                 "{}/debuginfo/{}",
                 self.server_url.clone(),
@@ -136,10 +156,8 @@ impl DebugInfoBackendRemote {
         build_id: &BuildId,
         debug_info: &Path,
     ) -> anyhow::Result<()> {
-        let client_builder = reqwest::blocking::Client::builder().timeout(self.http_client_timeout);
-        let client = client_builder.build()?;
-
-        let response = client
+        let response = self
+            .upload_client
             .post(format!(
                 "{}/debuginfo/new/{}/{}",
                 self.server_url.clone(),
@@ -148,7 +166,10 @@ impl DebugInfoBackendRemote {
             ))
             .body(File::open(debug_info)?)
             .send()?;
-        println!("wrote debug info to server {:?}", response);
+
+        if !response.status().is_success() {
+            return Err(anyhow!("debuginfo upload failed with {:?}", response));
+        }
         Ok(())
     }
 }
