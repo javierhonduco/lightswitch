@@ -145,10 +145,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         DebugInfoBackend::Copy => Box::new(DebugInfoBackendFilesystem {
             path: PathBuf::from("/tmp"),
         }),
-        DebugInfoBackend::Remote => Box::new(DebugInfoBackendRemote {
-            http_client_timeout: Duration::from_millis(500),
+        DebugInfoBackend::Remote => Box::new(DebugInfoBackendRemote::new(
             server_url,
-        }),
+            Duration::from_millis(500),
+            Duration::from_secs(15),
+        )?),
     };
 
     let profiler_config = ProfilerConfig {

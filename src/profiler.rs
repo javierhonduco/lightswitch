@@ -1635,7 +1635,17 @@ impl Profiler {
                         let res = self
                             .debug_info_manager
                             .add_if_not_present(&name, build_id, &abs_path);
-                        debug!("debug info manager add result {:?}", res);
+                        match res {
+                            Ok(_) => {
+                                debug!("debuginfo add_if_not_present succeded {:?}", res);
+                            }
+                            Err(e) => {
+                                error!(
+                                    "debuginfo add_if_not_present failed with: {}",
+                                    e.root_cause()
+                                );
+                            }
+                        }
                     } else {
                         debug!(
                             "could not find debug information for {}",
