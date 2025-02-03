@@ -5,6 +5,7 @@ use std::collections::hash_map::OccupiedEntry;
 use std::collections::HashMap;
 use std::env::temp_dir;
 use std::fs;
+use std::fs::File;
 use std::io::ErrorKind;
 use std::mem::size_of;
 use std::mem::ManuallyDrop;
@@ -36,6 +37,7 @@ use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
 use crate::debug_info::DebugInfoBackendNull;
 use crate::debug_info::DebugInfoManager;
+use crate::kernel::get_all_kernel_code_ranges;
 use crate::perf_events::setup_perf_event;
 use crate::process::{
     ExecutableMapping, ExecutableMappingType, ExecutableMappings, ObjectFileInfo, Pid, ProcessInfo,
@@ -198,7 +200,7 @@ fn fetch_vdso_info(
     cache_dir: &Path,
 ) -> Result<(PathBuf, ObjectFile)> {
     // Read raw memory
-    let file = fs::File::open(format!("/proc/{}/mem", pid))?;
+    let file = File::open(format!("/proc/{}/mem", pid))?;
     let size = end_addr - start_addr;
     let mut buf: Vec<u8> = vec![0; size as usize];
     file.read_exact_at(&mut buf, start_addr + offset)?;
@@ -430,6 +432,57 @@ impl Profiler {
         self.profile_send.send(profile).expect("handle send");
     }
 
+    pub fn add_kernel_info(&mut self) {
+        match get_all_kernel_code_ranges() {
+            Ok(kernel_code_ranges) => {
+                // Pid 0 is the special value for kernel code.
+                self.procs.write().insert(
+                    0,
+                    ProcessInfo {
+                        status: ProcessStatus::Running,
+                        mappings: ExecutableMappings(
+                            kernel_code_ranges
+                                .iter()
+                                .map(|e| ExecutableMapping {
+                                    executable_id: e.build_id.id().expect("should never fail"),
+                                    build_id: Some(e.build_id.clone()),
+                                    kind: ExecutableMappingType::Anonymous,
+                                    start_addr: e.start,
+                                    end_addr: e.end,
+                                    offset: 0,
+                                    load_address: 0,
+                                    main_exec: false,
+                                    soft_delete: false,
+                                })
+                                .collect(),
+                        ),
+                    },
+                );
+
+                for kernel_code_range in kernel_code_ranges {
+                    self.object_files.write().insert(
+                        kernel_code_range
+                            .build_id
+                            .id()
+                            .expect("should never happen"),
+                        ObjectFileInfo {
+                            file: File::open("/").expect("should never fail"), // TODO: placeholder, but this will be removed soon
+                            path: PathBuf::from(kernel_code_range.name),
+                            elf_load_segments: vec![],
+                            is_dyn: false,
+                            references: 1,
+                            native_unwind_info_size: None,
+                            is_vdso: false,
+                        },
+                    );
+                }
+            }
+            Err(e) => {
+                error!("Fetching kernel code ranges failed with: {:?}", e);
+            }
+        }
+    }
+
     pub fn run(mut self, collector: ThreadSafeCollector) -> Duration {
         // In this case, we only want to calculate maximum sampling buffer sizes based on the
         // number of "online" CPUs, not "possible" CPUs, which they sometimes differ.
@@ -441,6 +494,7 @@ impl Profiler {
 
         self.setup_perf_events();
         self.set_bpf_map_info();
+        self.add_kernel_info();
 
         self.tracers.attach().expect("attach tracers");
 
@@ -1534,11 +1588,6 @@ impl Profiler {
         }
     }
 
-    pub fn add_kernel_objects(&mut self) {
-        let object_files_clone = self.object_files.clone();
-        let mut object_files = object_files_clone.write();
-    }
-
     pub fn add_proc(&mut self, pid: Pid) -> anyhow::Result<()> {
         let proc = procfs::process::Process::new(pid)?;
         let maps = proc.maps()?;
@@ -1569,7 +1618,7 @@ impl Profiler {
 
                     // We want to open the file as quickly as possible to minimise the chances of races
                     // if the file is deleted.
-                    let file = match fs::File::open(&abs_path) {
+                    let file = match File::open(&abs_path) {
                         Ok(f) => f,
                         Err(e) => {
                             debug!("failed to open file {} due to {:?}", abs_path, e);
@@ -1710,7 +1759,7 @@ impl Profiler {
                             debug!("vDSO object file id failed");
                             continue;
                         };
-                        let Ok(file) = std::fs::File::open(&vdso_path) else {
+                        let Ok(file) = File::open(&vdso_path) else {
                             debug!("vDSO object file open failed");
                             continue;
                         };

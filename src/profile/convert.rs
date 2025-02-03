@@ -53,12 +53,11 @@ pub fn to_pprof(
         let kstack = sample.kstack;
         let mut location_ids = Vec::new();
 
-        // Assume none come from kernel modules...
         for kframe in kstack {
             let virtual_address = kframe.virtual_address;
 
             let Some(info) = procs.get(&0) else {
-                // todo: maybe append an error frame for debugging?
+                // special value for the kernel
                 continue;
             };
 
@@ -67,43 +66,42 @@ pub fn to_pprof(
                 continue;
             };
 
-            /* let mapping_id: u64 = match kernel_code_sections.find_module(kframe.virtual_address) {
-                           Some(kernel_code_section) => {
-                               let fake_executable_id = u64::from_ne_bytes(
-                                   kernel_code_section.build_id.short().as_bytes()[..8]
-                                       .try_into()
-                                       .unwrap(),
-                               );
-                               /*      let mut arr = [0u8; 8];
-                               arr.copy_from_slice(&your_slice); */
-                               pprof.add_mapping(
-                                   fake_executable_id,
-                                   kernel_code_section.start,
-                                   kernel_code_section.start + kernel_code_section.size,
-                                   0x0,
-                                   &kernel_code_section.name,
-                                   &kernel_code_section.build_id.to_string(),
-                               )
-                           }
-                           None => 1, // @nocommit, think about this one
-                       };
-            */
-            let mut lines = Vec::new();
+            match objs.get(&mapping.executable_id) {
+                Some(obj) => {
+                    let mapping_id = pprof.add_mapping(
+                        mapping.executable_id,
+                        mapping.start_addr,
+                        mapping.end_addr,
+                        0x0,
+                        obj.path.to_str().expect("will always be valid"), // should this be named name?,
+                        &mapping
+                            .build_id
+                            .expect("this should never happen")
+                            .to_string(),
+                    );
 
-            match kframe.symbolization_result {
-                Some(Ok((name, _))) => {
-                    let (line, _) = pprof.add_line(&name);
-                    lines.push(line);
+                    let mut lines = Vec::new();
+
+                    match kframe.symbolization_result {
+                        Some(Ok((name, _))) => {
+                            let (line, _) = pprof.add_line(&name);
+                            lines.push(line);
+                        }
+                        Some(Err(e)) => {
+                            let (line, _) = pprof.add_line(&e.to_string());
+                            lines.push(line);
+                        }
+                        None => {}
+                    }
+
+                    let location =
+                        pprof.add_location(kframe.file_offset.unwrap_or(0), mapping_id, lines);
+                    location_ids.push(location);
                 }
-                Some(Err(e)) => {
-                    let (line, _) = pprof.add_line(&e.to_string());
-                    lines.push(line);
+                None => {
+                    error!("executable with id {} not found", mapping.executable_id);
                 }
-                None => {}
             }
-
-            /*   let location = pprof.add_location(kframe.file_offset.unwrap_or(0), mapping_id, lines);
-            location_ids.push(location); */
         }
 
         for uframe in ustack {
@@ -169,7 +167,7 @@ pub fn to_pprof(
                     location_ids.push(location);
                 }
                 None => {
-                    debug!("build id not found");
+                    debug!("executable with id {} not found", mapping.executable_id);
                 }
             }
         }

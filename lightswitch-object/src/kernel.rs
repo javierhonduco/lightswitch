@@ -29,7 +29,10 @@ pub fn parse_gnu_build_id_from_notes(data: &[u8]) -> Result<BuildId, anyhow::Err
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::fs::File;
+    use std::io::Read;
+
+    use crate::*;
 
     #[test]
     fn test_parse_gnu_build_id_from_notes() {
@@ -39,7 +42,13 @@ mod tests {
 
         assert_eq!(
             parse_gnu_build_id_from_notes(&data).unwrap(),
-            BuildId::Gnu("b8d70cf519fac5a5cccdda1a61c38995bd9b3059".into())
+            BuildId {
+                flavour: buildid::BuildIdFlavour::Gnu,
+                data: vec![
+                    184, 215, 12, 245, 25, 250, 197, 165, 204, 205, 218, 26, 97, 195, 137, 149,
+                    189, 155, 48, 89
+                ],
+            }
         );
     }
 }

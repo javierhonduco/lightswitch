@@ -24,7 +24,7 @@ pub struct AddressRange {
 
 /// Lists all kernel code ranges. This includes the kernel image and the loaded
 /// modules.
-fn get_all_kernel_code_ranges() -> Result<Vec<KernelCodeRange>, anyhow::Error> {
+pub fn get_all_kernel_code_ranges() -> Result<Vec<KernelCodeRange>, anyhow::Error> {
     let mut code_sections = _list_modules()?;
     let address_range = kernel_addresses()?;
     code_sections.push(KernelCodeRange {

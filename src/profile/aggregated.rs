@@ -78,19 +78,11 @@ impl RawAggregatedSample {
                     break;
                 }
 
-                // We might not know about some module that was loaded after we read this information. BPF programs
-                // aren't tracked yet either.
-                /*        let file_offset = kernel.find_module(virtual_address).map(|module| {
-                    if module.name == "[vmlinux]" {
-                        virtual_address - 0x1000000
-                    } else {
-                        virtual_address - module.start // @nocommit check this logic, maybe the offset has to be removed here too?
-                    }
-                }); */
-
+                // todo: revisit this as the file offset calculation won't work
+                // for kaslr
                 processed_sample.kstack.push(Frame {
                     virtual_address,
-                    file_offset: Some(virtual_address - 0x1000000),
+                    file_offset: Some(virtual_address),
                     symbolization_result: None,
                 });
             }
