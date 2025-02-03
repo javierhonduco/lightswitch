@@ -21,8 +21,8 @@ jobs:
     - uses: DeterminateSystems/magic-nix-cache-action@main
     - name: Set up nix dev env
       run: nix develop --command echo 0
-    - name: Run `cargo build`
-      run: nix develop --ignore-environment --command cargo build
+    - name: Run `cargo check`
+      run: nix develop --ignore-environment --command cargo check
     - name: Run `cargo clippy`
       run: nix develop --command cargo clippy --workspace --all-targets -- -D warnings
     - name: Run `cargo test`
@@ -33,3 +33,19 @@ jobs:
       run: nix fmt -- --check .
     - name: Run `cargo shear`
       run: nix develop --command cargo shear
+
+  ci-arm:
+    runs-on: ubuntu-22.04-arm
+    permissions:
+        id-token: write
+        contents: read
+    steps:
+      - uses: actions/checkout@main
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Set up nix dev env
+        run: nix develop --command echo 0
+      - name: Run `cargo check`
+        run: nix develop --ignore-environment --command cargo check
+      - name: Run `cargo test`
+        run: nix develop --command cargo test --workspace

@@ -85,5 +85,11 @@ lazy_static! {
     ].map(|a| a.0);
 }
 
-pub const RBP_X86: gimli::Register = gimli::Register(6);
-pub const RSP_X86: gimli::Register = gimli::Register(7);
+// Source: https://gitlab.com/x86-psABIs/x86-64-ABI/-/jobs/artifacts/d725a372/raw/x86-64-ABI/abi.pdf?job=build
+// > Figure 3.36: DWARF Register Number Mapping
+pub const X86_FP: gimli::Register = gimli::Register(6); // Frame Pointer ($rbp)
+pub const X86_SP: gimli::Register = gimli::Register(7); // Stack Pointer ($rsp)
+
+// Source: https://github.com/ARM-software/abi-aa/blob/05abf4f7/aadwarf64/aadwarf64.rst#41dwarf-register-names
+pub const ARM64_FP: gimli::Register = gimli::Register(29); // Frame Pointer (x29)
+pub const ARM64_SP: gimli::Register = gimli::Register(31); // Stack Pointer (sp)

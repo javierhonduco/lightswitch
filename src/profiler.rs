@@ -45,7 +45,8 @@ use crate::profile::*;
 use crate::unwind_info::log_unwind_info_sections;
 use crate::unwind_info::manager::UnwindInfoManager;
 use crate::unwind_info::types::CompactUnwindRow;
-use crate::util::{get_online_cpus, summarize_address_range};
+use crate::util::Architecture;
+use crate::util::{architecture, get_online_cpus, summarize_address_range};
 use lightswitch_object::{ExecutableId, ObjectFile};
 
 pub enum TracerEvent {
@@ -871,7 +872,7 @@ impl Profiler {
     }
 
     fn add_bpf_unwind_info(inner: &MapHandle, unwind_info: &[CompactUnwindRow]) {
-        let chunk_size = 25_000;
+        let chunk_size = std::cmp::min(500_000, unwind_info.len()); // 500k entries fit in 8MB.
         let mut keys: Vec<u8> = Vec::with_capacity(std::mem::size_of::<u32>() * chunk_size);
         let mut values: Vec<u8> =
             Vec::with_capacity(std::mem::size_of::<stack_unwind_row_t>() * chunk_size);
@@ -1275,7 +1276,13 @@ impl Profiler {
         let executable_info = object_files.get(&executable_id).unwrap();
         let executable_path_open = executable_info.open_file_path();
         let executable_path = executable_info.path.to_string_lossy().to_string();
+        let needs_synthesis = executable_info.is_vdso && architecture() == Architecture::Arm64;
         std::mem::drop(object_files);
+
+        if needs_synthesis {
+            debug!("arm64 vDSO don't typically contain unwind information and synthesising it is not implemented yet");
+            return;
+        }
 
         let span = span!(
             Level::DEBUG,
@@ -1584,12 +1591,9 @@ impl Profiler {
                         return Err(anyhow!("Go applications are not supported yet"));
                     }
 
-                    let Ok(build_id) = object_file.build_id() else {
-                        continue;
-                    };
-
+                    let build_id = object_file.build_id();
                     let Ok(executable_id) = object_file.id() else {
-                        debug!("could not get id for object file: {}", abs_path);
+                        info!("could not get id for object file: {}", abs_path);
                         continue;
                     };
 
@@ -1628,13 +1632,20 @@ impl Profiler {
                             Some(os_name) => os_name.to_string_lossy().to_string(),
                             None => "error".to_string(),
                         };
-                        let res = self.debug_info_manager.add_if_not_present(
-                            &name,
-                            &build_id,
-                            executable_id,
-                            &abs_path,
-                        );
-                        debug!("debug info manager add result {:?}", res);
+                        let res = self
+                            .debug_info_manager
+                            .add_if_not_present(&name, build_id, &abs_path);
+                        match res {
+                            Ok(_) => {
+                                debug!("debuginfo add_if_not_present succeded {:?}", res);
+                            }
+                            Err(e) => {
+                                error!(
+                                    "debuginfo add_if_not_present failed with: {}",
+                                    e.root_cause()
+                                );
+                            }
+                        }
                     } else {
                         debug!(
                             "could not find debug information for {}",
@@ -1652,6 +1663,7 @@ impl Profiler {
                                     is_dyn: object_file.is_dynamic(),
                                     references: 1,
                                     native_unwind_info_size: None,
+                                    is_vdso: false,
                                 });
                             }
                             Err(e) => {
@@ -1693,10 +1705,6 @@ impl Profiler {
                             debug!("vDSO object file id failed");
                             continue;
                         };
-                        let Ok(build_id) = object_file.build_id() else {
-                            debug!("vDSO object file build_id failed");
-                            continue;
-                        };
                         let Ok(file) = std::fs::File::open(&vdso_path) else {
                             debug!("vDSO object file open failed");
                             continue;
@@ -1705,6 +1713,7 @@ impl Profiler {
                             debug!("vDSO elf_load_segments failed");
                             continue;
                         };
+                        let build_id = object_file.build_id().clone();
 
                         object_files.insert(
                             executable_id,
@@ -1715,6 +1724,7 @@ impl Profiler {
                                 is_dyn: object_file.is_dynamic(),
                                 references: 1,
                                 native_unwind_info_size: None,
+                                is_vdso: true,
                             },
                         );
                         mappings.push(ExecutableMapping {

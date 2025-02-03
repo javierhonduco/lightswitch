@@ -117,6 +117,7 @@ pub struct ObjectFileInfo {
     pub is_dyn: bool,
     pub references: i64,
     pub native_unwind_info_size: Option<u64>,
+    pub is_vdso: bool,
 }
 
 impl Clone for ObjectFileInfo {
@@ -128,6 +129,7 @@ impl Clone for ObjectFileInfo {
             is_dyn: self.is_dyn,
             references: self.references,
             native_unwind_info_size: self.native_unwind_info_size,
+            is_vdso: self.is_vdso,
         }
     }
 }
@@ -202,6 +204,7 @@ mod tests {
             is_dyn: false,
             references: 1,
             native_unwind_info_size: None,
+            is_vdso: false,
         };
 
         remove_file(file_path).unwrap();
@@ -221,6 +224,7 @@ mod tests {
             is_dyn: false,
             references: 0,
             native_unwind_info_size: None,
+            is_vdso: false,
         };
 
         let mapping = ExecutableMapping {

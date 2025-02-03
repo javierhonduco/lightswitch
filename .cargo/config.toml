@@ -4,5 +4,8 @@ rustflags = ["-Cforce-frame-pointers=yes"]
 [target.x86_64-unknown-linux-gnu]
 runner = "sudo -E"
 
+[target.aarch64-unknown-linux-gnu]
+runner = "sudo -E"
+
 [alias]
 xtask = "run --package xtask --"

@@ -4,11 +4,11 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use anyhow::anyhow;
 use reqwest::StatusCode;
 use tracing::instrument;
 
 use lightswitch_object::BuildId;
-use lightswitch_object::ExecutableId;
 
 /// Handles with debug information.
 ///
@@ -21,7 +21,6 @@ pub trait DebugInfoManager {
         &self,
         name: &str,
         build_id: &BuildId,
-        executable_id: ExecutableId,
         debug_info: &Path,
     ) -> anyhow::Result<()>;
     fn debug_info_path(&self) -> Option<PathBuf>;
@@ -33,7 +32,6 @@ impl DebugInfoManager for DebugInfoBackendNull {
         &self,
         _name: &str,
         _build_id: &BuildId,
-        _executable_id: ExecutableId,
         _debug_info: &Path,
     ) -> anyhow::Result<()> {
         Ok(())
@@ -54,7 +52,6 @@ impl DebugInfoManager for DebugInfoBackendFilesystem {
         &self,
         _name: &str,
         build_id: &BuildId,
-        executable_id: ExecutableId,
         debug_info: &Path,
     ) -> anyhow::Result<()> {
         // try to find, else extract
@@ -62,7 +59,7 @@ impl DebugInfoManager for DebugInfoBackendFilesystem {
             return Ok(());
         }
 
-        self.add_to_fs(build_id, executable_id, debug_info)
+        self.add_to_fs(build_id, debug_info)
     }
 
     fn debug_info_path(&self) -> Option<PathBuf> {
@@ -75,12 +72,7 @@ impl DebugInfoBackendFilesystem {
         self.path.join(build_id.to_string()).exists()
     }
 
-    fn add_to_fs(
-        &self,
-        build_id: &BuildId,
-        _executable_id: ExecutableId,
-        debug_info: &Path,
-    ) -> anyhow::Result<()> {
+    fn add_to_fs(&self, build_id: &BuildId, debug_info: &Path) -> anyhow::Result<()> {
         // TODO: add support for other methods beyond copying. For example
         // hardlinks could be used and only fall back to copying if the src
         // and dst filesystems differ.
@@ -93,16 +85,35 @@ impl DebugInfoBackendFilesystem {
 
 #[derive(Debug)]
 pub struct DebugInfoBackendRemote {
-    pub http_client_timeout: Duration,
     pub server_url: String,
+    pub query_client: reqwest::blocking::Client,
+    pub upload_client: reqwest::blocking::Client,
 }
+
+impl DebugInfoBackendRemote {
+    pub fn new(
+        server_url: String,
+        query_timeout: Duration,
+        upload_timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        Ok(DebugInfoBackendRemote {
+            server_url,
+            query_client: reqwest::blocking::Client::builder()
+                .timeout(query_timeout)
+                .build()?,
+            upload_client: reqwest::blocking::Client::builder()
+                .timeout(upload_timeout)
+                .build()?,
+        })
+    }
+}
+
 impl DebugInfoManager for DebugInfoBackendRemote {
     #[instrument(level = "debug")]
     fn add_if_not_present(
         &self,
         name: &str,
         build_id: &BuildId,
-        executable_id: ExecutableId,
         debug_info: &Path,
     ) -> anyhow::Result<()> {
         // TODO: add a local cache to not have to reach to the backend
@@ -112,7 +123,7 @@ impl DebugInfoManager for DebugInfoBackendRemote {
         }
 
         // TODO: do this in another thread.
-        self.upload_to_backend(name, build_id, executable_id, debug_info)?;
+        self.upload_to_backend(name, build_id, debug_info)?;
         Ok(())
     }
 
@@ -125,9 +136,8 @@ impl DebugInfoBackendRemote {
     /// Whether the backend knows about some debug information.
     #[instrument(level = "debug")]
     fn find_in_backend(&self, build_id: &BuildId) -> anyhow::Result<bool> {
-        let client_builder = reqwest::blocking::Client::builder().timeout(self.http_client_timeout);
-        let client = client_builder.build()?;
-        let response = client
+        let response = self
+            .query_client
             .get(format!(
                 "{}/debuginfo/{}",
                 self.server_url.clone(),
@@ -144,23 +154,22 @@ impl DebugInfoBackendRemote {
         &self,
         name: &str,
         build_id: &BuildId,
-        executable_id: ExecutableId,
         debug_info: &Path,
     ) -> anyhow::Result<()> {
-        let client_builder = reqwest::blocking::Client::builder().timeout(self.http_client_timeout);
-        let client = client_builder.build()?;
-
-        let response = client
+        let response = self
+            .upload_client
             .post(format!(
-                "{}/debuginfo/new/{}/{}/{}",
+                "{}/debuginfo/new/{}/{}",
                 self.server_url.clone(),
                 name,
-                build_id,
-                executable_id
+                build_id
             ))
             .body(File::open(debug_info)?)
             .send()?;
-        println!("wrote debug info to server {:?}", response);
+
+        if !response.status().is_success() {
+            return Err(anyhow!("debuginfo upload failed with {:?}", response));
+        }
         Ok(())
     }
 }
