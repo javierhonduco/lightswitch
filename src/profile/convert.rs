@@ -68,6 +68,15 @@ pub fn to_pprof(
 
             match objs.get(&mapping.executable_id) {
                 Some(obj) => {
+                    let normalized_addr = kframe
+                        .file_offset
+                        .or_else(|| obj.normalized_address(virtual_address, &mapping));
+
+                    if normalized_addr.is_none() {
+                        debug!("normalized address is none");
+                        continue;
+                    }
+
                     let mapping_id = pprof.add_mapping(
                         mapping.executable_id,
                         mapping.start_addr,
@@ -95,7 +104,7 @@ pub fn to_pprof(
                     }
 
                     let location =
-                        pprof.add_location(kframe.file_offset.unwrap_or(0), mapping_id, lines);
+                        pprof.add_location(normalized_addr.unwrap_or(0), mapping_id, lines);
                     location_ids.push(location);
                 }
                 None => {

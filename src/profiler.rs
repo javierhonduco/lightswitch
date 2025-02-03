@@ -37,7 +37,7 @@ use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
 use crate::debug_info::DebugInfoBackendNull;
 use crate::debug_info::DebugInfoManager;
-use crate::kernel::get_all_kernel_code_ranges;
+use crate::kernel::get_all_kernel_modules;
 use crate::perf_events::setup_perf_event;
 use crate::process::{
     ExecutableMapping, ExecutableMappingType, ExecutableMappings, ObjectFileInfo, Pid, ProcessInfo,
@@ -432,8 +432,10 @@ impl Profiler {
         self.profile_send.send(profile).expect("handle send");
     }
 
-    pub fn add_kernel_info(&mut self) {
-        match get_all_kernel_code_ranges() {
+    pub fn add_kernel_modules(&mut self) {
+        let kaslr_offset = lightswitch_object::kaslr_offset().expect("aslr yo");
+
+        match get_all_kernel_modules() {
             Ok(kernel_code_ranges) => {
                 // Pid 0 is the special value for kernel code.
                 self.procs.write().insert(
@@ -443,16 +445,22 @@ impl Profiler {
                         mappings: ExecutableMappings(
                             kernel_code_ranges
                                 .iter()
-                                .map(|e| ExecutableMapping {
-                                    executable_id: e.build_id.id().expect("should never fail"),
-                                    build_id: Some(e.build_id.clone()),
-                                    kind: ExecutableMappingType::Anonymous,
-                                    start_addr: e.start,
-                                    end_addr: e.end,
-                                    offset: 0,
-                                    load_address: 0,
-                                    main_exec: false,
-                                    soft_delete: false,
+                                .map(|e| {
+                                    debug!(
+                                        "kernel module {} 0x{:x} - 0x{:x}",
+                                        e.name, e.start, e.end
+                                    );
+                                    ExecutableMapping {
+                                        executable_id: e.build_id.id().expect("should never fail"),
+                                        build_id: Some(e.build_id.clone()),
+                                        kind: ExecutableMappingType::Kernel,
+                                        start_addr: e.start,
+                                        end_addr: e.end,
+                                        offset: kaslr_offset,
+                                        load_address: 0,
+                                        main_exec: false,
+                                        soft_delete: false,
+                                    }
                                 })
                                 .collect(),
                         ),
@@ -494,7 +502,7 @@ impl Profiler {
 
         self.setup_perf_events();
         self.set_bpf_map_info();
-        self.add_kernel_info();
+        self.add_kernel_modules();
 
         self.tracers.attach().expect("attach tracers");
 
