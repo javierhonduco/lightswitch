@@ -165,7 +165,7 @@ void* find_map_for_bucket(u32 bucket_id) {
 // and offset can be passed that will be filled in with the mapping's load
 // address.
 static __always_inline void*
-find_page(mapping_t *mapping, u64 object_relative_pc, u64 *left, u64 *right) {
+find_page(mapping_t *mapping, u64 object_relative_pc, u64 *low_index, u64 *high_index) {
   page_key_t page_key = {
     .executable_id = mapping->executable_id,
     .file_offset = object_relative_pc,
@@ -181,8 +181,8 @@ find_page(mapping_t *mapping, u64 object_relative_pc, u64 *left, u64 *right) {
 
     void *inner_map = bpf_map_lookup_elem(outer_map, &mapping->executable_id);
     if (inner_map != NULL) {
-      *left = found_page->left;
-      *right = found_page->size;
+      *low_index = found_page->low_index;
+      *high_index = found_page->high_index;
       return inner_map;
     }
   }
@@ -410,9 +410,9 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     u64 object_relative_pc_high = HIGH_PC(object_relative_pc);
     u16 object_relative_pc_low = LOW_PC(object_relative_pc);
 
-    u64 left = 0;
-    u64 right = 0;
-    void *inner = find_page(mapping, object_relative_pc_high, &left, &right);
+    u64 low_index = 0;
+    u64 high_index = 0;
+    void *inner = find_page(mapping, object_relative_pc_high, &low_index, &high_index);
     if (inner == NULL) {
       Event event = {
           .type = EVENT_NEED_UNWIND_INFO,
@@ -423,7 +423,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       return 1;
     }
 
-    u64 table_idx = find_offset_for_pc(inner, object_relative_pc_low, left, right);
+    u64 table_idx = find_offset_for_pc(inner, object_relative_pc_low, low_index, high_index);
 
     if (table_idx == BINARY_SEARCH_DEFAULT ||
         table_idx == BINARY_SEARCH_SHOULD_NEVER_HAPPEN ||
@@ -432,10 +432,10 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       bool in_previous_page = false;
 
       if (table_idx == BINARY_SEARCH_DEFAULT) {
-        left -= 1;
-        stack_unwind_row_t *previous_row = bpf_map_lookup_elem(inner, &left);
+        low_index -= 1;
+        stack_unwind_row_t *previous_row = bpf_map_lookup_elem(inner, &low_index);
         if (previous_row != NULL && object_relative_pc > PREVIOUS_PAGE(object_relative_pc_high) + previous_row->pc_low) {
-          table_idx = left;
+          table_idx = low_index;
           in_previous_page = true;
         }
       }

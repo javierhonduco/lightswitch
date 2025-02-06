@@ -923,8 +923,8 @@ impl Profiler {
             };
             let page_value = page_value_t {
                 bucket_id,
-                left: page.index,
-                size: page.len,
+                low_index: page.low_index,
+                high_index: page.high_index,
             };
 
             let value = unsafe { plain::as_bytes(&page_value) };
@@ -977,11 +977,11 @@ impl Profiler {
     fn add_bpf_mapping(
         bpf: &ProfilerSkel,
         key: &exec_mappings_key,
-        value: &mapping_t,
+        mapping: &mapping_t,
     ) -> Result<(), libbpf_rs::Error> {
         bpf.maps.exec_mappings.update(
             unsafe { plain::as_bytes(key) },
-            unsafe { plain::as_bytes(value) },
+            unsafe { plain::as_bytes(mapping) },
             MapFlags::ANY,
         )
     }
