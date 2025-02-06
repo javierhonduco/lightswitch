@@ -4,11 +4,9 @@ lightswitch
 ===========
 **lightswitch** is a profiler as a library for Linux suitable for on-demand and continuous profiling. It's mostly written in Rust but the unwinders are written in C and run in BPF. Currently C, C++, Rust, and Zig are fully supported on x86_64 (arm64 support is experimental).
 
-Releases
---------
-The [latest release](https://github.com/javierhonduco/lightswitch/releases/latest) contains pre-built binaries and container images in the OCI format (Docker compatible).
-
-Alternatively, for every commit merged to the `main` branch, an OCI container tagged with the full Git sha1 is published to [the GitHub registry](https://github.com/javierhonduco/lightswitch/pkgs/container/lightswitch).
+Installation
+------------
+The [latest release](https://github.com/javierhonduco/lightswitch/releases/latest) contains pre-built binaries and container images in the OCI format (Docker compatible). Alternatively, for every commit merged to the `main` branch, an OCI container tagged with the full Git sha1 is published to [the GitHub registry](https://github.com/javierhonduco/lightswitch/pkgs/container/lightswitch).
 
 Usage
 -----
