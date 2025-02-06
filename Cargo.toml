@@ -81,6 +81,11 @@ bindgen = "0.71.1"
 [profile.dev.package."*"]
 opt-level = 3
 
+[profile.release-lto]
+inherits = "release"
+lto = true
+codegen-unit = 1
+
 [[bench]]
 name = "benchmark"
 harness = false
