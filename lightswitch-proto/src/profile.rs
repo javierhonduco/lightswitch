@@ -412,9 +412,6 @@ mod tests {
 
     #[test]
     fn test_profile() {
-        use rand::Rng;
-
-        let mut rng = rand::thread_rng();
         let mut pprof = PprofBuilder::new(SystemTime::now(), Duration::from_secs(5), 27);
         let raw_samples = vec![
             (vec![123], 200),
@@ -426,12 +423,12 @@ mod tests {
             let mut location_ids = Vec::new();
             let count = raw_sample.1;
 
-            for addr in raw_sample.0 {
+            for (i, addr) in raw_sample.0.into_iter().enumerate() {
                 let mapping_id: u64 = pprof.add_mapping(
                     if addr == 0 { 1 } else { addr }, // id 0 is reserved and can't be used.
-                    rng.gen(),
-                    rng.gen(),
-                    rng.gen(),
+                    (i * 100) as u64,
+                    (i * 100 + 100) as u64,
+                    0,
                     if addr % 2 == 0 { "fake.so" } else { "test.so" },
                     if addr % 2 == 0 {
                         "sha256-fake"

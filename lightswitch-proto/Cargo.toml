@@ -10,9 +10,6 @@ repository = "https://github.com/javierhonduco/lightswitch"
 prost = "0.13"
 anyhow = { workspace = true }
 
-[dev-dependencies]
-rand = { workspace = true }
-
 [build-dependencies]
 prost-build = "0.13.4"
 
