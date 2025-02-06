@@ -144,4 +144,6 @@ pub(crate) struct CliArgs {
     pub(crate) max_native_unwind_info_size_mb: i32,
     #[arg(long, help = "enable parking_lot's deadlock detector")]
     pub(crate) enable_deadlock_detector: bool,
+    #[arg(long, default_value = ProfilerConfig::default().cache_dir_base.into_os_string())]
+    pub(crate) cache_dir_base: PathBuf,
 }

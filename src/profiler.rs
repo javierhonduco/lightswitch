@@ -128,7 +128,7 @@ pub struct Profiler {
 }
 
 pub struct ProfilerConfig {
-    pub cache_dir: PathBuf,
+    pub cache_dir_base: PathBuf,
     pub libbpf_debug: bool,
     pub bpf_logging: bool,
     pub duration: Duration,
@@ -147,9 +147,8 @@ pub struct ProfilerConfig {
 
 impl Default for ProfilerConfig {
     fn default() -> Self {
-        let cache_dir = temp_dir().join("lightswitch");
         Self {
-            cache_dir,
+            cache_dir_base: temp_dir(),
             libbpf_debug: false,
             bpf_logging: false,
             duration: Duration::MAX,
@@ -296,21 +295,27 @@ impl Profiler {
     }
 
     pub fn new(profiler_config: ProfilerConfig, stop_signal_receive: Receiver<()>) -> Self {
-        debug!("Cache directory {}", profiler_config.cache_dir.display());
-        if let Err(e) = fs::create_dir(&profiler_config.cache_dir) {
+        debug!(
+            "Base cache directory {}",
+            profiler_config.cache_dir_base.display()
+        );
+        let cache_dir = profiler_config.cache_dir_base.join("lightswitch");
+        if let Err(e) = fs::create_dir(&cache_dir) {
             if e.kind() != ErrorKind::AlreadyExists {
-                error!(
-                    "could not create cache dir at {}",
-                    profiler_config.cache_dir.display()
+                panic!(
+                    "could not create cache dir at {} with: {:?}",
+                    cache_dir.display(),
+                    e
                 );
             }
         }
-        let unwind_cache_dir = profiler_config.cache_dir.join("unwind-info").to_path_buf();
+        let unwind_cache_dir = cache_dir.join("unwind-info").to_path_buf();
         if let Err(e) = fs::create_dir(&unwind_cache_dir) {
             if e.kind() != ErrorKind::AlreadyExists {
-                error!(
-                    "could not create cache dir at {}",
-                    unwind_cache_dir.display()
+                panic!(
+                    "could not create cache dir at {} with: {:?}",
+                    unwind_cache_dir.display(),
+                    e
                 );
             }
         }
@@ -390,7 +395,7 @@ impl Profiler {
         let profile_receive = Arc::new(receiver);
 
         Profiler {
-            cache_dir: profiler_config.cache_dir,
+            cache_dir,
             _links: Vec::new(),
             native_unwinder_open_object,
             native_unwinder,
