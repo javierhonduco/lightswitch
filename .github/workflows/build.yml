@@ -17,6 +17,11 @@ jobs:
     - uses: DeterminateSystems/flakehub-cache-action@main
     - name: Set up nix dev env
       run: nix develop --command echo 0
+    - name: Set nix rustc env var
+      run: echo "NIX_RUSTC_VERSION=$(nix develop --ignore-environment --command rustc --version --verbose | tr -d '\n')" >> $GITHUB_ENV
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ env.NIX_RUSTC_VERSION }}
     - name: Run `cargo check`
       run: nix develop --ignore-environment --command cargo check
     - name: Run `cargo clippy`
@@ -41,6 +46,11 @@ jobs:
       - uses: DeterminateSystems/flakehub-cache-action@main
       - name: Set up nix dev env
         run: nix develop --command echo 0
+      - name: Set nix rustc env var
+        run: echo "NIX_RUSTC_VERSION=$(nix develop --ignore-environment --command rustc --version --verbose | tr -d '\n')" >> $GITHUB_ENV
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.NIX_RUSTC_VERSION }}
       - name: Run `cargo check`
         run: nix develop --ignore-environment --command cargo check
       - name: Run `cargo test`
