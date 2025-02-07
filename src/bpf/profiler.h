@@ -46,8 +46,8 @@ typedef struct {
 
 typedef struct {
   u32 bucket_id;
-  u32 left;
-  u32 size;
+  u32 low_index;
+  u32 high_index;
 } page_value_t;
 
 #define MAX_AGGREGATED_STACKS_ENTRIES 10000
