@@ -20,6 +20,13 @@ jobs:
     - name: Set up nix dev env
       run: nix develop --command echo 0
 
+    - name: Set nix rustc env var
+      run: echo "NIX_RUSTC_VERSION=$(nix develop --ignore-environment --command rustc --version --verbose | tr -d '\n')" >> $GITHUB_ENV
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ env.NIX_RUSTC_VERSION }}
+
     - name: Build `lightswitch` statically linked with glibc
       run: nix develop --ignore-environment --command bash -c 'RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target x86_64-unknown-linux-gnu'
 
