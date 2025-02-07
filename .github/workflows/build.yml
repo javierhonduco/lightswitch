@@ -14,7 +14,7 @@ jobs:
     steps:
     - uses: actions/checkout@main
     - uses: DeterminateSystems/nix-installer-action@main
-    - uses: DeterminateSystems/magic-nix-cache-action@main
+    - uses: DeterminateSystems/flakehub-cache-action@main
     - name: Set up nix dev env
       run: nix develop --command echo 0
     - name: Run `cargo check`
@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@main
       - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: DeterminateSystems/flakehub-cache-action@main
       - name: Set up nix dev env
         run: nix develop --command echo 0
       - name: Run `cargo check`
