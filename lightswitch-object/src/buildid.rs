@@ -4,8 +4,16 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 use std::str;
 
+use anyhow::Result;
 use data_encoding::HEXLOWER;
 use ring::digest::Digest;
+
+/// Compact identifier for executable files.
+///
+/// Compact identifier for executable files derived from the first 8 bytes
+/// of the build id. By using this smaller type for object files less memory
+/// is used and also comparison, and other operations are cheaper.
+pub type ExecutableId = u64;
 
 #[derive(Hash, Eq, PartialEq, Clone)]
 pub enum BuildIdFlavour {
@@ -44,7 +52,12 @@ impl BuildId {
         }
     }
 
-    pub fn build_id_formatted(&self) -> String {
+    /// Returns an identifier for the executable using the first 8 bytes of the build id.
+    pub fn id(&self) -> Result<ExecutableId> {
+        Ok(u64::from_ne_bytes(self.data[..8].try_into()?))
+    }
+
+    pub fn short(&self) -> String {
         match self.flavour {
             BuildIdFlavour::Gnu => {
                 self.data
@@ -66,7 +79,7 @@ impl BuildId {
     }
 
     pub fn formatted(&self) -> String {
-        format!("{}-{}", self.flavour, self.build_id_formatted())
+        format!("{}-{}", self.flavour, self.short())
     }
 }
 
