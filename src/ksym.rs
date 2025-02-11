@@ -47,9 +47,12 @@ impl<R: Read> Iterator for KsymIter<R> {
                     if let (Some(addr_str), Some(symbol_type), Some(symbol_name)) =
                         (iter.next(), iter.next(), iter.next())
                     {
-                        // This list is probably not complete
-                        // https://github.com/torvalds/linux/blob/3d7cb6b0/tools/lib/symbol/kallsyms.c#LL17C1-L18C1
-                        if symbol_type == "T" || symbol_type == "W" {
+                        // See `man nm` for the meaning of the symbol types.
+                        if symbol_type == "T"
+                            || symbol_type == "t"
+                            || symbol_type == "W"
+                            || symbol_type == "D"
+                        {
                             if let Ok(start_addr) = u64::from_str_radix(addr_str, 16) {
                                 return Some(Ksym {
                                     start_addr,
