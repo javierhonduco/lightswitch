@@ -4,7 +4,6 @@ use lightswitch_metadata::types::{MetadataLabelValue, TaskKey};
 
 use lightswitch_proto::profile::pprof::Label;
 use lightswitch_proto::profile::{pprof, LabelStringOrNumber, PprofBuilder};
-
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -12,6 +11,7 @@ use std::time::Duration;
 use std::time::SystemTime;
 use tracing::{debug, error, span, Level};
 
+use crate::kernel::KERNEL_PID;
 use crate::ksym::Ksym;
 use crate::ksym::KsymIter;
 use crate::process::ObjectFileInfo;
@@ -55,32 +55,62 @@ pub fn to_pprof(
         let mut location_ids = Vec::new();
 
         for kframe in kstack {
-            // TODO: Add real values, read kernel build ID, etc.
-            let mapping_id: u64 = pprof.add_mapping(
-                0x1000000,
-                0xFFFFFFFF,
-                0xFFFFFFFF,
-                0x0,
-                "[kernel]", // This is a special marker.
-                "fake_kernel_build_id",
-            );
+            let virtual_address = kframe.virtual_address;
 
-            let mut lines = vec![];
+            let Some(info) = procs.get(&KERNEL_PID) else {
+                continue;
+            };
 
-            match kframe.symbolization_result {
-                Some(Ok((name, _))) => {
-                    let (line, _) = pprof.add_line(&name);
-                    lines.push(line);
+            let Some(mapping) = info.mappings.for_address(virtual_address) else {
+                // todo: maybe append an error frame for debugging?
+                continue;
+            };
+
+            match objs.get(&mapping.executable_id) {
+                Some(obj) => {
+                    let normalized_addr = kframe
+                        .file_offset
+                        .or_else(|| obj.normalized_address(virtual_address, &mapping));
+
+                    if normalized_addr.is_none() {
+                        debug!("normalized address is none");
+                        continue;
+                    }
+
+                    let mapping_id = pprof.add_mapping(
+                        mapping.executable_id,
+                        mapping.start_addr,
+                        mapping.end_addr,
+                        0x0,
+                        obj.path.to_str().expect("will always be valid"), // should this be named name?,
+                        &mapping
+                            .build_id
+                            .expect("this should never happen")
+                            .to_string(),
+                    );
+
+                    let mut lines = Vec::new();
+
+                    match kframe.symbolization_result {
+                        Some(Ok((name, _))) => {
+                            let (line, _) = pprof.add_line(&name);
+                            lines.push(line);
+                        }
+                        Some(Err(e)) => {
+                            let (line, _) = pprof.add_line(&e.to_string());
+                            lines.push(line);
+                        }
+                        None => {}
+                    }
+
+                    let location =
+                        pprof.add_location(normalized_addr.unwrap_or(0), mapping_id, lines);
+                    location_ids.push(location);
                 }
-                Some(Err(e)) => {
-                    let (line, _) = pprof.add_line(&e.to_string());
-                    lines.push(line);
+                None => {
+                    error!("executable with id {} not found", mapping.executable_id);
                 }
-                None => {}
             }
-
-            let location = pprof.add_location(kframe.virtual_address, mapping_id, lines);
-            location_ids.push(location);
         }
 
         for uframe in ustack {
@@ -146,7 +176,7 @@ pub fn to_pprof(
                     location_ids.push(location);
                 }
                 None => {
-                    debug!("build id not found");
+                    debug!("executable with id {} not found", mapping.executable_id);
                 }
             }
         }
