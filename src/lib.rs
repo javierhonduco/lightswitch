@@ -1,6 +1,7 @@
 pub mod bpf;
 pub mod collector;
 pub mod debug_info;
+pub mod kernel;
 pub mod ksym;
 pub mod perf_events;
 pub mod process;
