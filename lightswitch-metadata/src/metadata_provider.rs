@@ -1,54 +1,15 @@
-use crate::metadata_label::MetadataLabel;
 use crate::system_metadata::SystemMetadata;
-use crate::taskname::TaskName;
+use crate::task_metadata::TaskMetadata;
+use crate::types::{MetadataLabel, SystemMetadataProvider, TaskKey, TaskMetadataProvider};
 
-use anyhow::Result;
 use lru::LruCache;
-use std::fmt::Display;
-use std::fmt::Formatter;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
-use thiserror::Error;
-use tracing::{error, warn};
-
-#[derive(Debug, Clone, Copy)]
-pub struct TaskKey {
-    pub pid: i32,
-    pub tid: i32,
-}
-
-impl Display for TaskKey {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "pid={}, tid={}", self.pid, self.tid)
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum TaskMetadataProviderError {
-    #[error("Failed to retrieve metadata for task_key={0}, error={1}")]
-    ErrorRetrievingMetadata(TaskKey, String),
-}
-
-pub trait TaskMetadataProvider {
-    /// Return a vector of labels that apply to the provided task_key.
-    fn get_metadata(
-        &self,
-        task_key: TaskKey,
-    ) -> Result<Vec<MetadataLabel>, TaskMetadataProviderError>;
-}
-
-#[derive(Debug, Error)]
-pub enum SystemMetadataProviderError {
-    #[error("Failed to retrieve system metadata, error={0}")]
-    ErrorRetrievingMetadata(String),
-}
-pub trait SystemMetadataProvider {
-    /// Return a vector of labels that apply to the current host system.
-    fn get_metadata(&self) -> Result<Vec<MetadataLabel>, SystemMetadataProviderError>;
-}
+use tracing::warn;
 
 pub struct GlobalMetadataProvider {
     pid_label_cache: LruCache</*pid*/ i32, Vec<MetadataLabel>>,
+    default_task_metadata: TaskMetadata,
     default_system_metadata: SystemMetadata,
     custom_system_metadata_providers: Vec<Box<dyn SystemMetadataProvider + Send>>,
     custom_task_metadata_providers: Vec<Box<dyn TaskMetadataProvider + Send>>,
@@ -58,20 +19,24 @@ pub type ThreadSafeGlobalMetadataProvider = Arc<Mutex<GlobalMetadataProvider>>;
 
 impl Default for GlobalMetadataProvider {
     fn default() -> Self {
-        Self::new(NonZeroUsize::new(1000).unwrap())
+        Self::new(NonZeroUsize::new(1000).unwrap(), Vec::new(), Vec::new())
     }
 }
 
 impl GlobalMetadataProvider {
-    pub fn new(metadata_cache_size: NonZeroUsize) -> Self {
+    pub fn new(
+        metadata_cache_size: NonZeroUsize,
+        system_metadata_providers: Vec<Box<dyn SystemMetadataProvider + Send>>,
+        task_metadata_providers: Vec<Box<dyn TaskMetadataProvider + Send>>,
+    ) -> Self {
         Self {
             pid_label_cache: LruCache::new(metadata_cache_size),
+            default_task_metadata: TaskMetadata {},
             default_system_metadata: SystemMetadata {},
-            custom_system_metadata_providers: Vec::new(),
-            custom_task_metadata_providers: Vec::new(),
+            custom_system_metadata_providers: system_metadata_providers,
+            custom_task_metadata_providers: task_metadata_providers,
         }
     }
-
     pub fn register_task_metadata_providers(
         &mut self,
         providers: Vec<Box<dyn TaskMetadataProvider + Send>>,
@@ -88,10 +53,22 @@ impl GlobalMetadataProvider {
 
     fn get_labels(&mut self, task_key: TaskKey) -> Vec<MetadataLabel> {
         let mut labels = self
-            .default_system_metadata
-            .get_metadata()
+            .default_task_metadata
+            .get_metadata(task_key)
             .map_err(|err| warn!("{}", err))
             .unwrap_or_default();
+
+        labels.extend(
+            self.default_system_metadata
+                .get_metadata()
+                .map_err(|err| {
+                    warn!(
+                        "Failed to retrieve default system metadata, error = {}",
+                        err
+                    )
+                })
+                .unwrap_or_default(),
+        );
 
         for provider in &self.custom_system_metadata_providers {
             match provider.get_metadata() {
@@ -118,30 +95,21 @@ impl GlobalMetadataProvider {
     }
 
     pub fn get_metadata(&mut self, task_key: TaskKey) -> Vec<MetadataLabel> {
-        let task_name = TaskName::for_task(task_key.tid).unwrap_or(TaskName::errored());
-        let pid = task_key.pid;
-        let mut task_metadata = vec![
-            MetadataLabel::from_number_value("pid".into(), task_key.tid.into(), "task-id".into()),
-            MetadataLabel::from_string_value("thread.name".into(), task_name.current_thread),
-            MetadataLabel::from_string_value("process.name".into(), task_name.main_thread),
-            MetadataLabel::from_number_value("pid".into(), pid.into(), "task-tgid".into()),
-        ];
-
-        if let Some(cached_labels) = self.pid_label_cache.get(&pid) {
-            task_metadata.extend(cached_labels.iter().cloned());
+        if let Some(cached_labels) = self.pid_label_cache.get(&task_key.pid) {
+            cached_labels.to_vec()
         } else {
             let labels = self.get_labels(task_key);
-            self.pid_label_cache.push(pid, labels.clone());
-            task_metadata.extend(labels);
+            self.pid_label_cache.push(task_key.pid, labels.clone());
+            labels
         }
-        task_metadata
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata_label::MetadataLabelValue;
+    use crate::taskname::TaskName;
+    use crate::types::MetadataLabelValue;
     use nix::unistd;
 
     #[test]
