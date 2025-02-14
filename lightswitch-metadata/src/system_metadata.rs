@@ -1,21 +1,15 @@
-use crate::metadata_label::MetadataLabel;
+use crate::types::{MetadataLabel, SystemMetadataProvider, SystemMetadataProviderError};
 
 use anyhow::Result;
 use nix::sys::utsname;
-use thiserror::Error;
 
 pub struct SystemMetadata {}
 
-#[derive(Debug, Error)]
-pub enum SystemMetadataError {
-    #[error("Failed to read system information, error = {0}")]
-    ErrorRetrievingSystemInfo(String),
-}
-
-impl SystemMetadata {
-    pub fn get_metadata(&self) -> Result<Vec<MetadataLabel>, SystemMetadataError> {
-        let uname = utsname::uname()
-            .map_err(|e| SystemMetadataError::ErrorRetrievingSystemInfo(e.desc().to_string()))?;
+impl SystemMetadataProvider for SystemMetadata {
+    fn get_metadata(&self) -> Result<Vec<MetadataLabel>, SystemMetadataProviderError> {
+        let uname = utsname::uname().map_err(|e| {
+            SystemMetadataProviderError::ErrorRetrievingMetadata(e.desc().to_string())
+        })?;
         let kernel_release_label = MetadataLabel::from_string_value(
             "kernel.release".into(),
             uname.release().to_string_lossy().to_string(),
@@ -38,8 +32,8 @@ impl SystemMetadata {
 
 #[cfg(test)]
 mod tests {
-    use crate::metadata_label::MetadataLabelValue;
     use crate::system_metadata::*;
+    use crate::types::MetadataLabelValue;
 
     #[test]
     fn test_get_system_metadata() {

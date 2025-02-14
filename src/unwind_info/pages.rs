@@ -3,8 +3,10 @@ use crate::unwind_info::types::CompactUnwindRow;
 #[derive(Debug, PartialEq)]
 pub struct Page {
     pub address: u64,
-    pub index: u32,
-    pub len: u32,
+    /// Low index in the unwind table. Inclusive.
+    pub low_index: u32,
+    /// High index in the unwind table. Not inclusive.
+    pub high_index: u32,
 }
 
 /// Splits a slice of unwind info in 16 bit pages.
@@ -35,8 +37,8 @@ pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
                 if current_page_id != pc_high {
                     pages.push(Page {
                         address: current_page_id,
-                        index: prev_index.try_into().unwrap(),
-                        len: i.try_into().unwrap(),
+                        low_index: prev_index.try_into().unwrap(),
+                        high_index: i.try_into().unwrap(),
                     });
                     prev_index = i;
                     curr_page_id = Some(pc_high);
@@ -49,8 +51,8 @@ pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
     if let Some(id) = curr_page_id {
         pages.push(Page {
             address: id,
-            index: prev_index.try_into().unwrap(),
-            len: unwind_info.len().try_into().unwrap(),
+            low_index: prev_index.try_into().unwrap(),
+            high_index: unwind_info.len().try_into().unwrap(),
         });
     }
 
@@ -74,8 +76,8 @@ mod tests {
             chunks,
             vec![Page {
                 address: 0x0,
-                index: 0,
-                len: 1,
+                low_index: 0,
+                high_index: 1,
             }]
         );
 
@@ -103,13 +105,13 @@ mod tests {
             vec![
                 Page {
                     address: 983040,
-                    index: 0,
-                    len: 4,
+                    low_index: 0,
+                    high_index: 4,
                 },
                 Page {
                     address: 1114112,
-                    index: 4,
-                    len: 6,
+                    low_index: 4,
+                    high_index: 6,
                 },
             ]
         );
@@ -127,7 +129,7 @@ mod tests {
                                                                // Test that we can find it in the pages, linearly, but it's small enough
             let found = pages.iter().find(|el| el.address == pc_high).unwrap();
             // Make sure we can find the inner slice
-            let search_here = &unwind_info[(found.index as usize)..(found.len as usize)];
+            let search_here = &unwind_info[(found.low_index as usize)..(found.high_index as usize)];
             let found_row = search_here.iter().find(|el| el.pc == pc).unwrap();
             // And that the high and low bits were done ok
             let pc = found_row.pc;
