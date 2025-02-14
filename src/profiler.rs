@@ -125,6 +125,7 @@ pub struct Profiler {
     /// for the profiler.
     max_native_unwind_info_size_mb: i32,
     unwind_info_manager: UnwindInfoManager,
+    collector: ThreadSafeCollector
 }
 
 pub struct ProfilerConfig {
@@ -170,13 +171,13 @@ impl Default for ProfilerConfig {
     }
 }
 
-impl Default for Profiler {
-    fn default() -> Self {
-        let (_stop_signal_send, stop_signal_receive) = bounded(1);
+// impl Default for Profiler {
+//     fn default() -> Self {
+//         let (_stop_signal_send, stop_signal_receive) = bounded(1);
 
-        Self::new(ProfilerConfig::default(), stop_signal_receive)
-    }
-}
+//         Self::new(ProfilerConfig::default(), stop_signal_receive)
+//     }
+// }
 
 impl Drop for Profiler {
     fn drop(&mut self) {
@@ -421,6 +422,7 @@ impl Profiler {
             debug_info_manager: profiler_config.debug_info_manager,
             max_native_unwind_info_size_mb: profiler_config.max_native_unwind_info_size_mb,
             unwind_info_manager: UnwindInfoManager::new(&unwind_cache_dir, None),
+            collector: collector
         }
     }
 
@@ -435,7 +437,7 @@ impl Profiler {
         self.profile_send.send(profile).expect("handle send");
     }
 
-    pub fn run(mut self, collector: ThreadSafeCollector) -> Duration {
+    pub fn run(mut self) -> Duration {
         // In this case, we only want to calculate maximum sampling buffer sizes based on the
         // number of "online" CPUs, not "possible" CPUs, which they sometimes differ.
         let num_cpus = get_online_cpus().expect("get online CPUs").len() as u64;
@@ -504,7 +506,7 @@ impl Profiler {
         let profile_receive = self.profile_receive.clone();
         let procs = self.procs.clone();
         let object_files = self.object_files.clone();
-        let collector = collector.clone();
+        let collector = self.collector.clone();
 
         thread::spawn(move || loop {
             match profile_receive.recv() {
@@ -1784,6 +1786,8 @@ impl Profiler {
             .expect("update map");
     }
 
+    /// Sets up a perf event for each online CPU, and attaches
+    /// the perf event to the native unwinder BPF program.
     pub fn setup_perf_events(&mut self) {
         let mut prog_fds = Vec::new();
         for i in get_online_cpus().expect("get online CPUs") {
@@ -1791,7 +1795,7 @@ impl Profiler {
                 .expect("setup perf event");
             prog_fds.push(perf_fd);
         }
-
+        
         for prog_fd in prog_fds {
             let prog = self
                 .native_unwinder

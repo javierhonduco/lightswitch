@@ -13,9 +13,11 @@ use crossbeam_channel::bounded;
 use inferno::flamegraph;
 use lightswitch::collector::{AggregatorCollector, Collector, NullCollector, StreamingCollector};
 use lightswitch::debug_info::DebugInfoManager;
+use lightswitch::profile;
 use lightswitch_metadata::metadata_provider::GlobalMetadataProvider;
 use nix::unistd::Uid;
 use prost::Message;
+use runner::Runner;
 use tracing::{error, info, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
@@ -35,6 +37,7 @@ use lightswitch_object::ObjectFile;
 
 mod args;
 mod validators;
+mod runner;
 
 use crate::args::CliArgs;
 use crate::args::DebugInfoBackend;
@@ -177,14 +180,24 @@ fn main() -> Result<(), Box<dyn Error>> {
     })
     .expect("Error setting Ctrl-C handler");
 
-    let mut p: Profiler = Profiler::new(profiler_config, stop_signal_receive);
+
+    let mut p: Profiler = Profiler::new(profiler_config, collector.clone(), stop_signal_receive);
     p.profile_pids(args.pids);
-    let profile_duration = p.run(collector.clone());
+
+    // TODO: How do we determine if we're in continuous profiling mode?
+    if args.sender == ProfileSender::Remote {
+        let runner = Runner::new(p, args.killswitch_file_path, stop_signal_sender.clone());
+        let profile_duration = runner.run(); // TODO: Do we need this?
+    }
+    else {
+        let profile_duration = p.run();
+    }
 
     let collector = collector.lock().unwrap();
     let (mut profile, procs, objs) = collector.finish();
 
     // If we need to send the profile to the backend there's nothing else to do.
+    // TODO (Opatnebe): Why?
     match args.sender {
         ProfileSender::Remote | ProfileSender::None => {
             return Ok(());

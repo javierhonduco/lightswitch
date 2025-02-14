@@ -146,4 +146,6 @@ pub(crate) struct CliArgs {
     pub(crate) enable_deadlock_detector: bool,
     #[arg(long, default_value = ProfilerConfig::default().cache_dir_base.into_os_string())]
     pub(crate) cache_dir_base: PathBuf,
+    #[arg(long, help = "Path to file-based killswitch to stop the profiler from running")]
+    pub(crate) killswitch_file_path: String,
 }
