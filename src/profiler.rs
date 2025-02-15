@@ -12,7 +12,7 @@ use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -125,8 +125,10 @@ pub struct Profiler {
     /// for the profiler.
     max_native_unwind_info_size_mb: i32,
     unwind_info_manager: UnwindInfoManager,
-    collector: ThreadSafeCollector
+    collector: ThreadSafeCollector,
 }
+
+pub type ThreadSafeProfiler = Arc<Mutex<Profiler>>;
 
 pub struct ProfilerConfig {
     pub cache_dir_base: PathBuf,
@@ -170,14 +172,6 @@ impl Default for ProfilerConfig {
         }
     }
 }
-
-// impl Default for Profiler {
-//     fn default() -> Self {
-//         let (_stop_signal_send, stop_signal_receive) = bounded(1);
-
-//         Self::new(ProfilerConfig::default(), stop_signal_receive)
-//     }
-// }
 
 impl Drop for Profiler {
     fn drop(&mut self) {
@@ -295,7 +289,11 @@ impl Profiler {
         );
     }
 
-    pub fn new(profiler_config: ProfilerConfig, stop_signal_receive: Receiver<()>) -> Self {
+    pub fn new(
+        profiler_config: ProfilerConfig,
+        stop_signal_receive: Receiver<()>,
+        collector: ThreadSafeCollector,
+    ) -> Self {
         debug!(
             "Base cache directory {}",
             profiler_config.cache_dir_base.display()
@@ -422,7 +420,7 @@ impl Profiler {
             debug_info_manager: profiler_config.debug_info_manager,
             max_native_unwind_info_size_mb: profiler_config.max_native_unwind_info_size_mb,
             unwind_info_manager: UnwindInfoManager::new(&unwind_cache_dir, None),
-            collector: collector
+            collector: collector,
         }
     }
 
@@ -437,7 +435,7 @@ impl Profiler {
         self.profile_send.send(profile).expect("handle send");
     }
 
-    pub fn run(mut self) -> Duration {
+    pub fn run(&mut self) -> Duration {
         // In this case, we only want to calculate maximum sampling buffer sizes based on the
         // number of "online" CPUs, not "possible" CPUs, which they sometimes differ.
         let num_cpus = get_online_cpus().expect("get online CPUs").len() as u64;
@@ -1795,7 +1793,7 @@ impl Profiler {
                 .expect("setup perf event");
             prog_fds.push(perf_fd);
         }
-        
+
         for prog_fd in prog_fds {
             let prog = self
                 .native_unwinder

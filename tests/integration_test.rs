@@ -108,7 +108,7 @@ fn test_integration() {
         ..Default::default()
     };
     let (_stop_signal_send, stop_signal_receive) = bounded(1);
-    let mut p = Profiler::new(profiler_config, collector.clone(), stop_signal_receive);
+    let mut p = Profiler::new(profiler_config, stop_signal_receive, collector.clone());
     p.profile_pids(vec![cpp_proc.pid()]);
     p.run();
     let collector = collector.lock().unwrap();

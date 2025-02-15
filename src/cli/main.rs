@@ -11,9 +11,11 @@ use std::time::Duration;
 use clap::Parser;
 use crossbeam_channel::bounded;
 use inferno::flamegraph;
+use lightswitch::collector::ThreadSafeCollector;
 use lightswitch::collector::{AggregatorCollector, Collector, NullCollector, StreamingCollector};
 use lightswitch::debug_info::DebugInfoManager;
 use lightswitch::profile;
+use lightswitch_metadata::metadata_provider;
 use lightswitch_metadata::metadata_provider::GlobalMetadataProvider;
 use nix::unistd::Uid;
 use prost::Message;
@@ -30,14 +32,14 @@ use lightswitch::debug_info::{
 };
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::{fold_profile, to_pprof};
-use lightswitch::profiler::{Profiler, ProfilerConfig};
+use lightswitch::profiler::{Profiler, ProfilerConfig, ThreadSafeProfiler};
 use lightswitch::unwind_info::compact_unwind_info;
 use lightswitch::unwind_info::CompactUnwindInfoBuilder;
 use lightswitch_object::ObjectFile;
 
 mod args;
-mod validators;
 mod runner;
+mod validators;
 
 use crate::args::CliArgs;
 use crate::args::DebugInfoBackend;
@@ -72,6 +74,90 @@ fn start_deadlock_detector() {
             }
         }
     });
+}
+
+fn is_continous_pofiling_mode(duration: &CliArgs) -> bool {
+    args.duration == Duration::MAX
+}
+
+fn collect_profiles_adhoc(
+    args: CliArgs,
+    profiler: ThreadSafeProfiler,
+    collector: ThreadSafeCollector,
+    metadata_provider: ThreadSafeGlobalMetadataProvider,
+) -> Result<(), Box<dyn Error>> {
+    let profile_duration = profiler.lock().unwrap().run(); // blocks the main thread
+
+    let collector = collector.lock().unwrap();
+    let (mut profile, procs, objs) = collector.finish();
+
+    // If we need to send the profile to the backend there's nothing else to do.
+    match args.sender {
+        ProfileSender::Remote | ProfileSender::None => {
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    // Otherwise let's symbolize the profile and write it to disk.
+    if args.symbolizer == Symbolizer::Local {
+        profile = symbolize_profile(&profile, procs, objs);
+    }
+
+    let profile_path = args.profile_path.unwrap_or(PathBuf::from(""));
+
+    match args.profile_format {
+        ProfileFormat::FlameGraph => {
+            let folded = fold_profile(profile);
+            let mut options: flamegraph::Options<'_> = flamegraph::Options::default();
+            let data = folded.as_bytes();
+            let profile_name = args.profile_name.unwrap_or_else(|| "flame.svg".into());
+            let profile_path = profile_path.join(profile_name);
+            let f = File::create(&profile_path).unwrap();
+            match flamegraph::from_reader(&mut options, data, f) {
+                Ok(_) => {
+                    eprintln!(
+                        "Flamegraph profile successfully written to {}",
+                        profile_path.to_string_lossy()
+                    );
+                }
+                Err(e) => {
+                    error!("Failed generate flamegraph: {:?}", e);
+                }
+            }
+        }
+        ProfileFormat::Pprof => {
+            let mut buffer = Vec::new();
+            let pprof_profile = to_pprof(
+                profile,
+                procs,
+                objs,
+                &metadata_provider,
+                profile_duration,
+                args.sample_freq,
+            );
+            pprof_profile.encode(&mut buffer).unwrap();
+            let profile_name = args.profile_name.unwrap_or_else(|| "profile.pb".into());
+            let profile_path = profile_path.join(profile_name);
+            let mut pprof_file = File::create(&profile_path).unwrap();
+
+            match pprof_file.write_all(&buffer) {
+                Ok(_) => {
+                    eprintln!(
+                        "Pprof profile successfully written to {}",
+                        profile_path.to_string_lossy()
+                    );
+                }
+                Err(e) => {
+                    error!("Failed generate pprof: {:?}", e);
+                }
+            }
+        }
+        ProfileFormat::None => {
+            // Do nothing
+        }
+    }
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -172,97 +258,46 @@ fn main() -> Result<(), Box<dyn Error>> {
         ..Default::default()
     };
 
-    let (stop_signal_sender, stop_signal_receive) = bounded(1);
+    let (profiler_stop_signal_sender, profiler_stop_signal_receiver) = bounded(1);
+    let profiler: ThreadSafeProfiler = Arc::new(Mutex::new(Profiler::new(
+        profiler_config,
+        profiler_stop_signal_receiver,
+        collector.clone(),
+    )));
+    profiler.lock().unwrap().profile_pids(args.pids.clone());
 
+    if is_continous_pofiling_mode(&args) {
+        let (runner_stop_signal_sender, runner_stop_signal_receiver) = bounded(1);
+
+        ctrlc::set_handler(move || {
+            info!("received Ctrl+C, stopping...");
+            let _ = runner_stop_signal_sender.send(());
+        })
+        .expect("Error setting Ctrl-C handler");
+
+        // TODO: Does this need to be mut?
+        let mut runner = Runner::new(
+            profiler,
+            args.killswitch_file_path,
+            runner_stop_signal_receiver.clone(),
+            profiler_stop_signal_sender.clone(),
+        );
+        
+        runner.start(); // Blocks the main thread
+
+        // return early
+        // TODO: confirm this is the desired behavior
+        return Ok(());
+    }
+
+    // Adhoc profiling mode
     ctrlc::set_handler(move || {
         info!("received Ctrl+C, stopping...");
-        let _ = stop_signal_sender.send(());
+        let _ = profiler_stop_signal_sender.send(());
     })
     .expect("Error setting Ctrl-C handler");
 
-
-    let mut p: Profiler = Profiler::new(profiler_config, collector.clone(), stop_signal_receive);
-    p.profile_pids(args.pids);
-
-    // TODO: How do we determine if we're in continuous profiling mode?
-    if args.sender == ProfileSender::Remote {
-        let runner = Runner::new(p, args.killswitch_file_path, stop_signal_sender.clone());
-        let profile_duration = runner.run(); // TODO: Do we need this?
-    }
-    else {
-        let profile_duration = p.run();
-    }
-
-    let collector = collector.lock().unwrap();
-    let (mut profile, procs, objs) = collector.finish();
-
-    // If we need to send the profile to the backend there's nothing else to do.
-    // TODO (Opatnebe): Why?
-    match args.sender {
-        ProfileSender::Remote | ProfileSender::None => {
-            return Ok(());
-        }
-        _ => {}
-    }
-
-    // Otherwise let's symbolize the profile and write it to disk.
-    if args.symbolizer == Symbolizer::Local {
-        profile = symbolize_profile(&profile, procs, objs);
-    }
-
-    let profile_path = args.profile_path.unwrap_or(PathBuf::from(""));
-
-    match args.profile_format {
-        ProfileFormat::FlameGraph => {
-            let folded = fold_profile(profile);
-            let mut options: flamegraph::Options<'_> = flamegraph::Options::default();
-            let data = folded.as_bytes();
-            let profile_name = args.profile_name.unwrap_or_else(|| "flame.svg".into());
-            let profile_path = profile_path.join(profile_name);
-            let f = File::create(&profile_path).unwrap();
-            match flamegraph::from_reader(&mut options, data, f) {
-                Ok(_) => {
-                    eprintln!(
-                        "Flamegraph profile successfully written to {}",
-                        profile_path.to_string_lossy()
-                    );
-                }
-                Err(e) => {
-                    error!("Failed generate flamegraph: {:?}", e);
-                }
-            }
-        }
-        ProfileFormat::Pprof => {
-            let mut buffer = Vec::new();
-            let pprof_profile = to_pprof(
-                profile,
-                procs,
-                objs,
-                &metadata_provider,
-                profile_duration,
-                args.sample_freq,
-            );
-            pprof_profile.encode(&mut buffer).unwrap();
-            let profile_name = args.profile_name.unwrap_or_else(|| "profile.pb".into());
-            let profile_path = profile_path.join(profile_name);
-            let mut pprof_file = File::create(&profile_path).unwrap();
-
-            match pprof_file.write_all(&buffer) {
-                Ok(_) => {
-                    eprintln!(
-                        "Pprof profile successfully written to {}",
-                        profile_path.to_string_lossy()
-                    );
-                }
-                Err(e) => {
-                    error!("Failed generate pprof: {:?}", e);
-                }
-            }
-        }
-        ProfileFormat::None => {
-            // Do nothing
-        }
-    }
+    collect_profiles_adhoc(args, profiler, collector, metadata_provider);
 
     Ok(())
 }
