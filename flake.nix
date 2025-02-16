@@ -57,7 +57,7 @@
             container = pkgs.dockerTools.buildLayeredImage {
               name = "lightswitch";
               config = {
-                Entrypoint = [ "${lightswitch}/bin/lightswitch" ];
+                Entrypoint = [ "${lightswitch}/bin/lightswitch --killswitch-file-path /tmp/lightswitch.killswitch" ];
                 Env = [
                   "RUST_BACKTRACE=1"
                 ];
