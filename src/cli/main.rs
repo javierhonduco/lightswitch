@@ -14,8 +14,6 @@ use inferno::flamegraph;
 use lightswitch::collector::ThreadSafeCollector;
 use lightswitch::collector::{AggregatorCollector, Collector, NullCollector, StreamingCollector};
 use lightswitch::debug_info::DebugInfoManager;
-use lightswitch::profile;
-use lightswitch_metadata::metadata_provider;
 use lightswitch_metadata::metadata_provider::GlobalMetadataProvider;
 use nix::unistd::Uid;
 use prost::Message;
@@ -76,12 +74,12 @@ fn start_deadlock_detector() {
     });
 }
 
-fn is_continous_pofiling_mode(duration: &CliArgs) -> bool {
-    args.duration == Duration::MAX
+fn is_continous_pofiling_mode(duration: &Duration) -> bool {
+    duration.as_secs() == Duration::MAX.as_secs()
 }
 
 fn collect_profiles_adhoc(
-    args: CliArgs,
+    args: &CliArgs,
     profiler: ThreadSafeProfiler,
     collector: ThreadSafeCollector,
     metadata_provider: ThreadSafeGlobalMetadataProvider,
@@ -104,15 +102,17 @@ fn collect_profiles_adhoc(
         profile = symbolize_profile(&profile, procs, objs);
     }
 
-    let profile_path = args.profile_path.unwrap_or(PathBuf::from(""));
-
+    let profile_path = args.profile_path.clone().unwrap_or(PathBuf::from(""));
     match args.profile_format {
         ProfileFormat::FlameGraph => {
             let folded = fold_profile(profile);
             let mut options: flamegraph::Options<'_> = flamegraph::Options::default();
             let data = folded.as_bytes();
-            let profile_name = args.profile_name.unwrap_or_else(|| "flame.svg".into());
-            let profile_path = profile_path.join(profile_name);
+            let profile_name = args
+                .profile_name
+                .clone()
+                .unwrap_or_else(|| "flame.svg".into());
+            let profile_path = profile_path.clone().join(profile_name);
             let f = File::create(&profile_path).unwrap();
             match flamegraph::from_reader(&mut options, data, f) {
                 Ok(_) => {
@@ -137,8 +137,11 @@ fn collect_profiles_adhoc(
                 args.sample_freq,
             );
             pprof_profile.encode(&mut buffer).unwrap();
-            let profile_name = args.profile_name.unwrap_or_else(|| "profile.pb".into());
-            let profile_path = profile_path.join(profile_name);
+            let profile_name = args
+                .profile_name
+                .clone()
+                .unwrap_or_else(|| "profile.pb".into());
+            let profile_path = profile_path.clone().join(profile_name);
             let mut pprof_file = File::create(&profile_path).unwrap();
 
             match pprof_file.write_all(&buffer) {
@@ -211,7 +214,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    let server_url = args.server_url.unwrap_or(DEFAULT_SERVER_URL.into());
+    let server_url = args.server_url.clone().unwrap_or(DEFAULT_SERVER_URL.into());
 
     let metadata_provider: ThreadSafeGlobalMetadataProvider =
         Arc::new(Mutex::new(GlobalMetadataProvider::default()));
@@ -229,7 +232,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             )),
         }));
 
-    let debug_info_manager: Box<dyn DebugInfoManager> = match args.debug_info_backend {
+    let debug_info_manager: Box<dyn DebugInfoManager + Send> = match args.debug_info_backend {
         DebugInfoBackend::None => Box::new(DebugInfoBackendNull {}),
         DebugInfoBackend::Copy => Box::new(DebugInfoBackendFilesystem {
             path: PathBuf::from("/tmp"),
@@ -242,7 +245,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let profiler_config = ProfilerConfig {
-        cache_dir_base: args.cache_dir_base,
+        cache_dir_base: args.cache_dir_base.clone(),
         libbpf_debug: args.libbpf_debug,
         bpf_logging: args.bpf_logging,
         duration: args.duration,
@@ -266,24 +269,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     )));
     profiler.lock().unwrap().profile_pids(args.pids.clone());
 
-    if is_continous_pofiling_mode(&args) {
+    if is_continous_pofiling_mode(&args.duration) {
+        info!("Starting in continuous profiling mode...");
+
         let (runner_stop_signal_sender, runner_stop_signal_receiver) = bounded(1);
 
         ctrlc::set_handler(move || {
-            info!("received Ctrl+C, stopping...");
+            info!("received Ctrl+C, stopping runner...");
             let _ = runner_stop_signal_sender.send(());
         })
         .expect("Error setting Ctrl-C handler");
 
-        // TODO: Does this need to be mut?
+        let killswitch_file = args.killswitch_file_path.expect("");
         let mut runner = Runner::new(
             profiler,
-            args.killswitch_file_path,
+            killswitch_file,
             runner_stop_signal_receiver.clone(),
             profiler_stop_signal_sender.clone(),
         );
-        
-        runner.start(); // Blocks the main thread
+
+        runner.run(); // Blocks the main thread
 
         // return early
         // TODO: confirm this is the desired behavior
@@ -297,7 +302,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     })
     .expect("Error setting Ctrl-C handler");
 
-    collect_profiles_adhoc(args, profiler, collector, metadata_provider);
+    let _ = collect_profiles_adhoc(&args, profiler, collector, metadata_provider);
 
     Ok(())
 }
@@ -346,7 +351,7 @@ mod tests {
         cmd.arg("--help");
         cmd.assert().success();
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
-        insta::assert_yaml_snapshot!(actual, @r#""Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-debug\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --profile-path <PROFILE_PATH>\n          Path for the generated profile\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n          \n          [default: local-disk]\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n\n      --server-url <SERVER_URL>\n          \n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-stacks <MAPSIZE_STACKS>\n          max number of individual stacks to capture before aggregation\n          \n          [default: 100000]\n\n      --mapsize-aggregated-stacks <MAPSIZE_AGGREGATED_STACKS>\n          max number of unique stacks after aggregation\n          \n          [default: 10000]\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          max number of rate limit entries\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n      --symbolizer <SYMBOLIZER>\n          [default: local]\n          [possible values: local, none]\n\n      --debug-info-backend <DEBUG_INFO_BACKEND>\n          [default: none]\n          [possible values: none, copy, remote]\n\n      --max-native-unwind-info-size-mb <MAX_NATIVE_UNWIND_INFO_SIZE_MB>\n          approximate max size in megabytes used for the BPF maps that hold unwind information\n          \n          [default: 2147483647]\n\n      --enable-deadlock-detector\n          enable parking_lot's deadlock detector\n\n      --cache-dir-base <CACHE_DIR_BASE>\n          [default: /tmp]\n\n  -h, --help\n          Print help (see a summary with '-h')\n""#);
+        insta::assert_yaml_snapshot!(actual, @r#""Usage: lightswitch [OPTIONS]\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n      --tids <TIDS>\n          Specific TIDs to profile (these can be outside the PIDs selected above)\n\n      --show-unwind-info <PATH_TO_BINARY>\n          Show unwind info for given binary\n\n      --show-info <PATH_TO_BINARY>\n          Show build ID for given binary\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-debug\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --profile-path <PROFILE_PATH>\n          Path for the generated profile\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n          \n          [default: local-disk]\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n\n      --server-url <SERVER_URL>\n          \n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-stacks <MAPSIZE_STACKS>\n          max number of individual stacks to capture before aggregation\n          \n          [default: 100000]\n\n      --mapsize-aggregated-stacks <MAPSIZE_AGGREGATED_STACKS>\n          max number of unique stacks after aggregation\n          \n          [default: 10000]\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          max number of rate limit entries\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n      --symbolizer <SYMBOLIZER>\n          [default: local]\n          [possible values: local, none]\n\n      --debug-info-backend <DEBUG_INFO_BACKEND>\n          [default: none]\n          [possible values: none, copy, remote]\n\n      --max-native-unwind-info-size-mb <MAX_NATIVE_UNWIND_INFO_SIZE_MB>\n          approximate max size in megabytes used for the BPF maps that hold unwind information\n          \n          [default: 2147483647]\n\n      --enable-deadlock-detector\n          enable parking_lot's deadlock detector\n\n      --cache-dir-base <CACHE_DIR_BASE>\n          [default: /tmp]\n\n      --killswitch-file-path <KILLSWITCH_FILE_PATH>\n          killswitch file to stop or prevent the profiler from starting. Required if duration is not set\n\n  -h, --help\n          Print help (see a summary with '-h')\n""#);
     }
 
     #[rstest]

@@ -2,7 +2,9 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use crossbeam_channel::{tick, Receiver, Sender};
+use tracing::{debug, info};
+
+use crossbeam_channel::{select, tick, Receiver, Sender};
 use lightswitch::profiler::ThreadSafeProfiler;
 
 enum RunState {
@@ -10,6 +12,11 @@ enum RunState {
     Stopped,
 }
 
+static KILLSWITCH_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Runs the profiler in continous profiling mode
+/// and provides mechanisms to stop the profiler via
+/// a killswitch file or a stop signal.
 pub struct Runner {
     profiler: ThreadSafeProfiler,
     run_state: RunState,
@@ -25,53 +32,69 @@ impl Runner {
         runner_stop_signal_receiver: Receiver<()>,
         profiler_stop_signal_sender: Sender<()>,
     ) -> Self {
-        return Runner {
-            profiler: profiler,
-            run_state: RunState::Stopped, // TODO: Confirm if we need to keep this!
-            killswitch_file_path: killswitch_file_path,
-            runner_stop_signal_receiver: runner_stop_signal_receiver,
-            profiler_stop_signal_sender: profiler_stop_signal_sender,
-        };
+        Runner {
+            profiler,
+            run_state: RunState::Stopped,
+            killswitch_file_path,
+            runner_stop_signal_receiver,
+            profiler_stop_signal_sender,
+        }
     }
 
     fn killswitch_enabled(&self) -> bool {
-        return Path::new(&self.killswitch_file_path).exists();
+        let enabled = Path::new(&self.killswitch_file_path).try_exists().unwrap();
+        if enabled {
+            info!("Killswitch enabled!");
+        }
+        enabled
     }
 
-    // TODO: Kill the profiler using Ctrl+C
-    pub fn start(&mut self) {
-        // Start the profiler
-        // TODO: Move this to a different thread
-        // thread::spawn(|| move )
-        self.profiler.lock().unwrap().run();
-        // terminate the profiler if the stop signal is received
+    fn start_profiler(&mut self) {
+        info!("Starting profiler");
+        let p = self.profiler.clone();
+        thread::spawn(move || {
+            p.lock().unwrap().run(); // This is a blocking call.
+        });
+        self.run_state = RunState::Running;
+    }
 
-        // On the main thread, every n seconds check the kill switch
-        // let ticker = tick(Duration::from_secs(10));
-        // loop {
-        //     let _ = ticker.recv().unwrap();
+    fn stop_profiler(&mut self) {
+        info!("Stopping profiler");
+        self.profiler_stop_signal_sender.send(()).unwrap();
+        self.run_state = RunState::Stopped;
+    }
 
-        //     if self.killswitch_enabled() {
-        //         match self.run_state {
-        //             RunState::Running => {
-        //                 self.stop_signal_sender.send(()).unwrap();
-        //                 self.run_state = RunState::Stopped;
-        //             }
-        //             RunState::Stopped => {
-        //                 // Do nothing
-        //             }
-        //         }
-        //     } else {
-        //         match self.run_state {
-        //             RunState::Running => {
-        //                 // Do nothing
-        //             }
-        //             RunState::Stopped => {
-        //                 self.profiler.run();
-        //                 self.run_state = RunState::Running;
-        //             }
-        //         }
-        //     }
-        // }
+    pub fn run(&mut self) {
+        if !self.killswitch_enabled() {
+            self.start_profiler();
+        } else {
+            info!("Continuous profiling killswitch enabled. Profiler will not be started");
+        }
+
+        let killswitch_ticker: Receiver<std::time::Instant> = tick(KILLSWITCH_CHECK_INTERVAL);
+        loop {
+            select! {
+                recv(killswitch_ticker) -> _  => {
+                    let killswitch_enabled = self.killswitch_enabled();
+
+                    match self.run_state {
+                        RunState::Running => {
+                            if killswitch_enabled {
+                                self.stop_profiler();
+                            }
+                        }
+                        RunState::Stopped => {
+                            if !killswitch_enabled {
+                                self.start_profiler();
+                            }
+                        }
+                    }
+                },
+                recv(self.runner_stop_signal_receiver) -> _ => {
+                    self.stop_profiler();
+                    break;
+                }
+            }
+        }
     }
 }

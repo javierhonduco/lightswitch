@@ -17,7 +17,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
-use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
+use crossbeam_channel::{select, tick, unbounded, Receiver, Sender};
 use itertools::Itertools;
 use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
@@ -119,7 +119,7 @@ pub struct Profiler {
     /// Sizes for the unwind information buckets.
     native_unwind_info_bucket_sizes: Vec<u32>,
     /// Deals with debug information
-    debug_info_manager: Box<dyn DebugInfoManager>,
+    debug_info_manager: Box<dyn DebugInfoManager + Send>,
     /// Maximum size of BPF unwind information maps. A higher value will result in
     /// evictions which might reduce the quality of the profiles and in more work
     /// for the profiler.
@@ -144,7 +144,7 @@ pub struct ProfilerConfig {
     pub mapsize_rate_limits: u32,
     pub exclude_self: bool,
     pub native_unwind_info_bucket_sizes: Vec<u32>,
-    pub debug_info_manager: Box<dyn DebugInfoManager>,
+    pub debug_info_manager: Box<dyn DebugInfoManager + Send>,
     pub max_native_unwind_info_size_mb: i32,
 }
 
@@ -420,7 +420,7 @@ impl Profiler {
             debug_info_manager: profiler_config.debug_info_manager,
             max_native_unwind_info_size_mb: profiler_config.max_native_unwind_info_size_mb,
             unwind_info_manager: UnwindInfoManager::new(&unwind_cache_dir, None),
-            collector: collector,
+            collector,
         }
     }
 
