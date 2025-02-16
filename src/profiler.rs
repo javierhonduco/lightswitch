@@ -1093,7 +1093,17 @@ impl Profiler {
         let key = exec_mappings_key::new(
             pid as u32, 0x0, 32, // pid bits
         );
-        Self::add_bpf_mapping(bpf, &key, &mapping_t::default())?;
+        Self::add_bpf_mapping(
+            bpf,
+            &key,
+            &mapping_t {
+                // Special values to know if it's a process entry in case of failures
+                // while finding a mapping.
+                begin: 0xb40c,
+                end: 0xb40c,
+                ..mapping_t::default()
+            },
+        )?;
         Ok(())
     }
 
