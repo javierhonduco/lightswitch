@@ -87,6 +87,7 @@ typedef struct {
 
 struct lightswitch_config_t {
   bool verbose_logging;
+  bool use_ring_buffers;
 };
 
 struct unwinder_stats_t {
@@ -113,7 +114,9 @@ struct unwinder_stats_t {
 };
 
 const volatile struct lightswitch_config_t lightswitch_config = {
-    .verbose_logging = true};
+    .verbose_logging = false,
+    .use_ring_buffers = false,
+};
 
 // A different stack produced the same hash.
 #define STACK_COLLISION(err) (err == -EEXIST)

@@ -76,6 +76,11 @@ struct {
 } events SEC(".maps");
 
 struct {
+  __uint(type, BPF_MAP_TYPE_RINGBUF);
+  __uint(max_entries, 256 * 1024 /* 256 KB */);
+} events_rb SEC(".maps");
+
+struct {
   __uint(type, BPF_MAP_TYPE_HASH);
   __uint(max_entries, MAX_EXECUTABLE_TO_PAGE_ENTRIES);
   __type(key, page_key_t);
@@ -199,7 +204,13 @@ static __always_inline void send_event(Event *event, struct bpf_perf_event_data 
     return;
   }
 
-  if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, event, sizeof(Event)) < 0) {
+  int ret = 0;
+  if (lightswitch_config.use_ring_buffers) {
+    ret = bpf_ringbuf_output(&events_rb, event, sizeof(Event), 0);
+  } else {
+    ret = bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, event, sizeof(Event));
+  }
+  if (ret < 0) {
     bump_unwind_error_sending_new_process_event();
   }
 
