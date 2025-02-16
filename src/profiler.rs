@@ -1,4 +1,6 @@
+use libbpf_rs::MapImpl;
 use libbpf_rs::OpenObject;
+use libbpf_rs::RingBufferBuilder;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
 use std::collections::hash_map::OccupiedEntry;
@@ -32,6 +34,7 @@ use tracing::{debug, error, info, span, warn, Level};
 use crate::bpf::profiler_bindings::*;
 use crate::bpf::profiler_skel::{OpenProfilerSkel, ProfilerSkel, ProfilerSkelBuilder};
 use crate::bpf::tracers_bindings::*;
+use crate::bpf::tracers_skel::OpenTracersSkel;
 use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
 use crate::debug_info::DebugInfoBackendNull;
@@ -126,6 +129,7 @@ pub struct Profiler {
     max_native_unwind_info_size_mb: i32,
     unwind_info_manager: UnwindInfoManager,
     collector: ThreadSafeCollector,
+    use_ring_buffers: bool,
 }
 
 pub type ThreadSafeProfiler = Arc<Mutex<Profiler>>;
@@ -146,6 +150,7 @@ pub struct ProfilerConfig {
     pub native_unwind_info_bucket_sizes: Vec<u32>,
     pub debug_info_manager: Box<dyn DebugInfoManager + Send>,
     pub max_native_unwind_info_size_mb: i32,
+    pub use_ring_buffers: bool,
 }
 
 impl Default for ProfilerConfig {
@@ -169,6 +174,7 @@ impl Default for ProfilerConfig {
             ],
             debug_info_manager: Box::new(DebugInfoBackendNull {}),
             max_native_unwind_info_size_mb: i32::MAX,
+            use_ring_buffers: true,
         }
     }
 }
@@ -271,6 +277,51 @@ impl Profiler {
             .lightswitch_config
             .verbose_logging
             .write(profiler_config.bpf_logging);
+        open_skel
+            .maps
+            .rodata_data
+            .lightswitch_config
+            .use_ring_buffers
+            .write(profiler_config.use_ring_buffers);
+
+        if profiler_config.use_ring_buffers {
+            // Even set to zero it will create as many entries as CPUs.
+            open_skel
+                .maps
+                .events
+                .set_max_entries(0)
+                .expect("set perf buffer entries to zero as it's unused");
+        } else {
+            // Seems like ring buffers need to have size of at least 1...
+            // It will use at least a page.
+            open_skel
+                .maps
+                .events_rb
+                .set_max_entries(1)
+                .expect("set ring buffer entries to one as it's unused");
+        }
+    }
+
+    pub fn set_tracers_map_sizes(
+        open_skel: &mut OpenTracersSkel,
+        profiler_config: &ProfilerConfig,
+    ) {
+        if profiler_config.use_ring_buffers {
+            // Even set to zero it will create as many entries as CPUs.
+            open_skel
+                .maps
+                .tracer_events
+                .set_max_entries(0)
+                .expect("set perf buffer entries to zero as it's unused");
+        } else {
+            // Seems like ring buffers need to have size of at least 1...
+            // It will use at least a page.
+            open_skel
+                .maps
+                .tracer_events_rb
+                .set_max_entries(1)
+                .expect("set ring buffer entries to one as it's unused");
+        }
     }
 
     pub fn show_actual_profiler_map_sizes(bpf: &ProfilerSkel) {
@@ -367,6 +418,7 @@ impl Profiler {
             .exec_mappings
             .reuse_fd(exec_mappings_fd)
             .expect("reuse exec_mappings");
+        Self::set_tracers_map_sizes(&mut open_tracers, &profiler_config);
 
         let tracers = ManuallyDrop::new(open_tracers.load().expect("load skel"));
         // SAFETY: tracers never outlives tracers_open_object
@@ -421,6 +473,7 @@ impl Profiler {
             max_native_unwind_info_size_mb: profiler_config.max_native_unwind_info_size_mb,
             unwind_info_manager: UnwindInfoManager::new(&unwind_cache_dir, None),
             collector,
+            use_ring_buffers: profiler_config.use_ring_buffers,
         }
     }
 
@@ -433,6 +486,71 @@ impl Profiler {
 
     pub fn send_profile(&mut self, profile: RawAggregatedProfile) {
         self.profile_send.send(profile).expect("handle send");
+    }
+
+    /// Starts a thread that polls the given ring or perf buffer, depending on the
+    /// configuration.
+    ///
+    /// Note: [`lost_callback`] is only used for perf buffers as ring buffers only report
+    /// errors on the sender side.
+    pub fn start_poll_thread<Call: Fn(&[u8]) + 'static, Lost: FnMut(i32, u64) + 'static>(
+        &self,
+        name: &'static str,
+        ring_buf_map: &MapImpl,
+        perf_buf_map: &MapImpl,
+        callback: Call,
+        lost_callback: Lost,
+    ) {
+        if self.use_ring_buffers {
+            let mut ring_buf = RingBufferBuilder::new();
+            ring_buf
+                .add(ring_buf_map, move |data| {
+                    callback(data);
+                    0
+                })
+                .expect("add to ring buffer");
+            let ring_buf = ring_buf.build().expect("build ring buffer");
+            let thread_name = format!("ring-poll-{}", name);
+            let _poll_thread = thread::Builder::new()
+                .name(thread_name)
+                .spawn(move || loop {
+                    match ring_buf.poll(Duration::from_millis(100)) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            if err.kind() != libbpf_rs::ErrorKind::Interrupted {
+                                error!("polling {} ring buffer failed with {:?}", name, err);
+                                break;
+                            }
+                        }
+                    }
+                })
+                .expect("spawn poll thread");
+        } else {
+            let perf_buffer = PerfBufferBuilder::new(perf_buf_map)
+                .pages(self.perf_buffer_bytes / page_size::get())
+                .sample_cb(move |_cpu: i32, data: &[u8]| {
+                    callback(data);
+                })
+                .lost_cb(lost_callback)
+                .build()
+                .expect("set up perf buffer");
+
+            let thread_name = format!("perf-poll-{}", name);
+            let _poll_thread = thread::Builder::new()
+                .name(thread_name)
+                .spawn(move || loop {
+                    match perf_buffer.poll(Duration::from_millis(100)) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            if err.kind() != libbpf_rs::ErrorKind::Interrupted {
+                                error!("polling {} perf buffer failed with {:?}", name, err);
+                                break;
+                            }
+                        }
+                    }
+                })
+                .expect("spawn poll thread");
+        }
     }
 
     pub fn run(&mut self) -> Duration {
@@ -449,57 +567,37 @@ impl Profiler {
 
         self.tracers.attach().expect("attach tracers");
 
-        // Unwinder events.
         let chan_send = self.new_proc_chan_send.clone();
-        let perf_buffer = PerfBufferBuilder::new(&self.native_unwinder.maps.events)
-            .pages(self.perf_buffer_bytes / page_size::get())
-            .sample_cb(move |_cpu: i32, data: &[u8]| {
-                Self::handle_event(&chan_send, data);
-            })
-            .lost_cb(Self::handle_lost_events)
-            .build()
-            .expect("set up perf buffer for unwinder events");
+        self.start_poll_thread(
+            "unwinder_events",
+            &self.native_unwinder.maps.events_rb,
+            &self.native_unwinder.maps.events,
+            move |data| Self::handle_event(&chan_send, data),
+            Self::handle_lost_events,
+        );
 
-        let _unwinder_poll_thread = thread::spawn(move || loop {
-            match perf_buffer.poll(Duration::from_millis(100)) {
-                Ok(_) => {}
-                Err(err) => {
-                    if err.kind() != libbpf_rs::ErrorKind::Interrupted {
-                        error!("polling events perf buffer failed with {:?}", err);
-                        break;
-                    }
-                }
-            }
-        });
-
-        // Tracer events.
         let tracers_send = self.tracers_chan_send.clone();
-        let tracers_events_perf_buffer = PerfBufferBuilder::new(&self.tracers.maps.tracer_events)
-            .pages(self.perf_buffer_bytes / page_size::get())
-            .sample_cb(move |_cpu: i32, data: &[u8]| {
+        self.start_poll_thread(
+            "tracer_events",
+            &self.tracers.maps.tracer_events_rb,
+            &self.tracers.maps.tracer_events,
+            move |data: &[u8]| {
                 let mut event = tracer_event_t::default();
-                plain::copy_from_bytes(&mut event, data).expect("serde tracers event");
-                tracers_send
-                    .send(TracerEvent::from(event))
-                    .expect("handle event send");
-            })
-            .lost_cb(|_cpu, lost_count| {
-                warn!("lost {} events from the tracers", lost_count);
-            })
-            .build()
-            .expect("set up perf buffer for tracer events");
-
-        let _tracers_poll_thread = thread::spawn(move || loop {
-            match tracers_events_perf_buffer.poll(Duration::from_millis(100)) {
-                Ok(_) => {}
-                Err(err) => {
-                    if err.kind() != libbpf_rs::ErrorKind::Interrupted {
-                        error!("polling tracers perf buffer failed with {:?}", err);
-                        break;
+                match plain::copy_from_bytes(&mut event, data) {
+                    Ok(()) => {
+                        tracers_send
+                            .send(TracerEvent::from(event))
+                            .expect("handle event send");
+                    }
+                    Err(e) => {
+                        error!("copying data from tracer_events failed with {:?}", e);
                     }
                 }
-            }
-        });
+            },
+            |_cpu, lost_count| {
+                warn!("lost {} events from the tracers", lost_count);
+            },
+        );
 
         let profile_receive = self.profile_receive.clone();
         let procs = self.procs.clone();

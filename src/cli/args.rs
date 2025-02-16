@@ -152,4 +152,6 @@ pub(crate) struct CliArgs {
         required_unless_present = "duration"
     )]
     pub(crate) killswitch_file_path: Option<String>,
+    #[arg(long, help = "force perf buffers even if ring buffers can be used")]
+    pub(crate) force_perf_buffer: bool,
 }

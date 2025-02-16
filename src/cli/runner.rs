@@ -2,7 +2,7 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use tracing::{debug, info};
+use tracing::info;
 
 use crossbeam_channel::{select, tick, Receiver, Sender};
 use lightswitch::profiler::ThreadSafeProfiler;

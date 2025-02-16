@@ -18,6 +18,11 @@ struct {
 } tracer_events SEC(".maps");
 
 struct {
+  __uint(type, BPF_MAP_TYPE_RINGBUF);
+  __uint(max_entries, 256 * 1024 /* 256 KB */);
+} tracer_events_rb SEC(".maps");
+
+struct {
   __uint(type, BPF_MAP_TYPE_HASH);
   __uint(max_entries, 500);
   __type(key, mmap_data_key_t);
@@ -58,8 +63,15 @@ int tracer_process_exit(void *ctx) {
         .start_address = 0,
     };
 
-    if (bpf_perf_event_output(ctx, &tracer_events, BPF_F_CURRENT_CPU, &event, sizeof(tracer_event_t)) < 0) {
+    int ret = 0;
+    if (lightswitch_config.use_ring_buffers) {
+        ret = bpf_ringbuf_output(&tracer_events_rb, &event, sizeof(tracer_event_t), 0);
+    } else {
+        ret = bpf_perf_event_output(ctx, &tracer_events, BPF_F_CURRENT_CPU, &event, sizeof(tracer_event_t));
+    }
+    if (ret < 0) {
         LOG("[error] failed to send process exit tracer event");
+        return 0;
     }
 
     LOG("[debug] sent process exit tracer event");
@@ -116,7 +128,12 @@ int tracer_exit_munmap(struct trace_event_raw_sys_exit *ctx) {
         .start_address = *start_address,
     };
 
-    if (bpf_perf_event_output(ctx, &tracer_events, BPF_F_CURRENT_CPU, &event, sizeof(tracer_event_t)) < 0) {
+    if (lightswitch_config.use_ring_buffers) {
+        ret = bpf_ringbuf_output(&tracer_events_rb, &event, sizeof(tracer_event_t), 0);
+    } else {
+        ret = bpf_perf_event_output(ctx, &tracer_events, BPF_F_CURRENT_CPU, &event, sizeof(tracer_event_t));
+    }
+    if (ret < 0) {
         LOG("[error] failed to send munmap tracer event");
     }
 
