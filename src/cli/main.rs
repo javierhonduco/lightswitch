@@ -18,7 +18,7 @@ use lightswitch_metadata::metadata_provider::GlobalMetadataProvider;
 use nix::unistd::Uid;
 use prost::Message;
 use runner::Runner;
-use tracing::{error, info, Level, debug};
+use tracing::{debug, error, info, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
