@@ -18,7 +18,7 @@ members = [
 memmap2 = "0.9.5"
 anyhow = "1.0.95"
 object = "0.36.7"
-libbpf-rs = { version = "0.25.0-beta.1", features = ["static"] }
+libbpf-rs = { version = "0.25.0-beta.1" }
 tracing = "0.1.41"
 thiserror = "2.0.11"
 errno = "0.3.10"

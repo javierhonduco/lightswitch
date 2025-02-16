@@ -19,35 +19,29 @@
           pkgs = import nixpkgs {
             inherit system overlays;
           };
-          elfutils' = (pkgs.elfutils.override { enableDebuginfod = false; }).overrideAttrs (attrs: {
+          elfutils' = (pkgs.pkgsCross.musl64.elfutils.override { enableDebuginfod = false; }).overrideAttrs (attrs: {
             configureFlags = attrs.configureFlags ++ [ "--without-zstd" ];
           });
-          buildInputs = with pkgs; [
+          buildInputs = [
+            elfutils'
+            pkgs.pkgsCross.musl64.zlib
+            pkgs.pkgsCross.musl64.zlib.dev
+          ];
+          nativeBuildInputs = with pkgs; [
+            pkg-config
             llvmPackages_16.clang
             llvmPackages_16.libcxx
             llvmPackages_16.libclang
             llvmPackages_16.lld
-            elfutils'
-            zlib.static
-            zlib.dev
             glibc
             glibc.static
             protobuf
           ];
-          nativeBuildInputs = with pkgs; [
-            pkg-config
-          ];
-          rust-toolchain = pkgs.rust-bin.nightly.latest.default;
-          craneLib = (crane.mkLib nixpkgs.legacyPackages.${system}).overrideToolchain rust-toolchain;
-          lightswitch = craneLib.buildPackage {
-            src = ./.;
-            doCheck = false;
-            buildInputs = buildInputs;
-            nativeBuildInputs = nativeBuildInputs;
-            hardeningDisable = [ "all" ];
-            LIBCLANG_PATH = with pkgs; lib.makeLibraryPath [ llvmPackages_16.libclang ];
-            LIBBPF_SYS_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [ zlib.static elfutils' ];
+          rust-toolchain = pkgs.rust-bin.nightly.latest.default.override {
+            targets = [ "x86_64-unknown-linux-musl" ];
           };
+          craneLib = (crane.mkLib pkgs).overrideToolchain rust-toolchain;
+          lightswitch = pkgs.callPackage ./lightswitch.nix { inherit buildInputs craneLib nativeBuildInputs elfutils'; };
         in
         with pkgs;
         {
