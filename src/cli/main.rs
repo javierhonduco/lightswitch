@@ -285,8 +285,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut runner = Runner::new(
             profiler,
             killswitch_file,
-            runner_stop_signal_receiver.clone(),
-            profiler_stop_signal_sender.clone(),
+            runner_stop_signal_receiver,
+            profiler_stop_signal_sender,
         );
 
         runner.run(); // Blocks the main thread
