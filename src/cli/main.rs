@@ -303,9 +303,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     })
     .expect("Error setting Ctrl-C handler");
 
-    let _ = collect_profiles_adhoc(&args, profiler, collector, metadata_provider);
-
-    Ok(())
+    collect_profiles_adhoc(&args, profiler, collector, metadata_provider)
 }
 
 fn show_unwind_info(path: &str) {
