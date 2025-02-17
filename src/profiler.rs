@@ -14,12 +14,12 @@ use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
-use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
+use crossbeam_channel::{select, tick, unbounded, Receiver, Sender};
 use itertools::Itertools;
 use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
@@ -122,14 +122,17 @@ pub struct Profiler {
     /// Sizes for the unwind information buckets.
     native_unwind_info_bucket_sizes: Vec<u32>,
     /// Deals with debug information
-    debug_info_manager: Box<dyn DebugInfoManager>,
+    debug_info_manager: Box<dyn DebugInfoManager + Send>,
     /// Maximum size of BPF unwind information maps. A higher value will result in
     /// evictions which might reduce the quality of the profiles and in more work
     /// for the profiler.
     max_native_unwind_info_size_mb: i32,
     unwind_info_manager: UnwindInfoManager,
+    collector: ThreadSafeCollector,
     use_ring_buffers: bool,
 }
+
+pub type ThreadSafeProfiler = Arc<Mutex<Profiler>>;
 
 pub struct ProfilerConfig {
     pub cache_dir_base: PathBuf,
@@ -145,7 +148,7 @@ pub struct ProfilerConfig {
     pub mapsize_rate_limits: u32,
     pub exclude_self: bool,
     pub native_unwind_info_bucket_sizes: Vec<u32>,
-    pub debug_info_manager: Box<dyn DebugInfoManager>,
+    pub debug_info_manager: Box<dyn DebugInfoManager + Send>,
     pub max_native_unwind_info_size_mb: i32,
     pub use_ring_buffers: bool,
 }
@@ -173,14 +176,6 @@ impl Default for ProfilerConfig {
             max_native_unwind_info_size_mb: i32::MAX,
             use_ring_buffers: true,
         }
-    }
-}
-
-impl Default for Profiler {
-    fn default() -> Self {
-        let (_stop_signal_send, stop_signal_receive) = bounded(1);
-
-        Self::new(ProfilerConfig::default(), stop_signal_receive)
     }
 }
 
@@ -345,7 +340,11 @@ impl Profiler {
         );
     }
 
-    pub fn new(profiler_config: ProfilerConfig, stop_signal_receive: Receiver<()>) -> Self {
+    pub fn new(
+        profiler_config: ProfilerConfig,
+        stop_signal_receive: Receiver<()>,
+        collector: ThreadSafeCollector,
+    ) -> Self {
         debug!(
             "Base cache directory {}",
             profiler_config.cache_dir_base.display()
@@ -473,6 +472,7 @@ impl Profiler {
             debug_info_manager: profiler_config.debug_info_manager,
             max_native_unwind_info_size_mb: profiler_config.max_native_unwind_info_size_mb,
             unwind_info_manager: UnwindInfoManager::new(&unwind_cache_dir, None),
+            collector,
             use_ring_buffers: profiler_config.use_ring_buffers,
         }
     }
@@ -553,7 +553,7 @@ impl Profiler {
         }
     }
 
-    pub fn run(mut self, collector: ThreadSafeCollector) -> Duration {
+    pub fn run(&mut self) -> Duration {
         // In this case, we only want to calculate maximum sampling buffer sizes based on the
         // number of "online" CPUs, not "possible" CPUs, which they sometimes differ.
         let num_cpus = get_online_cpus().expect("get online CPUs").len() as u64;
@@ -602,7 +602,7 @@ impl Profiler {
         let profile_receive = self.profile_receive.clone();
         let procs = self.procs.clone();
         let object_files = self.object_files.clone();
-        let collector = collector.clone();
+        let collector = self.collector.clone();
 
         thread::spawn(move || loop {
             match profile_receive.recv() {
@@ -1895,6 +1895,8 @@ impl Profiler {
             .expect("update map");
     }
 
+    /// Sets up a perf event for each online CPU, and attaches
+    /// the perf event to the native unwinder BPF program.
     pub fn setup_perf_events(&mut self) {
         let mut prog_fds = Vec::new();
         for i in get_online_cpus().expect("get online CPUs") {

@@ -88,37 +88,37 @@ let
       name = "Fedora 5.15"
       kernel = "${kernel_5_15}/bzImage"
       arch = "x86_64"
-      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --cache-dir-base=/tmp"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --killswitch-file-path /tmp/lightswitch.killswitch --cache-dir-base=/tmp"
 
       [[target]]
       name = "Fedora 6.0"
       kernel = "${kernel_6_0}/bzImage"
       arch = "x86_64"
-      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --cache-dir-base=/tmp"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --killswitch-file-path /tmp/lightswitch.killswitch --cache-dir-base=/tmp"
 
       [[target]]
       name = "Fedora 6.2"
       kernel = "${kernel_6_2}/bzImage"
       arch = "x86_64"
-      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --cache-dir-base=/tmp"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --killswitch-file-path /tmp/lightswitch.killswitch --cache-dir-base=/tmp"
 
       [[target]]
       name = "Fedora 6.6"
       kernel = "${kernel_6_6}/bzImage"
       arch = "x86_64"
-      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --cache-dir-base=/tmp"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --killswitch-file-path /tmp/lightswitch.killswitch --cache-dir-base=/tmp"
 
       [[target]]
       name = "Upstream 6.8.7"
       kernel = "${kernel_6_8_7}/bzImage"
       arch = "x86_64"
-      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --cache-dir-base=/tmp"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --killswitch-file-path /tmp/lightswitch.killswitch --cache-dir-base=/tmp"
 
       [[target]]
       name = "Upstream v6.9-rc5"
       kernel = "${kernel_6_9_rc5}/bzImage"
       arch = "x86_64"
-      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --cache-dir-base=/tmp"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --killswitch-file-path /tmp/lightswitch.killswitch --cache-dir-base=/tmp"
     '';
     nativeBuildInputs = [ ];
     installPhase = ''

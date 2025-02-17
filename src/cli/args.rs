@@ -146,6 +146,12 @@ pub(crate) struct CliArgs {
     pub(crate) enable_deadlock_detector: bool,
     #[arg(long, default_value = ProfilerConfig::default().cache_dir_base.into_os_string())]
     pub(crate) cache_dir_base: PathBuf,
+    #[arg(
+        long,
+        help = "killswitch file to stop or prevent the profiler from starting. Required if duration is not set",
+        required_unless_present = "duration"
+    )]
+    pub(crate) killswitch_file_path: Option<String>,
     #[arg(long, help = "force perf buffers even if ring buffers can be used")]
     pub(crate) force_perf_buffer: bool,
 }
