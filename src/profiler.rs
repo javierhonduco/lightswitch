@@ -11,6 +11,7 @@ use std::io::ErrorKind;
 use std::mem::size_of;
 use std::mem::ManuallyDrop;
 use std::mem::MaybeUninit;
+use std::os::fd::BorrowedFd;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
@@ -86,21 +87,17 @@ impl NativeUnwindState {
 }
 
 pub struct Profiler {
+    process_manager: ProcessManager,
     cache_dir: PathBuf,
     // Prevent the links from being removed.
     _links: Vec<Link>,
     native_unwinder_open_object: ManuallyDrop<Box<MaybeUninit<OpenObject>>>,
     native_unwinder: ManuallyDrop<ProfilerSkel<'static>>,
-    tracers_open_object: ManuallyDrop<Box<MaybeUninit<OpenObject>>>,
-    tracers: ManuallyDrop<TracersSkel<'static>>,
     procs: Arc<RwLock<HashMap<Pid, ProcessInfo>>>,
     object_files: Arc<RwLock<HashMap<ExecutableId, ObjectFileInfo>>>,
     // Channel for new process events.
     new_proc_chan_send: Arc<Sender<Event>>,
     new_proc_chan_receive: Arc<Receiver<Event>>,
-    // Channel for tracer events such as munmaps and process exits.
-    tracers_chan_send: Arc<Sender<TracerEvent>>,
-    tracers_chan_receive: Arc<Receiver<TracerEvent>>,
     /// Profiler stop channel. Used to receive signals from users to stop profiling.
     stop_chan_receive: Receiver<()>,
     native_unwind_state: NativeUnwindState,
@@ -189,8 +186,8 @@ impl Drop for Profiler {
         unsafe { ManuallyDrop::drop(&mut self.native_unwinder) };
         unsafe { ManuallyDrop::drop(&mut self.native_unwinder_open_object) };
 
-        unsafe { ManuallyDrop::drop(&mut self.tracers) };
-        unsafe { ManuallyDrop::drop(&mut self.tracers_open_object) };
+        //  unsafe { ManuallyDrop::drop(&mut self.tracers) };
+        //  unsafe { ManuallyDrop::drop(&mut self.tracers_open_object) };
     }
 }
 
@@ -216,6 +213,179 @@ fn fetch_vdso_info(
     let object = ObjectFile::new(&dumped_vdso)?;
 
     Ok((dumped_vdso, object))
+}
+
+// TODO: do not copy this code
+pub fn start_poll_thread<Call: Fn(&[u8]) + 'static, Lost: FnMut(i32, u64) + 'static>(
+    name: &'static str,
+    ring_buf_map: &MapImpl,
+    perf_buf_map: &MapImpl,
+    callback: Call,
+    lost_callback: Lost,
+) {
+    if true {
+        let mut ring_buf = RingBufferBuilder::new();
+        ring_buf
+            .add(ring_buf_map, move |data| {
+                callback(data);
+                0
+            })
+            .expect("add to ring buffer");
+        let ring_buf = ring_buf.build().expect("build ring buffer");
+        let thread_name = format!("ring-poll-{}", name);
+        let _poll_thread = thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || loop {
+                match ring_buf.poll(Duration::from_millis(100)) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        if err.kind() != libbpf_rs::ErrorKind::Interrupted {
+                            error!("polling {} ring buffer failed with {:?}", name, err);
+                            break;
+                        }
+                    }
+                }
+            })
+            .expect("spawn poll thread");
+    } else {
+        todo!();
+        /*     let perf_buffer = PerfBufferBuilder::new(perf_buf_map)
+            .pages(self.perf_buffer_bytes / page_size::get())
+            .sample_cb(move |_cpu: i32, data: &[u8]| {
+                callback(data);
+            })
+            .lost_cb(lost_callback)
+            .build()
+            .expect("set up perf buffer");
+
+        let thread_name = format!("perf-poll-{}", name);
+        let _poll_thread = thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || loop {
+                match perf_buffer.poll(Duration::from_millis(100)) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        if err.kind() != libbpf_rs::ErrorKind::Interrupted {
+                            error!("polling {} perf buffer failed with {:?}", name, err);
+                            break;
+                        }
+                    }
+                }
+            })
+            .expect("spawn poll thread"); */
+    }
+}
+
+struct ProcessManager {
+    tracers_open_object: ManuallyDrop<Box<MaybeUninit<OpenObject>>>,
+    tracers: ManuallyDrop<TracersSkel<'static>>,
+    // Channel for tracer events such as munmaps and process exits.
+    tracers_chan_send: Arc<Sender<TracerEvent>>,
+    tracers_chan_receive: Arc<Receiver<TracerEvent>>,
+}
+
+impl ProcessManager {
+    fn new(profiler_config: &ProfilerConfig, exec_mappings_fd: BorrowedFd) -> Self {
+        let mut tracers_open_object = ManuallyDrop::new(Box::new(MaybeUninit::uninit()));
+        let mut tracers_builder = TracersSkelBuilder::default();
+        tracers_builder
+            .obj_builder
+            .debug(profiler_config.libbpf_debug);
+        let mut open_tracers = tracers_builder
+            .open(&mut tracers_open_object)
+            .expect("open skel");
+        open_tracers
+            .maps
+            .exec_mappings
+            .reuse_fd(exec_mappings_fd)
+            .expect("reuse exec_mappings");
+        Self::set_tracers_map_sizes(&mut open_tracers, &profiler_config);
+
+        let mut tracers = ManuallyDrop::new(open_tracers.load().expect("load skel"));
+        // SAFETY: tracers never outlives tracers_open_object
+        let mut tracers = unsafe {
+            std::mem::transmute::<ManuallyDrop<TracersSkel<'_>>, ManuallyDrop<TracersSkel<'static>>>(
+                tracers,
+            )
+        };
+
+        let (sender, receiver) = unbounded();
+        let tracers_chan_send = Arc::new(sender);
+        let tracers_chan_receive = Arc::new(receiver);
+        info!("munmap and process exit tracing BPF programs loaded");
+        // ========== attach
+        tracers.attach().expect("attach tracers");
+        // =========== start thread
+        let tracers_send = tracers_chan_send.clone();
+        start_poll_thread(
+            "tracer_events",
+            &tracers.maps.tracer_events_rb,
+            &tracers.maps.tracer_events,
+            move |data: &[u8]| {
+                let mut event = tracer_event_t::default();
+                match plain::copy_from_bytes(&mut event, data) {
+                    Ok(()) => {
+                        println!("new event");
+                        tracers_send
+                            .send(TracerEvent::from(event))
+                            .expect("handle event send");
+                    }
+                    Err(e) => {
+                        error!("copying data from tracer_events failed with {:?}", e);
+                    }
+                }
+            },
+            |_cpu, lost_count| {
+                warn!("lost {} events from the tracers", lost_count);
+            },
+        );
+        // ============ polling thread
+        let tracers_chan_receive2 = tracers_chan_receive.clone();
+        std::thread::spawn(move || {
+            loop {
+                match tracers_chan_receive2.recv() {
+                    Ok(TracerEvent::Munmap(pid, start_address)) => {
+                        println!("munmap");
+                        //self.handle_munmap(pid, start_address);
+                    }
+                    Ok(TracerEvent::ProcessExit(pid)) => {
+                        println!("exit");
+                        //self.handle_process_exit(pid);
+                    }
+                    Err(_) => {}
+                }
+            }
+        });
+
+        ProcessManager {
+            tracers_open_object,
+            tracers,
+            tracers_chan_send,
+            tracers_chan_receive,
+        }
+    }
+
+    pub fn set_tracers_map_sizes(
+        open_skel: &mut OpenTracersSkel,
+        profiler_config: &ProfilerConfig,
+    ) {
+        if profiler_config.use_ring_buffers {
+            // Even set to zero it will create as many entries as CPUs.
+            open_skel
+                .maps
+                .tracer_events
+                .set_max_entries(0)
+                .expect("set perf buffer entries to zero as it's unused");
+        } else {
+            // Seems like ring buffers need to have size of at least 1...
+            // It will use at least a page.
+            open_skel
+                .maps
+                .tracer_events_rb
+                .set_max_entries(1)
+                .expect("set ring buffer entries to one as it's unused");
+        }
+    }
 }
 
 impl Profiler {
@@ -307,28 +477,6 @@ impl Profiler {
         }
     }
 
-    pub fn set_tracers_map_sizes(
-        open_skel: &mut OpenTracersSkel,
-        profiler_config: &ProfilerConfig,
-    ) {
-        if profiler_config.use_ring_buffers {
-            // Even set to zero it will create as many entries as CPUs.
-            open_skel
-                .maps
-                .tracer_events
-                .set_max_entries(0)
-                .expect("set perf buffer entries to zero as it's unused");
-        } else {
-            // Seems like ring buffers need to have size of at least 1...
-            // It will use at least a page.
-            open_skel
-                .maps
-                .tracer_events_rb
-                .set_max_entries(1)
-                .expect("set ring buffer entries to one as it's unused");
-        }
-    }
-
     pub fn show_actual_profiler_map_sizes(bpf: &ProfilerSkel) {
         info!("BPF map sizes:");
         info!(
@@ -372,8 +520,6 @@ impl Profiler {
         }
 
         let mut native_unwinder_open_object = ManuallyDrop::new(Box::new(MaybeUninit::uninit()));
-        let mut tracers_open_object = ManuallyDrop::new(Box::new(MaybeUninit::uninit()));
-
         let mut skel_builder = ProfilerSkelBuilder::default();
         skel_builder.obj_builder.debug(profiler_config.libbpf_debug);
         let mut open_skel = skel_builder
@@ -400,44 +546,16 @@ impl Profiler {
         info!("native unwinder BPF program loaded");
         let native_unwinder_maps = &native_unwinder.maps;
         let exec_mappings_fd = native_unwinder_maps.exec_mappings.as_fd();
+        let process_manager = ProcessManager::new(&profiler_config, exec_mappings_fd);
 
         // BPF map sizes can be overriden, this is a debugging option to print the actual size once
         // the maps are created and the BPF program is loaded.
         if profiler_config.mapsize_info {
             Self::show_actual_profiler_map_sizes(&native_unwinder);
         }
-
-        let mut tracers_builder = TracersSkelBuilder::default();
-        tracers_builder
-            .obj_builder
-            .debug(profiler_config.libbpf_debug);
-        let mut open_tracers = tracers_builder
-            .open(&mut tracers_open_object)
-            .expect("open skel");
-        open_tracers
-            .maps
-            .exec_mappings
-            .reuse_fd(exec_mappings_fd)
-            .expect("reuse exec_mappings");
-        Self::set_tracers_map_sizes(&mut open_tracers, &profiler_config);
-
-        let tracers = ManuallyDrop::new(open_tracers.load().expect("load skel"));
-        // SAFETY: tracers never outlives tracers_open_object
-        let tracers = unsafe {
-            std::mem::transmute::<ManuallyDrop<TracersSkel<'_>>, ManuallyDrop<TracersSkel<'static>>>(
-                tracers,
-            )
-        };
-
-        info!("munmap and process exit tracing BPF programs loaded");
-
         let (sender, receiver) = unbounded();
         let chan_send = Arc::new(sender);
         let chan_receive = Arc::new(receiver);
-
-        let (sender, receiver) = unbounded();
-        let tracers_chan_send = Arc::new(sender);
-        let tracers_chan_receive = Arc::new(receiver);
 
         let native_unwind_state =
             NativeUnwindState::with_buckets(profiler_config.native_unwind_info_bucket_sizes.len());
@@ -447,18 +565,15 @@ impl Profiler {
         let profile_receive = Arc::new(receiver);
 
         Profiler {
+            process_manager,
             cache_dir,
             _links: Vec::new(),
             native_unwinder_open_object,
             native_unwinder,
-            tracers_open_object,
-            tracers,
             procs: Arc::new(RwLock::new(HashMap::new())),
             object_files: Arc::new(RwLock::new(HashMap::new())),
             new_proc_chan_send: chan_send,
             new_proc_chan_receive: chan_receive,
-            tracers_chan_send,
-            tracers_chan_receive,
             stop_chan_receive: stop_signal_receive,
             native_unwind_state,
             filter_pids: HashMap::new(),
@@ -565,8 +680,6 @@ impl Profiler {
         self.setup_perf_events();
         self.set_bpf_map_info();
 
-        self.tracers.attach().expect("attach tracers");
-
         let chan_send = self.new_proc_chan_send.clone();
         self.start_poll_thread(
             "unwinder_events",
@@ -574,29 +687,6 @@ impl Profiler {
             &self.native_unwinder.maps.events,
             move |data| Self::handle_event(&chan_send, data),
             Self::handle_lost_events,
-        );
-
-        let tracers_send = self.tracers_chan_send.clone();
-        self.start_poll_thread(
-            "tracer_events",
-            &self.tracers.maps.tracer_events_rb,
-            &self.tracers.maps.tracer_events,
-            move |data: &[u8]| {
-                let mut event = tracer_event_t::default();
-                match plain::copy_from_bytes(&mut event, data) {
-                    Ok(()) => {
-                        tracers_send
-                            .send(TracerEvent::from(event))
-                            .expect("handle event send");
-                    }
-                    Err(e) => {
-                        error!("copying data from tracer_events failed with {:?}", e);
-                    }
-                }
-            },
-            |_cpu, lost_count| {
-                warn!("lost {} events from the tracers", lost_count);
-            },
         );
 
         let profile_receive = self.profile_receive.clone();
@@ -640,17 +730,6 @@ impl Profiler {
                     debug!("collecting profiles on schedule");
                     let profile = self.collect_profile();
                     self.send_profile(profile);
-                }
-                recv(self.tracers_chan_receive) -> read => {
-                    match read {
-                        Ok(TracerEvent::Munmap(pid, start_address)) => {
-                                self.handle_munmap(pid, start_address);
-                        },
-                        Ok(TracerEvent::ProcessExit(pid)) => {
-                                self.handle_process_exit(pid);
-                        },
-                        Err(_) => {}
-                    }
                 },
                 recv(self.new_proc_chan_receive) -> read => {
                         if let Ok(event) = read {
@@ -1659,38 +1738,39 @@ impl Profiler {
                 continue;
             }
             match &map.pathname {
-                procfs::process::MMapPath::Path(path) => {
-                    let abs_path = format!("/proc/{}/root{}", pid, path.to_string_lossy());
+                procfs::process::MMapPath::Path(namespaced_path) => {
+                    let exe_path =
+                        format!("/proc/{}/root{}", pid, namespaced_path.to_string_lossy());
 
                     // We've seen debug info executables that get deleted in Rust applications.
-                    if abs_path.contains("(deleted)") {
+                    if exe_path.contains("(deleted)") {
                         continue;
                     }
 
                     // There are probably other cases, but we'll handle them as we bump into them.
-                    if abs_path.contains("(") {
+                    if exe_path.contains("(") {
                         warn!(
                             "absolute path ({}) contains '(', it might be special",
-                            abs_path
+                            exe_path
                         );
                     }
 
                     // We want to open the file as quickly as possible to minimise the chances of races
                     // if the file is deleted.
-                    let file = match fs::File::open(&abs_path) {
+                    let file = match fs::File::open(&exe_path) {
                         Ok(f) => f,
                         Err(e) => {
-                            debug!("failed to open file {} due to {:?}", abs_path, e);
+                            debug!("failed to open file {} due to {:?}", exe_path, e);
                             // Rather than returning here, we prefer to be able to profile some
                             // parts of the binary
                             continue;
                         }
                     };
 
-                    let object_file = match ObjectFile::new(&PathBuf::from(abs_path.clone())) {
+                    let object_file = match ObjectFile::new(&PathBuf::from(exe_path.clone())) {
                         Ok(f) => f,
                         Err(e) => {
-                            warn!("object_file {} failed with {}", abs_path, e);
+                            warn!("object_file {} failed with {}", exe_path, e);
                             // Rather than returning here, we prefer to be able to profile some
                             // parts of the binary
                             continue;
@@ -1706,7 +1786,7 @@ impl Profiler {
 
                     let build_id = object_file.build_id();
                     let Ok(executable_id) = object_file.id() else {
-                        info!("could not get id for object file: {}", abs_path);
+                        info!("could not get id for object file: {}", exe_path);
                         continue;
                     };
 
@@ -1737,7 +1817,7 @@ impl Profiler {
                         soft_delete: false,
                     });
 
-                    let abs_path = PathBuf::from(abs_path);
+                    let abs_path = PathBuf::from(exe_path);
 
                     // If the object file has debug info, add it to our store.
                     if object_file.has_debug_info() {
