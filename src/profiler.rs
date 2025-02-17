@@ -1376,11 +1376,14 @@ impl Profiler {
 
     fn add_unwind_information_for_executable(&mut self, executable_id: ExecutableId) {
         if self.native_unwind_state.is_known(executable_id) {
-            debug!("unwind info CACHED for executable id: {:x}", executable_id);
+            debug!(
+                "unwind info already loaded for executable id: {:x}",
+                executable_id
+            );
             return;
         } else {
             debug!(
-                "unwind info not found for executable id: {:x}",
+                "unwind info not loaded for executable id: {:x}",
                 executable_id
             );
         }
