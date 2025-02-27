@@ -11,7 +11,7 @@ prost = "0.13"
 anyhow = { workspace = true }
 
 [build-dependencies]
-prost-build = "0.13.4"
+prost-build = "0.13.5"
 
 [package.metadata.cargo-shear]
 ignored = ["prost"]
