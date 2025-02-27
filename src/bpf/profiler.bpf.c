@@ -671,6 +671,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
   }
 
   // We couldn't get the whole stacktrace.
+  LOG("Truncated stack, won't be sent");
   bump_unwind_error_truncated();
   return 0;
 }
