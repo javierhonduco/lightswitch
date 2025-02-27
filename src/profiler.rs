@@ -51,6 +51,7 @@ use crate::profile::*;
 use crate::unwind_info::log_unwind_info_sections;
 use crate::unwind_info::manager::UnwindInfoManager;
 use crate::unwind_info::types::CompactUnwindRow;
+use crate::util::executable_path;
 use crate::util::Architecture;
 use crate::util::{architecture, get_online_cpus, summarize_address_range};
 use lightswitch_object::{ExecutableId, ObjectFile};
@@ -1737,37 +1738,40 @@ impl Profiler {
             }
             match &map.pathname {
                 procfs::process::MMapPath::Path(path) => {
-                    let abs_path = format!("/proc/{}/root{}", pid, path.to_string_lossy());
+                    let Ok(exe_path) = executable_path(pid, path) else {
+                        // Can fail due to race-conditions
+                        continue;
+                    };
 
                     // We've seen debug info executables that get deleted in Rust applications.
-                    if abs_path.contains("(deleted)") {
+                    if exe_path.to_string_lossy().contains("(deleted)") {
                         continue;
                     }
 
                     // There are probably other cases, but we'll handle them as we bump into them.
-                    if abs_path.contains("(") {
+                    if exe_path.to_string_lossy().contains("(") {
                         warn!(
                             "absolute path ({}) contains '(', it might be special",
-                            abs_path
+                            exe_path.display()
                         );
                     }
 
                     // We want to open the file as quickly as possible to minimise the chances of races
                     // if the file is deleted.
-                    let file = match File::open(&abs_path) {
+                    let file = match File::open(&exe_path) {
                         Ok(f) => f,
                         Err(e) => {
-                            debug!("failed to open file {} due to {:?}", abs_path, e);
+                            debug!("failed to open file {} due to {:?}", exe_path.display(), e);
                             // Rather than returning here, we prefer to be able to profile some
                             // parts of the binary
                             continue;
                         }
                     };
 
-                    let object_file = match ObjectFile::new(&PathBuf::from(abs_path.clone())) {
+                    let object_file = match ObjectFile::new(&exe_path.clone()) {
                         Ok(f) => f,
                         Err(e) => {
-                            warn!("object_file {} failed with {}", abs_path, e);
+                            warn!("object_file {} failed with {}", exe_path.display(), e);
                             // Rather than returning here, we prefer to be able to profile some
                             // parts of the binary
                             continue;
@@ -1783,7 +1787,7 @@ impl Profiler {
 
                     let build_id = object_file.build_id();
                     let Ok(executable_id) = object_file.id() else {
-                        info!("could not get id for object file: {}", abs_path);
+                        info!("could not get id for object file: {}", exe_path.display());
                         continue;
                     };
 
@@ -1814,17 +1818,15 @@ impl Profiler {
                         soft_delete: false,
                     });
 
-                    let abs_path = PathBuf::from(abs_path);
-
                     // If the object file has debug info, add it to our store.
                     if object_file.has_debug_info() {
-                        let name = match abs_path.file_name() {
+                        let name = match exe_path.file_name() {
                             Some(os_name) => os_name.to_string_lossy().to_string(),
                             None => "error".to_string(),
                         };
                         let res = self
                             .debug_info_manager
-                            .add_if_not_present(&name, build_id, &abs_path);
+                            .add_if_not_present(&name, build_id, &exe_path);
                         match res {
                             Ok(_) => {
                                 debug!("debuginfo add_if_not_present succeded {:?}", res);
@@ -1839,7 +1841,7 @@ impl Profiler {
                     } else {
                         debug!(
                             "could not find debug information for {}",
-                            abs_path.display()
+                            exe_path.display()
                         );
                     }
 
@@ -1847,7 +1849,7 @@ impl Profiler {
                         Entry::Vacant(entry) => match object_file.elf_load_segments() {
                             Ok(elf_loads) => {
                                 entry.insert(ObjectFileInfo {
-                                    path: abs_path,
+                                    path: exe_path,
                                     file,
                                     elf_load_segments: elf_loads,
                                     is_dyn: object_file.is_dynamic(),
