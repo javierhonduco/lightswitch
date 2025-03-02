@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use tracing::warn;
 
 pub struct GlobalMetadataProvider {
-    pid_label_cache: LruCache</*pid*/ i32, Vec<MetadataLabel>>,
+    process_label_cache: LruCache<TaskKey, Vec<MetadataLabel>>,
     default_task_metadata: TaskMetadata,
     default_system_metadata: SystemMetadata,
     custom_system_metadata_providers: Vec<Box<dyn SystemMetadataProvider + Send>>,
@@ -30,7 +30,7 @@ impl GlobalMetadataProvider {
         task_metadata_providers: Vec<Box<dyn TaskMetadataProvider + Send>>,
     ) -> Self {
         Self {
-            pid_label_cache: LruCache::new(metadata_cache_size),
+            process_label_cache: LruCache::new(metadata_cache_size),
             default_task_metadata: TaskMetadata {},
             default_system_metadata: SystemMetadata {},
             custom_system_metadata_providers: system_metadata_providers,
@@ -95,11 +95,11 @@ impl GlobalMetadataProvider {
     }
 
     pub fn get_metadata(&mut self, task_key: TaskKey) -> Vec<MetadataLabel> {
-        if let Some(cached_labels) = self.pid_label_cache.get(&task_key.pid) {
+        if let Some(cached_labels) = self.process_label_cache.get(&task_key) {
             cached_labels.to_vec()
         } else {
             let labels = self.get_labels(task_key);
-            self.pid_label_cache.push(task_key.pid, labels.clone());
+            self.process_label_cache.push(task_key, labels.clone());
             labels
         }
     }

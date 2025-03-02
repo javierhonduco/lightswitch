@@ -7,6 +7,7 @@ use std::collections::hash_map::OccupiedEntry;
 use std::collections::HashMap;
 use std::env::temp_dir;
 use std::fs;
+use std::fs::File;
 use std::io::ErrorKind;
 use std::mem::size_of;
 use std::mem::ManuallyDrop;
@@ -39,6 +40,8 @@ use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
 use crate::debug_info::DebugInfoBackendNull;
 use crate::debug_info::DebugInfoManager;
+use crate::kernel::get_all_kernel_modules;
+use crate::kernel::KERNEL_PID;
 use crate::perf_events::setup_perf_event;
 use crate::process::{
     ExecutableMapping, ExecutableMappingType, ExecutableMappings, ObjectFileInfo, Pid, ProcessInfo,
@@ -198,7 +201,7 @@ fn fetch_vdso_info(
     cache_dir: &Path,
 ) -> Result<(PathBuf, ObjectFile)> {
     // Read raw memory
-    let file = fs::File::open(format!("/proc/{}/mem", pid))?;
+    let file = File::open(format!("/proc/{}/mem", pid))?;
     let size = end_addr - start_addr;
     let mut buf: Vec<u8> = vec![0; size as usize];
     file.read_exact_at(&mut buf, start_addr + offset)?;
@@ -553,7 +556,77 @@ impl Profiler {
         }
     }
 
-    pub fn run(&mut self) -> Duration {
+    pub fn add_kernel_modules(&mut self) {
+        let kaslr_offset = match lightswitch_object::kernel::kaslr_offset() {
+            Ok(kaslr_offset) => {
+                debug!("kaslr offset: 0x{:x}", kaslr_offset);
+                kaslr_offset
+            }
+            Err(e) => {
+                error!(
+                    "fetching the kaslr offset failed with {:?}, assuming it is 0",
+                    e
+                );
+                0
+            }
+        };
+
+        match get_all_kernel_modules() {
+            Ok(kernel_code_ranges) => {
+                self.procs.write().insert(
+                    KERNEL_PID,
+                    ProcessInfo {
+                        status: ProcessStatus::Running,
+                        mappings: ExecutableMappings(
+                            kernel_code_ranges
+                                .iter()
+                                .map(|e| {
+                                    debug!(
+                                        "kernel module {} 0x{:x} - 0x{:x}",
+                                        e.name, e.start, e.end
+                                    );
+                                    ExecutableMapping {
+                                        executable_id: e.build_id.id().expect("should never fail"),
+                                        build_id: Some(e.build_id.clone()),
+                                        kind: ExecutableMappingType::Kernel,
+                                        start_addr: e.start,
+                                        end_addr: e.end,
+                                        offset: kaslr_offset,
+                                        load_address: 0,
+                                        main_exec: false,
+                                        soft_delete: false,
+                                    }
+                                })
+                                .collect(),
+                        ),
+                    },
+                );
+
+                for kernel_code_range in kernel_code_ranges {
+                    self.object_files.write().insert(
+                        kernel_code_range
+                            .build_id
+                            .id()
+                            .expect("should never happen"),
+                        ObjectFileInfo {
+                            file: File::open("/").expect("should never fail"), // TODO: placeholder, but this will be removed soon
+                            path: PathBuf::from(kernel_code_range.name),
+                            elf_load_segments: vec![],
+                            is_dyn: false,
+                            references: 1,
+                            native_unwind_info_size: None,
+                            is_vdso: false,
+                        },
+                    );
+                }
+            }
+            Err(e) => {
+                error!("Fetching kernel code ranges failed with: {:?}", e);
+            }
+        }
+    }
+
+    pub fn run(mut self, collector: ThreadSafeCollector) -> Duration {
         // In this case, we only want to calculate maximum sampling buffer sizes based on the
         // number of "online" CPUs, not "possible" CPUs, which they sometimes differ.
         let num_cpus = get_online_cpus().expect("get online CPUs").len() as u64;
@@ -564,6 +637,7 @@ impl Profiler {
 
         self.setup_perf_events();
         self.set_bpf_map_info();
+        self.add_kernel_modules();
 
         self.tracers.attach().expect("attach tracers");
 
@@ -1093,7 +1167,17 @@ impl Profiler {
         let key = exec_mappings_key::new(
             pid as u32, 0x0, 32, // pid bits
         );
-        Self::add_bpf_mapping(bpf, &key, &mapping_t::default())?;
+        Self::add_bpf_mapping(
+            bpf,
+            &key,
+            &mapping_t {
+                // Special values to know if it's a process entry in case of failures
+                // while finding a mapping.
+                begin: 0xb40c,
+                end: 0xb40c,
+                ..mapping_t::default()
+            },
+        )?;
         Ok(())
     }
 
@@ -1366,11 +1450,14 @@ impl Profiler {
 
     fn add_unwind_information_for_executable(&mut self, executable_id: ExecutableId) {
         if self.native_unwind_state.is_known(executable_id) {
-            debug!("unwind info CACHED for executable id: {:x}", executable_id);
+            debug!(
+                "unwind info already loaded for executable id: {:x}",
+                executable_id
+            );
             return;
         } else {
             debug!(
-                "unwind info not found for executable id: {:x}",
+                "unwind info not loaded for executable id: {:x}",
                 executable_id
             );
         }
@@ -1667,7 +1754,7 @@ impl Profiler {
 
                     // We want to open the file as quickly as possible to minimise the chances of races
                     // if the file is deleted.
-                    let file = match fs::File::open(&abs_path) {
+                    let file = match File::open(&abs_path) {
                         Ok(f) => f,
                         Err(e) => {
                             debug!("failed to open file {} due to {:?}", abs_path, e);
@@ -1808,7 +1895,7 @@ impl Profiler {
                             debug!("vDSO object file id failed");
                             continue;
                         };
-                        let Ok(file) = std::fs::File::open(&vdso_path) else {
+                        let Ok(file) = File::open(&vdso_path) else {
                             debug!("vDSO object file open failed");
                             continue;
                         };

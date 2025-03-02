@@ -6,6 +6,7 @@ use lightswitch_object::ExecutableId;
 use tracing::error;
 
 use crate::bpf::profiler_bindings::native_stack_t;
+use crate::kernel::KERNEL_PID;
 use crate::process::ObjectFileInfo;
 use crate::process::Pid;
 use crate::process::ProcessInfo;
@@ -30,10 +31,6 @@ impl RawAggregatedSample {
         procs: &HashMap<Pid, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) -> Result<AggregatedSample, anyhow::Error> {
-        let Some(info) = procs.get(&self.pid) else {
-            return Err(anyhow!("process not found"));
-        };
-
         let mut processed_sample = AggregatedSample {
             pid: self.pid,
             tid: self.tid,
@@ -43,6 +40,10 @@ impl RawAggregatedSample {
         };
 
         if let Some(native_stack) = self.ustack {
+            let Some(info) = procs.get(&self.pid) else {
+                return Err(anyhow!("process not found"));
+            };
+
             for (i, virtual_address) in native_stack.addresses.into_iter().enumerate() {
                 if native_stack.len <= i.try_into().unwrap() {
                     break;
@@ -53,11 +54,7 @@ impl RawAggregatedSample {
                 };
 
                 let file_offset = match objs.get(&mapping.executable_id) {
-                    Some(obj) => {
-                        // We need the normalized address to symbolize on-disk object files
-                        // and might need the absolute addresses for JIT
-                        obj.normalized_address(virtual_address, &mapping)
-                    }
+                    Some(obj) => obj.normalized_address(virtual_address, &mapping),
                     None => {
                         error!("executable with id {} not found", mapping.executable_id);
                         None
@@ -72,16 +69,33 @@ impl RawAggregatedSample {
             }
         }
 
-        // The kernel stacks are not normalized yet.
         if let Some(kernel_stack) = self.kstack {
+            let Some(info) = procs.get(&KERNEL_PID) else {
+                return Err(anyhow!("kernel process not found"));
+            };
+
             for (i, virtual_address) in kernel_stack.addresses.into_iter().enumerate() {
                 if kernel_stack.len <= i.try_into().unwrap() {
                     break;
                 }
 
+                let Some(mapping) = info.mappings.for_address(virtual_address) else {
+                    continue;
+                };
+
+                let file_offset = match objs.get(&mapping.executable_id) {
+                    Some(obj) => obj.normalized_address(virtual_address, &mapping),
+                    None => {
+                        error!("executable with id {} not found", mapping.executable_id);
+                        None
+                    }
+                };
+
+                // todo: revisit this as the file offset calculation won't work
+                // for kaslr
                 processed_sample.kstack.push(Frame {
                     virtual_address,
-                    file_offset: None,
+                    file_offset,
                     symbolization_result: None,
                 });
             }

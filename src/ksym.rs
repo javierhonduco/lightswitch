@@ -47,9 +47,12 @@ impl<R: Read> Iterator for KsymIter<R> {
                     if let (Some(addr_str), Some(symbol_type), Some(symbol_name)) =
                         (iter.next(), iter.next(), iter.next())
                     {
-                        // This list is probably not complete
-                        // https://github.com/torvalds/linux/blob/3d7cb6b0/tools/lib/symbol/kallsyms.c#LL17C1-L18C1
-                        if symbol_type == "T" || symbol_type == "W" {
+                        // See `man nm` for the meaning of the symbol types.
+                        if symbol_type == "T"
+                            || symbol_type == "t"
+                            || symbol_type == "W"
+                            || symbol_type == "D"
+                        {
                             if let Ok(start_addr) = u64::from_str_radix(addr_str, 16) {
                                 return Some(Ksym {
                                     start_addr,
@@ -92,7 +95,9 @@ ffffffffa2000270 T __pfx_sev_verify_cbit
 ffffffffa2000280 T sev_verify_cbit
 ffffffffa20002e0 T start_cpu0
 ffffffffa20002ec T vc_boot_ghcb
-ffffffffa2000360 T __pfx___startup_64",
+ffffffffa2000360 T __pfx___startup_64
+ffffffffa20002ed W vc_boot_ghcb
+ffffffffa2000f00 D _etext",
         );
 
         let mut iter = KsymIter::new(file);
@@ -123,6 +128,13 @@ ffffffffa2000360 T __pfx___startup_64",
                 symbol_name: "secondary_startup_64".to_string()
             },
             iter.next().unwrap()
+        );
+        assert_eq!(
+            Ksym {
+                start_addr: 0xffffffffa2000f00,
+                symbol_name: "_etext".to_string()
+            },
+            iter.last().unwrap()
         );
     }
 }

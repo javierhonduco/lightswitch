@@ -220,13 +220,26 @@ static __always_inline void send_event(Event *event, struct bpf_perf_event_data 
   bpf_map_update_elem(&rate_limits, event, &rate_limited, BPF_ANY);
 }
 
+// The return address points as the the instruction at which execution
+// will resume after returning from a function call, we need to get the
+// previous instruction's address.
+static __always_inline u64 previous_instruction_addr(u64 addr) {
+#ifdef __TARGET_ARCH_x86
+  // On x86 it's not possible to find the previous instruction address
+  // without fully disassembling the whole executable from the start.
+  // By substracting 1 byte, we make sure to fall within the previous
+  // instruction.
+  return addr - 1;
+#elif __TARGET_ARCH_arm64
+  return addr - 4;
+#endif
+}
+
 #ifdef __TARGET_ARCH_x86
 static __always_inline u64 remove_pac(u64 addr) {
   return addr;
 }
-#endif
-
-#ifdef __TARGET_ARCH_arm64
+#elif __TARGET_ARCH_arm64
 // Arm64 supports pointer authentication, we need to remove the signatured during
 // unwinding.
 static __always_inline u64 remove_pac(u64 addr) {
@@ -615,7 +628,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     LOG("\tprevious ip: %llx (@ %llx)", previous_rip, previous_rip_addr);
     LOG("\tprevious sp: %llx", previous_rsp);
     // Set rsp and rip registers
-    unwind_state->ip = remove_pac(previous_rip);
+    unwind_state->ip = previous_instruction_addr(remove_pac(previous_rip));
     unwind_state->sp = previous_rsp;
     // Set rbp
     LOG("\tprevious bp: %llx", previous_rbp);
@@ -658,6 +671,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
   }
 
   // We couldn't get the whole stacktrace.
+  LOG("Truncated stack, won't be sent");
   bump_unwind_error_truncated();
   return 0;
 }
