@@ -1,6 +1,6 @@
 [package]
 name = "lightswitch-proto"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Protocol buffers wrappers for use in profiling tools"
 license = "MIT"

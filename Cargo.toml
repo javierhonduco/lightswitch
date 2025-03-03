@@ -1,6 +1,6 @@
 [package]
 name = "lightswitch"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "CPU profiler as a library for Linux suitable for on-demand and continuous profiling"
 license = "MIT"
@@ -47,10 +47,10 @@ ctrlc = "3.4.5"
 crossbeam-channel = "0.5.14"
 libbpf-sys = "1.5.0"
 itertools = "0.14.0"
-lightswitch-metadata = { path = "lightswitch-metadata", version = "0.1.1" }
+lightswitch-metadata = { path = "lightswitch-metadata", version = "0.2.0" }
 lightswitch-proto = { path = "lightswitch-proto", version = "0.1.0" }
 lightswitch-capabilities = { path = "lightswitch-capabilities", version = "0.1.0" }
-lightswitch-object = { path = "lightswitch-object", version = "0.2.0" }
+lightswitch-object = { path = "lightswitch-object", version = "0.2.1" }
 memmap2 = { workspace = true }
 anyhow = { workspace = true }
 object = { workspace = true }
