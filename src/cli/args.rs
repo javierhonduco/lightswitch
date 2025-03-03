@@ -1,4 +1,5 @@
 use clap::Parser;
+use clap::Subcommand;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -50,25 +51,18 @@ pub(crate) enum DebugInfoBackend {
     Remote,
 }
 
+#[derive(Subcommand, Debug)]
+pub(crate) enum Commands {
+    ObjectInfo { path: String },
+    ShowUnwind { path: String },
+    SystemInfo,
+}
+
 #[derive(Parser, Debug)]
 pub(crate) struct CliArgs {
     /// Specific PIDs to profile
     #[arg(long)]
     pub(crate) pids: Vec<i32>,
-    /// Specific TIDs to profile (these can be outside the PIDs selected above)
-    #[arg(long)]
-    pub(crate) tids: Vec<i32>,
-    /// Show unwind info for given binary
-    #[arg(long, value_name = "PATH_TO_BINARY",
-        conflicts_with_all = ["pids", "tids", "show_info", "duration", "sample_freq", "profile_name"]
-    )]
-    pub(crate) show_unwind_info: Option<String>,
-    /// Show build ID for given binary
-    #[arg(long, value_name = "PATH_TO_BINARY",
-        conflicts_with_all = ["pids", "tids", "duration",
-            "sample_freq", "profile_name"]
-    )]
-    pub(crate) show_info: Option<String>,
     /// How long this agent will run in seconds
     #[arg(short='D', long, default_value = ProfilerConfig::default().duration.as_secs().to_string(),
         value_parser = parse_duration)]
@@ -158,4 +152,6 @@ pub(crate) struct CliArgs {
     pub(crate) unsafe_start: bool,
     #[arg(long, help = "force perf buffers even if ring buffers can be used")]
     pub(crate) force_perf_buffer: bool,
+    #[command(subcommand)]
+    pub(crate) command: Option<Commands>,
 }
