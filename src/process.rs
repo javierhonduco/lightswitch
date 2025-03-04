@@ -22,6 +22,7 @@ pub enum ExecutableMappingType {
     Anonymous,
     /// Special mapping to optimise certain system calls.
     Vdso,
+    Kernel,
 }
 
 #[derive(Clone)]
@@ -46,6 +47,7 @@ pub struct ExecutableMapping {
     pub kind: ExecutableMappingType,
     pub start_addr: u64,
     pub end_addr: u64,
+    // kaslr info etc etc
     pub offset: u64,
     pub load_address: u64,
     pub main_exec: bool,
@@ -166,6 +168,10 @@ impl ObjectFileInfo {
         virtual_address: u64,
         mapping: &ExecutableMapping,
     ) -> Option<u64> {
+        if mapping.kind == ExecutableMappingType::Kernel {
+            return Some(virtual_address - mapping.offset);
+        }
+
         let offset = virtual_address - mapping.start_addr + mapping.offset;
 
         for segment in &self.elf_load_segments {

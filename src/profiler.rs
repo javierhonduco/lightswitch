@@ -1,10 +1,13 @@
+use libbpf_rs::MapImpl;
 use libbpf_rs::OpenObject;
+use libbpf_rs::RingBufferBuilder;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
 use std::collections::hash_map::OccupiedEntry;
 use std::collections::HashMap;
 use std::env::temp_dir;
 use std::fs;
+use std::fs::File;
 use std::io::ErrorKind;
 use std::mem::size_of;
 use std::mem::ManuallyDrop;
@@ -32,10 +35,13 @@ use tracing::{debug, error, info, span, warn, Level};
 use crate::bpf::profiler_bindings::*;
 use crate::bpf::profiler_skel::{OpenProfilerSkel, ProfilerSkel, ProfilerSkelBuilder};
 use crate::bpf::tracers_bindings::*;
+use crate::bpf::tracers_skel::OpenTracersSkel;
 use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
 use crate::debug_info::DebugInfoBackendNull;
 use crate::debug_info::DebugInfoManager;
+use crate::kernel::get_all_kernel_modules;
+use crate::kernel::KERNEL_PID;
 use crate::perf_events::setup_perf_event;
 use crate::process::{
     ExecutableMapping, ExecutableMappingType, ExecutableMappings, ObjectFileInfo, Pid, ProcessInfo,
@@ -125,6 +131,7 @@ pub struct Profiler {
     /// for the profiler.
     max_native_unwind_info_size_mb: i32,
     unwind_info_manager: UnwindInfoManager,
+    use_ring_buffers: bool,
 }
 
 pub struct ProfilerConfig {
@@ -143,6 +150,7 @@ pub struct ProfilerConfig {
     pub native_unwind_info_bucket_sizes: Vec<u32>,
     pub debug_info_manager: Box<dyn DebugInfoManager>,
     pub max_native_unwind_info_size_mb: i32,
+    pub use_ring_buffers: bool,
 }
 
 impl Default for ProfilerConfig {
@@ -166,6 +174,7 @@ impl Default for ProfilerConfig {
             ],
             debug_info_manager: Box::new(DebugInfoBackendNull {}),
             max_native_unwind_info_size_mb: i32::MAX,
+            use_ring_buffers: true,
         }
     }
 }
@@ -197,7 +206,7 @@ fn fetch_vdso_info(
     cache_dir: &Path,
 ) -> Result<(PathBuf, ObjectFile)> {
     // Read raw memory
-    let file = fs::File::open(format!("/proc/{}/mem", pid))?;
+    let file = File::open(format!("/proc/{}/mem", pid))?;
     let size = end_addr - start_addr;
     let mut buf: Vec<u8> = vec![0; size as usize];
     file.read_exact_at(&mut buf, start_addr + offset)?;
@@ -276,6 +285,51 @@ impl Profiler {
             .lightswitch_config
             .verbose_logging
             .write(profiler_config.bpf_logging);
+        open_skel
+            .maps
+            .rodata_data
+            .lightswitch_config
+            .use_ring_buffers
+            .write(profiler_config.use_ring_buffers);
+
+        if profiler_config.use_ring_buffers {
+            // Even set to zero it will create as many entries as CPUs.
+            open_skel
+                .maps
+                .events
+                .set_max_entries(0)
+                .expect("set perf buffer entries to zero as it's unused");
+        } else {
+            // Seems like ring buffers need to have size of at least 1...
+            // It will use at least a page.
+            open_skel
+                .maps
+                .events_rb
+                .set_max_entries(1)
+                .expect("set ring buffer entries to one as it's unused");
+        }
+    }
+
+    pub fn set_tracers_map_sizes(
+        open_skel: &mut OpenTracersSkel,
+        profiler_config: &ProfilerConfig,
+    ) {
+        if profiler_config.use_ring_buffers {
+            // Even set to zero it will create as many entries as CPUs.
+            open_skel
+                .maps
+                .tracer_events
+                .set_max_entries(0)
+                .expect("set perf buffer entries to zero as it's unused");
+        } else {
+            // Seems like ring buffers need to have size of at least 1...
+            // It will use at least a page.
+            open_skel
+                .maps
+                .tracer_events_rb
+                .set_max_entries(1)
+                .expect("set ring buffer entries to one as it's unused");
+        }
     }
 
     pub fn show_actual_profiler_map_sizes(bpf: &ProfilerSkel) {
@@ -368,6 +422,7 @@ impl Profiler {
             .exec_mappings
             .reuse_fd(exec_mappings_fd)
             .expect("reuse exec_mappings");
+        Self::set_tracers_map_sizes(&mut open_tracers, &profiler_config);
 
         let tracers = ManuallyDrop::new(open_tracers.load().expect("load skel"));
         // SAFETY: tracers never outlives tracers_open_object
@@ -421,6 +476,7 @@ impl Profiler {
             debug_info_manager: profiler_config.debug_info_manager,
             max_native_unwind_info_size_mb: profiler_config.max_native_unwind_info_size_mb,
             unwind_info_manager: UnwindInfoManager::new(&unwind_cache_dir, None),
+            use_ring_buffers: profiler_config.use_ring_buffers,
         }
     }
 
@@ -435,6 +491,141 @@ impl Profiler {
         self.profile_send.send(profile).expect("handle send");
     }
 
+    /// Starts a thread that polls the given ring or perf buffer, depending on the
+    /// configuration.
+    ///
+    /// Note: [`lost_callback`] is only used for perf buffers as ring buffers only report
+    /// errors on the sender side.
+    pub fn start_poll_thread<Call: Fn(&[u8]) + 'static, Lost: FnMut(i32, u64) + 'static>(
+        &self,
+        name: &'static str,
+        ring_buf_map: &MapImpl,
+        perf_buf_map: &MapImpl,
+        callback: Call,
+        lost_callback: Lost,
+    ) {
+        if self.use_ring_buffers {
+            let mut ring_buf = RingBufferBuilder::new();
+            ring_buf
+                .add(ring_buf_map, move |data| {
+                    callback(data);
+                    0
+                })
+                .expect("add to ring buffer");
+            let ring_buf = ring_buf.build().expect("build ring buffer");
+            let thread_name = format!("ring-poll-{}", name);
+            let _poll_thread = thread::Builder::new()
+                .name(thread_name)
+                .spawn(move || loop {
+                    match ring_buf.poll(Duration::from_millis(100)) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            if err.kind() != libbpf_rs::ErrorKind::Interrupted {
+                                error!("polling {} ring buffer failed with {:?}", name, err);
+                                break;
+                            }
+                        }
+                    }
+                })
+                .expect("spawn poll thread");
+        } else {
+            let perf_buffer = PerfBufferBuilder::new(perf_buf_map)
+                .pages(self.perf_buffer_bytes / page_size::get())
+                .sample_cb(move |_cpu: i32, data: &[u8]| {
+                    callback(data);
+                })
+                .lost_cb(lost_callback)
+                .build()
+                .expect("set up perf buffer");
+
+            let thread_name = format!("perf-poll-{}", name);
+            let _poll_thread = thread::Builder::new()
+                .name(thread_name)
+                .spawn(move || loop {
+                    match perf_buffer.poll(Duration::from_millis(100)) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            if err.kind() != libbpf_rs::ErrorKind::Interrupted {
+                                error!("polling {} perf buffer failed with {:?}", name, err);
+                                break;
+                            }
+                        }
+                    }
+                })
+                .expect("spawn poll thread");
+        }
+    }
+
+    pub fn add_kernel_modules(&mut self) {
+        let kaslr_offset = match lightswitch_object::kernel::kaslr_offset() {
+            Ok(kaslr_offset) => {
+                debug!("kaslr offset: 0x{:x}", kaslr_offset);
+                kaslr_offset
+            }
+            Err(e) => {
+                error!(
+                    "fetching the kaslr offset failed with {:?}, assuming it is 0",
+                    e
+                );
+                0
+            }
+        };
+
+        match get_all_kernel_modules() {
+            Ok(kernel_code_ranges) => {
+                self.procs.write().insert(
+                    KERNEL_PID,
+                    ProcessInfo {
+                        status: ProcessStatus::Running,
+                        mappings: ExecutableMappings(
+                            kernel_code_ranges
+                                .iter()
+                                .map(|e| {
+                                    debug!(
+                                        "kernel module {} 0x{:x} - 0x{:x}",
+                                        e.name, e.start, e.end
+                                    );
+                                    ExecutableMapping {
+                                        executable_id: e.build_id.id().expect("should never fail"),
+                                        build_id: Some(e.build_id.clone()),
+                                        kind: ExecutableMappingType::Kernel,
+                                        start_addr: e.start,
+                                        end_addr: e.end,
+                                        offset: kaslr_offset,
+                                        load_address: 0,
+                                        main_exec: false,
+                                        soft_delete: false,
+                                    }
+                                })
+                                .collect(),
+                        ),
+                    },
+                );
+
+                for kernel_code_range in kernel_code_ranges {
+                    self.object_files.write().insert(
+                        kernel_code_range
+                            .build_id
+                            .id()
+                            .expect("should never happen"),
+                        ObjectFileInfo {
+                            file: File::open("/").expect("should never fail"), // TODO: placeholder, but this will be removed soon
+                            path: PathBuf::from(kernel_code_range.name),
+                            elf_load_segments: vec![],
+                            is_dyn: false,
+                            references: 1,
+                            native_unwind_info_size: None,
+                            is_vdso: false,
+                        },
+                    );
+                }
+            }
+            Err(e) => {
+                error!("Fetching kernel code ranges failed with: {:?}", e);
+            }
+        }
+    }
+
     pub fn run(mut self, collector: ThreadSafeCollector) -> Duration {
         // In this case, we only want to calculate maximum sampling buffer sizes based on the
         // number of "online" CPUs, not "possible" CPUs, which they sometimes differ.
@@ -446,60 +637,41 @@ impl Profiler {
 
         self.setup_perf_events();
         self.set_bpf_map_info();
+        self.add_kernel_modules();
 
         self.tracers.attach().expect("attach tracers");
 
-        // Unwinder events.
         let chan_send = self.new_proc_chan_send.clone();
-        let perf_buffer = PerfBufferBuilder::new(&self.native_unwinder.maps.events)
-            .pages(self.perf_buffer_bytes / page_size::get())
-            .sample_cb(move |_cpu: i32, data: &[u8]| {
-                Self::handle_event(&chan_send, data);
-            })
-            .lost_cb(Self::handle_lost_events)
-            .build()
-            .expect("set up perf buffer for unwinder events");
+        self.start_poll_thread(
+            "unwinder_events",
+            &self.native_unwinder.maps.events_rb,
+            &self.native_unwinder.maps.events,
+            move |data| Self::handle_event(&chan_send, data),
+            Self::handle_lost_events,
+        );
 
-        let _unwinder_poll_thread = thread::spawn(move || loop {
-            match perf_buffer.poll(Duration::from_millis(100)) {
-                Ok(_) => {}
-                Err(err) => {
-                    if err.kind() != libbpf_rs::ErrorKind::Interrupted {
-                        error!("polling events perf buffer failed with {:?}", err);
-                        break;
-                    }
-                }
-            }
-        });
-
-        // Tracer events.
         let tracers_send = self.tracers_chan_send.clone();
-        let tracers_events_perf_buffer = PerfBufferBuilder::new(&self.tracers.maps.tracer_events)
-            .pages(self.perf_buffer_bytes / page_size::get())
-            .sample_cb(move |_cpu: i32, data: &[u8]| {
+        self.start_poll_thread(
+            "tracer_events",
+            &self.tracers.maps.tracer_events_rb,
+            &self.tracers.maps.tracer_events,
+            move |data: &[u8]| {
                 let mut event = tracer_event_t::default();
-                plain::copy_from_bytes(&mut event, data).expect("serde tracers event");
-                tracers_send
-                    .send(TracerEvent::from(event))
-                    .expect("handle event send");
-            })
-            .lost_cb(|_cpu, lost_count| {
-                warn!("lost {} events from the tracers", lost_count);
-            })
-            .build()
-            .expect("set up perf buffer for tracer events");
-
-        let _tracers_poll_thread = thread::spawn(move || loop {
-            match tracers_events_perf_buffer.poll(Duration::from_millis(100)) {
-                Ok(_) => {}
-                Err(err) => {
-                    if err.kind() != libbpf_rs::ErrorKind::Interrupted {
-                        error!("polling tracers perf buffer failed with {:?}", err);
-                        break;
+                match plain::copy_from_bytes(&mut event, data) {
+                    Ok(()) => {
+                        tracers_send
+                            .send(TracerEvent::from(event))
+                            .expect("handle event send");
+                    }
+                    Err(e) => {
+                        error!("copying data from tracer_events failed with {:?}", e);
                     }
                 }
-            }
-        });
+            },
+            |_cpu, lost_count| {
+                warn!("lost {} events from the tracers", lost_count);
+            },
+        );
 
         let profile_receive = self.profile_receive.clone();
         let procs = self.procs.clone();
@@ -995,7 +1167,17 @@ impl Profiler {
         let key = exec_mappings_key::new(
             pid as u32, 0x0, 32, // pid bits
         );
-        Self::add_bpf_mapping(bpf, &key, &mapping_t::default())?;
+        Self::add_bpf_mapping(
+            bpf,
+            &key,
+            &mapping_t {
+                // Special values to know if it's a process entry in case of failures
+                // while finding a mapping.
+                begin: 0xb40c,
+                end: 0xb40c,
+                ..mapping_t::default()
+            },
+        )?;
         Ok(())
     }
 
@@ -1268,11 +1450,14 @@ impl Profiler {
 
     fn add_unwind_information_for_executable(&mut self, executable_id: ExecutableId) {
         if self.native_unwind_state.is_known(executable_id) {
-            debug!("unwind info CACHED for executable id: {:x}", executable_id);
+            debug!(
+                "unwind info already loaded for executable id: {:x}",
+                executable_id
+            );
             return;
         } else {
             debug!(
-                "unwind info not found for executable id: {:x}",
+                "unwind info not loaded for executable id: {:x}",
                 executable_id
             );
         }
@@ -1569,7 +1754,7 @@ impl Profiler {
 
                     // We want to open the file as quickly as possible to minimise the chances of races
                     // if the file is deleted.
-                    let file = match fs::File::open(&abs_path) {
+                    let file = match File::open(&abs_path) {
                         Ok(f) => f,
                         Err(e) => {
                             debug!("failed to open file {} due to {:?}", abs_path, e);
@@ -1710,7 +1895,7 @@ impl Profiler {
                             debug!("vDSO object file id failed");
                             continue;
                         };
-                        let Ok(file) = std::fs::File::open(&vdso_path) else {
+                        let Ok(file) = File::open(&vdso_path) else {
                             debug!("vDSO object file open failed");
                             continue;
                         };

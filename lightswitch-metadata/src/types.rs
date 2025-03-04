@@ -30,7 +30,7 @@ impl MetadataLabel {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub struct TaskKey {
     pub pid: i32,
     pub tid: i32,

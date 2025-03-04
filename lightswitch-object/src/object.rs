@@ -6,7 +6,6 @@ use anyhow::{anyhow, Result};
 use memmap2::Mmap;
 use ring::digest::{Context, Digest, SHA256};
 
-use crate::BuildId;
 use object::elf::{FileHeader32, FileHeader64, PT_LOAD};
 use object::read::elf::FileHeader;
 use object::read::elf::ProgramHeader;
@@ -16,13 +15,7 @@ use object::Object;
 use object::ObjectKind;
 use object::ObjectSection;
 
-/// Compact identifier for executable files.
-///
-/// Compact identifier for executable files derived from the first 8 bytes
-/// of the hash of the code stored in the .text ELF segment. By using this
-/// smaller type for object files less memory is used and also comparison,
-/// and other operations are cheaper.
-pub type ExecutableId = u64;
+use crate::{BuildId, ExecutableId};
 
 /// Elf load segments used during address normalization to find the segment
 /// for what an code address falls into.
@@ -65,7 +58,7 @@ impl ObjectFile {
 
     /// Returns an identifier for the executable using the first 8 bytes of the build id.
     pub fn id(&self) -> Result<ExecutableId> {
-        Ok(u64::from_ne_bytes(self.build_id.data[..8].try_into()?))
+        self.build_id.id()
     }
 
     /// Returns the executable build ID.

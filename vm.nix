@@ -87,32 +87,38 @@ let
       [[target]]
       name = "Fedora 5.15"
       kernel = "${kernel_5_15}/bzImage"
-      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none"
+      arch = "x86_64"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --cache-dir-base=/tmp"
 
       [[target]]
       name = "Fedora 6.0"
       kernel = "${kernel_6_0}/bzImage"
-      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none"
+      arch = "x86_64"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --cache-dir-base=/tmp"
 
       [[target]]
       name = "Fedora 6.2"
       kernel = "${kernel_6_2}/bzImage"
-      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none"
+      arch = "x86_64"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --cache-dir-base=/tmp"
 
       [[target]]
       name = "Fedora 6.6"
       kernel = "${kernel_6_6}/bzImage"
-      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none"
+      arch = "x86_64"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --cache-dir-base=/tmp"
 
       [[target]]
       name = "Upstream 6.8.7"
       kernel = "${kernel_6_8_7}/bzImage"
-      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none"
+      arch = "x86_64"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --cache-dir-base=/tmp"
 
       [[target]]
       name = "Upstream v6.9-rc5"
       kernel = "${kernel_6_9_rc5}/bzImage"
-      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none"
+      arch = "x86_64"
+      command = "${lightswitch}/bin/lightswitch --duration 0 --sender=none --cache-dir-base=/tmp"
     '';
     nativeBuildInputs = [ ];
     installPhase = ''
