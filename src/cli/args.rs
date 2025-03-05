@@ -146,6 +146,16 @@ pub(crate) struct CliArgs {
     pub(crate) enable_deadlock_detector: bool,
     #[arg(long, default_value = ProfilerConfig::default().cache_dir_base.into_os_string())]
     pub(crate) cache_dir_base: PathBuf,
+    #[arg(
+        long,
+        help = "Override the default path to the killswitch file (/tmp/lighswitch.killswitch) which prevents the profiler from starting"
+    )]
+    pub(crate) killswitch_path_override: Option<String>,
+    #[arg(
+        long,
+        help = "Force the profiler to start even if the system killswitch is enabled"
+    )]
+    pub(crate) unsafe_start: bool,
     #[arg(long, help = "force perf buffers even if ring buffers can be used")]
     pub(crate) force_perf_buffer: bool,
 }
