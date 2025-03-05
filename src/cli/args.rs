@@ -148,7 +148,7 @@ pub(crate) struct CliArgs {
     pub(crate) cache_dir_base: PathBuf,
     #[arg(
         long,
-        help = "Override the default path to the killswitch file (/tmp/lighswitch.killswitch) which prevents the profiler from starting"
+        help = "Override the default path to the killswitch file (/tmp/lighswitch/killswitch) which prevents the profiler from starting"
     )]
     pub(crate) killswitch_path_override: Option<String>,
     #[arg(
