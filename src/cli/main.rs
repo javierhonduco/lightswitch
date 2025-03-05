@@ -192,13 +192,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Start a thread to stop the profiler if killswitch enabled
     let killswitch_ticker = tick(KILLSWITCH_POLL_INTERVAL);
-    let profiler_stop_signal_sender = stop_signal_sender.clone();
     thread::spawn(move || loop {
         select! {
           recv(killswitch_ticker) -> _  => {
               if killswitch.enabled() {
                   info!("killswitch detected. Sending stop signal to profiler.");
-                  let _ = profiler_stop_signal_sender.send(());
+                  let _ = stop_signal_sender.send(());
                   break;
               }
           },
