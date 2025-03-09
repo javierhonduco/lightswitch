@@ -27,9 +27,25 @@ impl KillSwitch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::{create_dir_all, remove_file, File};
 
     #[test]
     fn test_killswitch_enabled() {
+        // Given
+        create_dir_all("/tmp/lightswitch").unwrap();
+        let killswitch = KillSwitch::new(None, /*ignore_killswitch*/ false);
+        assert!(!killswitch.enabled());
+
+        // When
+        File::create(KILLSWITCH_FILE_PATH).unwrap();
+
+        // Then
+        assert!(killswitch.enabled());
+        remove_file(KILLSWITCH_FILE_PATH).unwrap();
+    }
+
+    #[test]
+    fn test_killswitch_path_override() {
         // Given
         let temp_killswitch_file = tempfile::NamedTempFile::new().unwrap();
         let temp_killswitch_path = temp_killswitch_file.path();
@@ -40,6 +56,7 @@ mod tests {
 
         // When/Then
         assert!(killswitch.enabled());
+        remove_file(temp_killswitch_path).unwrap();
     }
 
     #[test]
@@ -54,5 +71,6 @@ mod tests {
 
         // When/Then
         assert!(!killswitch.enabled());
+        remove_file(temp_killswitch_path).unwrap();
     }
 }
