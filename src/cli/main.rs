@@ -13,7 +13,6 @@ use crossbeam_channel::bounded;
 use inferno::flamegraph;
 use lightswitch::collector::{AggregatorCollector, Collector, NullCollector, StreamingCollector};
 use lightswitch::debug_info::DebugInfoManager;
-use lightswitch_metadata::metadata_provider::GlobalMetadataProvider;
 use nix::unistd::Uid;
 use prost::Message;
 use tracing::{debug, error, info, Level};
@@ -21,7 +20,9 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
 use lightswitch_capabilities::system_info::SystemInfo;
-use lightswitch_metadata::metadata_provider::ThreadSafeGlobalMetadataProvider;
+use lightswitch_metadata::metadata_provider::{
+    GlobalMetadataProvider, ThreadSafeGlobalMetadataProvider,
+};
 
 use lightswitch::debug_info::{
     DebugInfoBackendFilesystem, DebugInfoBackendNull, DebugInfoBackendRemote,
@@ -167,6 +168,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         debug_info_manager,
         max_native_unwind_info_size_mb: args.max_native_unwind_info_size_mb,
         use_ring_buffers,
+        // metadata_provider: metadata_provider.clone(),
         ..Default::default()
     };
 
@@ -178,7 +180,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     })
     .expect("Error setting Ctrl-C handler");
 
-    let mut p: Profiler = Profiler::new(profiler_config, stop_signal_receive);
+    let mut p: Profiler = Profiler::new(
+        profiler_config,
+        stop_signal_receive,
+        metadata_provider.clone(),
+    );
     p.profile_pids(args.pids);
     let profile_duration = p.run(collector.clone());
 

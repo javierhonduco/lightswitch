@@ -1,6 +1,7 @@
 use libbpf_rs::MapImpl;
 use libbpf_rs::OpenObject;
 use libbpf_rs::RingBufferBuilder;
+use lightswitch_metadata::types::TaskKey;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
 use std::collections::hash_map::OccupiedEntry;
@@ -20,7 +21,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
-use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
+use crossbeam_channel::{select, tick, unbounded, Receiver, Sender};
 use itertools::Itertools;
 use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
@@ -43,6 +44,7 @@ use crate::debug_info::DebugInfoManager;
 use crate::kernel::get_all_kernel_modules;
 use crate::kernel::KERNEL_PID;
 use crate::perf_events::setup_perf_event;
+use crate::process::Tid;
 use crate::process::{
     ExecutableMapping, ExecutableMappingType, ExecutableMappings, ObjectFileInfo, Pid, ProcessInfo,
     ProcessStatus,
@@ -54,6 +56,7 @@ use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::executable_path;
 use crate::util::Architecture;
 use crate::util::{architecture, get_online_cpus, summarize_address_range};
+use lightswitch_metadata::metadata_provider::ThreadSafeGlobalMetadataProvider;
 use lightswitch_object::{ExecutableId, ObjectFile};
 
 pub enum TracerEvent {
@@ -133,6 +136,7 @@ pub struct Profiler {
     max_native_unwind_info_size_mb: i32,
     unwind_info_manager: UnwindInfoManager,
     use_ring_buffers: bool,
+    metadata_provider: ThreadSafeGlobalMetadataProvider,
 }
 
 pub struct ProfilerConfig {
@@ -177,14 +181,6 @@ impl Default for ProfilerConfig {
             max_native_unwind_info_size_mb: i32::MAX,
             use_ring_buffers: true,
         }
-    }
-}
-
-impl Default for Profiler {
-    fn default() -> Self {
-        let (_stop_signal_send, stop_signal_receive) = bounded(1);
-
-        Self::new(ProfilerConfig::default(), stop_signal_receive)
     }
 }
 
@@ -349,7 +345,11 @@ impl Profiler {
         );
     }
 
-    pub fn new(profiler_config: ProfilerConfig, stop_signal_receive: Receiver<()>) -> Self {
+    pub fn new(
+        profiler_config: ProfilerConfig,
+        stop_signal_receive: Receiver<()>,
+        metadata_provider: ThreadSafeGlobalMetadataProvider,
+    ) -> Self {
         debug!(
             "Base cache directory {}",
             profiler_config.cache_dir_base.display()
@@ -478,13 +478,14 @@ impl Profiler {
             max_native_unwind_info_size_mb: profiler_config.max_native_unwind_info_size_mb,
             unwind_info_manager: UnwindInfoManager::new(&unwind_cache_dir, None),
             use_ring_buffers: profiler_config.use_ring_buffers,
+            metadata_provider,
         }
     }
 
     pub fn profile_pids(&mut self, pids: Vec<Pid>) {
         for pid in pids {
             self.filter_pids.insert(pid, true);
-            self.event_new_proc(pid);
+            self.event_new_proc(pid, pid); // TODO (patnebe): Look into this
         }
     }
 
@@ -730,7 +731,7 @@ impl Profiler {
                 recv(self.new_proc_chan_receive) -> read => {
                         if let Ok(event) = read {
                             if event.type_ == event_type_EVENT_NEW_PROCESS {
-                                self.event_new_proc(event.pid);
+                                self.event_new_proc(event.pid, event.tid);
                                 // Ensure we only remove the rate limits only if the above works.
                                 // This is probably suited for a batched operation.
                                 // let _ = self
@@ -1684,7 +1685,7 @@ impl Profiler {
         self.filter_pids.contains_key(&pid)
     }
 
-    fn event_new_proc(&mut self, pid: Pid) {
+    fn event_new_proc(&mut self, pid: Pid, tid: Tid) {
         if !self.should_profile(pid) {
             return;
         }
@@ -1703,6 +1704,11 @@ impl Profiler {
                 // probabaly a procfs race
             }
         }
+
+        self.metadata_provider
+            .lock()
+            .unwrap()
+            .register_task(TaskKey { pid, tid });
     }
 
     fn event_need_unwind_info(&mut self, pid: Pid, address: u64) {
