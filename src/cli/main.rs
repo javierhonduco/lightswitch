@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use crossbeam_channel::bounded;
-use crossbeam_channel::{select, tick};
+use crossbeam_channel::tick;
 use inferno::flamegraph;
 use lightswitch::collector::{AggregatorCollector, Collector, NullCollector, StreamingCollector};
 use lightswitch::debug_info::DebugInfoManager;
@@ -190,17 +190,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     })
     .expect("Error setting Ctrl-C handler");
 
-    // Start a thread to stop the profiler if killswitch enabled
+    // Start a thread to stop the profiler if the killswitch is enabled
     let killswitch_ticker = tick(KILLSWITCH_POLL_INTERVAL);
     thread::spawn(move || loop {
-        select! {
-          recv(killswitch_ticker) -> _  => {
-              if killswitch.enabled() {
-                  info!("killswitch detected. Sending stop signal to profiler.");
-                  let _ = stop_signal_sender.send(());
-                  break;
-              }
-          },
+        if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
+            info!("killswitch detected. Sending stop signal to profiler.");
+            let _ = stop_signal_sender.send(());
+            break;
         }
     });
 
