@@ -23,3 +23,36 @@ impl KillSwitch {
         !self.ignore_killswitch && Path::new(&self.killswitch_path).try_exists().unwrap()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_killswitch_enabled() {
+        // Given
+        let temp_killswitch_file = tempfile::NamedTempFile::new().unwrap();
+        let temp_killswitch_path = temp_killswitch_file.path();
+        let killswitch = KillSwitch::new(
+            Some(temp_killswitch_path.to_str().expect("").to_string()),
+            /*ignore_killswitch*/ false,
+        );
+
+        // When/Then
+        assert!(killswitch.enabled());
+    }
+
+    #[test]
+    fn test_killswitch_ignored() {
+        // Given
+        let temp_killswitch_file = tempfile::NamedTempFile::new().unwrap();
+        let temp_killswitch_path = temp_killswitch_file.path();
+        let killswitch = KillSwitch::new(
+            Some(temp_killswitch_path.to_str().expect("").to_string()),
+            /*ignore_killswitch*/ true,
+        );
+
+        // When/Then
+        assert!(!killswitch.enabled());
+    }
+}
