@@ -126,7 +126,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let killswitch = KillSwitch::new(args.killswitch_path_override, args.unsafe_start);
     if killswitch.enabled() {
-        info!("Killswitch enabled, exiting...");
+        info!(
+            "Killswitch enabled, exiting. \
+            Override the killsitch using the --unsafe-start \
+            flag if you are sure you want to proceed."
+        );
         return Ok(());
     }
 
