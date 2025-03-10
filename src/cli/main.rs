@@ -126,8 +126,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let killswitch = KillSwitch::new(args.killswitch_path_override, args.unsafe_start);
     if killswitch.enabled() {
-        info!("Killswitch enabled, will do nothing...");
-        std::thread::sleep(args.duration);
+        info!("Killswitch enabled, exiting...");
         return Ok(());
     }
 
@@ -192,7 +191,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Start a thread to stop the profiler if the killswitch is enabled
     let killswitch_ticker = tick(KILLSWITCH_POLL_INTERVAL);
-    thread::spawn(move || loop {
+    let killswitch_poll_thread = thread::Builder::new().name("killswitch-poll-thread".to_string());
+    let _ = killswitch_poll_thread.spawn(move || loop {
         if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
             info!("killswitch detected. Sending stop signal to profiler.");
             let _ = stop_signal_sender.send(());

@@ -33,7 +33,7 @@ mod tests {
     fn test_killswitch_enabled() {
         // Given
         create_dir_all("/tmp/lightswitch").unwrap();
-        let killswitch = KillSwitch::new(None, /*ignore_killswitch*/ false);
+        let killswitch = KillSwitch::new(None, false);
         assert!(!killswitch.enabled());
 
         // When
@@ -51,7 +51,7 @@ mod tests {
         let temp_killswitch_path = temp_killswitch_file.path();
         let killswitch = KillSwitch::new(
             Some(temp_killswitch_path.to_str().expect("").to_string()),
-            /*ignore_killswitch*/ false,
+            false,
         );
 
         // When/Then
@@ -66,7 +66,7 @@ mod tests {
         let temp_killswitch_path = temp_killswitch_file.path();
         let killswitch = KillSwitch::new(
             Some(temp_killswitch_path.to_str().expect("").to_string()),
-            /*ignore_killswitch*/ true,
+            true,
         );
 
         // When/Then
