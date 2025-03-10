@@ -168,7 +168,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         debug_info_manager,
         max_native_unwind_info_size_mb: args.max_native_unwind_info_size_mb,
         use_ring_buffers,
-        // metadata_provider: metadata_provider.clone(),
         ..Default::default()
     };
 
