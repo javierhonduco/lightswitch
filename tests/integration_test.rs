@@ -10,6 +10,9 @@ use lightswitch::collector::{AggregatorCollector, Collector};
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::AggregatedProfile;
 use lightswitch::profiler::{Profiler, ProfilerConfig};
+use lightswitch_metadata::metadata_provider::{
+    GlobalMetadataProvider, ThreadSafeGlobalMetadataProvider,
+};
 
 /// Find the `nix` binary either in the $PATH or in the below hardcoded location.
 fn nix_bin() -> String {
@@ -108,7 +111,9 @@ fn test_integration() {
         ..Default::default()
     };
     let (_stop_signal_send, stop_signal_receive) = bounded(1);
-    let mut p = Profiler::new(profiler_config, stop_signal_receive);
+    let metadata_provider: ThreadSafeGlobalMetadataProvider =
+        Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+    let mut p = Profiler::new(profiler_config, stop_signal_receive, metadata_provider);
     p.profile_pids(vec![cpp_proc.pid()]);
     p.run(collector.clone());
     let collector = collector.lock().unwrap();

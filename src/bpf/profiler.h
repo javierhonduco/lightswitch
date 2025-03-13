@@ -194,6 +194,7 @@ enum event_type {
 typedef struct {
   enum event_type type;
   int pid; // use right name here (tgid?)
+  int tid;
   u64 address;
 } Event;
 

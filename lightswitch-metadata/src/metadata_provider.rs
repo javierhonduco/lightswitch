@@ -103,6 +103,13 @@ impl GlobalMetadataProvider {
             labels
         }
     }
+
+    pub fn register_task(&mut self, task_key: TaskKey) {
+        if !self.process_label_cache.contains(&task_key) {
+            let labels = self.get_labels(task_key);
+            self.process_label_cache.push(task_key, labels);
+        }
+    }
 }
 
 #[cfg(test)]

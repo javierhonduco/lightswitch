@@ -12,6 +12,7 @@ use lightswitch_object::ElfLoad;
 use lightswitch_object::ExecutableId;
 
 pub type Pid = i32;
+pub type Tid = i32;
 
 /// What type of mapping we are dealing with.
 #[derive(Debug, Clone, PartialEq)]
