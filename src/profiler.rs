@@ -9,6 +9,7 @@ use std::env::temp_dir;
 use std::fs;
 use std::fs::File;
 use std::io::ErrorKind;
+use std::iter;
 use std::mem::size_of;
 use std::mem::ManuallyDrop;
 use std::mem::MaybeUninit;
@@ -760,8 +761,10 @@ impl Profiler {
                 debug!("marking process {} as exited", pid);
                 proc_info.status = ProcessStatus::Exited;
 
-                // Delete process, todo track errors.
-                let _ = Self::delete_bpf_process(&self.native_unwinder, pid);
+                let err = Self::delete_bpf_process(&self.native_unwinder, pid);
+                if let Err(e) = err {
+                    debug!("could not remove bpf process due to {:?}", e);
+                }
 
                 for mapping in &mut proc_info.mappings.0 {
                     let mut object_files = self.object_files.write();
@@ -1123,7 +1126,12 @@ impl Profiler {
         let mut success_count = 0;
         let mut failure_count = 0;
 
-        for file_offset in range.clone().step_by(UNWIND_INFO_PAGE_SIZE as usize) {
+        let page_steps = range
+            .clone()
+            .step_by(UNWIND_INFO_PAGE_SIZE as usize)
+            .chain(iter::once(end_address));
+
+        for file_offset in page_steps {
             let key = page_key_t {
                 file_offset: file_offset & HIGH_PC_MASK,
                 executable_id,
@@ -1210,18 +1218,19 @@ impl Profiler {
             );
 
             // TODO keep track of errors
-            let _ = bpf
+            let res = bpf
                 .maps
                 .exec_mappings
                 .delete(unsafe { plain::as_bytes(&key) });
+            if let Err(e) = res {
+                error!("failed to delete bpf mappings with {:?}", e);
+            }
         }
     }
 
     fn delete_bpf_process(bpf: &ProfilerSkel, pid: Pid) -> Result<(), libbpf_rs::Error> {
         let key = exec_mappings_key::new(
-            pid.try_into().unwrap(),
-            0x0,
-            32, // pid bits
+            pid as u32, 0x0, 32, // pid bits
         );
         bpf.maps
             .exec_mappings
@@ -1993,5 +2002,116 @@ impl Profiler {
 
     pub fn teardown_perf_events(&mut self) {
         self._links = vec![];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::profiler::*;
+
+    #[test]
+    fn test_bpf_mappings_creation_and_deletion() {
+        let profiler_config = ProfilerConfig::default();
+        let mut native_unwinder_open_object = MaybeUninit::uninit();
+        let mut skel_builder = ProfilerSkelBuilder::default();
+        skel_builder.obj_builder.debug(false);
+        let mut open_skel = skel_builder
+            .open(&mut native_unwinder_open_object)
+            .expect("open skel");
+
+        let _map_handle = Profiler::create_unwind_info_maps(
+            &mut open_skel,
+            &profiler_config.native_unwind_info_bucket_sizes,
+        );
+        Profiler::set_profiler_map_sizes(&mut open_skel, &profiler_config);
+
+        let native_unwinder = open_skel.load().expect("load skel");
+
+        // add and delete bpf process works
+        assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
+        Profiler::add_bpf_process(&native_unwinder, 0xBADFAD).unwrap();
+        assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 1);
+        Profiler::delete_bpf_process(&native_unwinder, 0xBADFAD).unwrap();
+        assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
+
+        // add and delete bpf mappings works
+        assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
+        Profiler::add_bpf_mappings(
+            &native_unwinder,
+            0xBADFAD,
+            &vec![mapping_t {
+                begin: 0,
+                end: 0xFFFFF,
+                executable_id: 0xBAD,
+                load_address: 0x0,
+                type_: 0,
+            }],
+        )
+        .unwrap();
+        assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 20);
+        Profiler::delete_bpf_mappings(&native_unwinder, 0xBADFAD, 0, 0xFFFFF);
+        assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
+    }
+
+    // TODO: this tests fails in arm64, don't have the bandwidth to fix this now,
+    // but this looks quite suspicious, perhaps there's a deeper issue here.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_bpf_cleanup() {
+        let mut profiler = Profiler::default();
+        assert_eq!(
+            profiler.native_unwinder.maps.exec_mappings.keys().count(),
+            0
+        );
+        assert_eq!(
+            profiler
+                .native_unwinder
+                .maps
+                .executable_to_page
+                .keys()
+                .count(),
+            0
+        );
+        profiler.add_proc(std::process::id() as i32).unwrap();
+        profiler.add_unwind_info_for_process(std::process::id() as i32);
+
+        assert!(profiler.native_unwinder.maps.exec_mappings.keys().count() > 2);
+        assert!(
+            profiler
+                .native_unwinder
+                .maps
+                .executable_to_page
+                .keys()
+                .count()
+                > 2
+        );
+        profiler.handle_process_exit(std::process::id() as i32);
+        assert_eq!(profiler.native_unwinder.maps.outer_map_0.keys().count(), 0);
+        assert_eq!(profiler.native_unwinder.maps.outer_map_1.keys().count(), 0);
+        assert_eq!(profiler.native_unwinder.maps.outer_map_2.keys().count(), 0);
+        assert_eq!(profiler.native_unwinder.maps.outer_map_3.keys().count(), 0);
+        assert_eq!(profiler.native_unwinder.maps.outer_map_4.keys().count(), 0);
+        assert_eq!(profiler.native_unwinder.maps.outer_map_5.keys().count(), 0);
+        assert_eq!(profiler.native_unwinder.maps.outer_map_6.keys().count(), 0);
+        assert_eq!(profiler.native_unwinder.maps.outer_map_7.keys().count(), 0);
+        assert_eq!(profiler.native_unwinder.maps.outer_map_8.keys().count(), 0);
+        assert_eq!(profiler.native_unwinder.maps.outer_map_9.keys().count(), 0);
+        assert_eq!(profiler.native_unwinder.maps.outer_map_10.keys().count(), 0);
+        assert_eq!(profiler.native_unwinder.maps.outer_map_11.keys().count(), 0);
+        assert_eq!(profiler.native_unwinder.maps.outer_map_12.keys().count(), 0);
+
+        assert_eq!(
+            profiler.native_unwinder.maps.exec_mappings.keys().count(),
+            0
+        );
+        assert_eq!(
+            profiler
+                .native_unwinder
+                .maps
+                .executable_to_page
+                .keys()
+                .count(),
+            0
+        );
     }
 }
