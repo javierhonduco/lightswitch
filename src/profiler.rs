@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
 use itertools::Itertools;
 use libbpf_rs::num_possible_cpus;
@@ -71,7 +71,8 @@ pub struct KnownExecutableInfo {
 pub struct NativeUnwindState {
     known_executables: HashMap<ExecutableId, KnownExecutableInfo>,
     unwind_info_bucket_usage: Vec<usize>,
-    last_eviction: Instant,
+    last_executable_eviction: Instant,
+    last_process_eviction: Instant,
 }
 
 impl NativeUnwindState {
@@ -79,13 +80,24 @@ impl NativeUnwindState {
         NativeUnwindState {
             known_executables: HashMap::new(),
             unwind_info_bucket_usage: vec![0; len],
-            last_eviction: Instant::now(),
+            last_executable_eviction: Instant::now(),
+            last_process_eviction: Instant::now(),
         }
     }
 
     /// Checks whether the given `executable_id` is loaded in the BPF maps.
     fn is_known(&self, executable_id: ExecutableId) -> bool {
         self.known_executables.contains_key(&executable_id)
+    }
+
+    /// Checks if the last eviction happened long ago enough to prevent excessive overhead.
+    fn can_evict_executable(&self) -> bool {
+        self.last_executable_eviction.elapsed() >= Duration::from_secs(5)
+    }
+
+    /// Checks if the last eviction happened long ago enough to prevent excessive overhead.
+    fn can_evict_process(&self) -> bool {
+        self.last_process_eviction.elapsed() >= Duration::from_secs(5)
     }
 }
 
@@ -107,7 +119,7 @@ pub struct Profiler {
     tracers_chan_receive: Arc<Receiver<TracerEvent>>,
     /// Profiler stop channel. Used to receive signals from users to stop profiling.
     stop_chan_receive: Receiver<()>,
-    native_unwind_state: NativeUnwindState,
+    pub(crate) native_unwind_state: NativeUnwindState,
     /// Pids excluded from profiling.
     filter_pids: HashMap<Pid, bool>,
     // Profile channel
@@ -178,6 +190,16 @@ impl Default for ProfilerConfig {
             use_ring_buffers: true,
         }
     }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq, Hash, Clone)]
+pub enum AddProcessError {
+    #[error("could not evict process information")]
+    Eviction,
+    #[error("go applications are not supported")]
+    Go,
+    #[error("procfs race")]
+    ProcfsRace,
 }
 
 impl Default for Profiler {
@@ -405,15 +427,13 @@ impl Profiler {
             .open(&mut native_unwinder_open_object)
             .expect("open skel");
 
-        let inner_unwind_info_map_shapes = Self::create_unwind_info_maps(
+        let _map_handle = Self::create_unwind_info_maps(
             &mut open_skel,
             &profiler_config.native_unwind_info_bucket_sizes,
         );
         Self::set_profiler_map_sizes(&mut open_skel, &profiler_config);
 
         let native_unwinder = ManuallyDrop::new(open_skel.load().expect("load skel"));
-        // The unwind information shapes are no longer needed after the native unwinder is loaded.
-        std::mem::drop(inner_unwind_info_map_shapes);
 
         // SAFETY: native_unwinder never outlives native_unwinder_open_object
         let native_unwinder = unsafe {
@@ -633,6 +653,7 @@ impl Profiler {
                                 })
                                 .collect(),
                         ),
+                        last_used: Instant::now(),
                     },
                 );
 
@@ -897,9 +918,10 @@ impl Profiler {
         );
     }
 
-    /// Accounts what executables got used last. This is needed know what unwind information
-    /// to evict.
-    pub fn bump_executable_stats(&mut self, raw_samples: &[RawAggregatedSample]) {
+    /// Updates the last time processes and executables were seen. This is used during evictions.
+    pub fn bump_last_used(&mut self, raw_samples: &[RawAggregatedSample]) {
+        let now = Instant::now();
+
         for raw_sample in raw_samples {
             let pid = raw_sample.pid;
             let ustack = raw_sample.ustack;
@@ -907,25 +929,30 @@ impl Profiler {
                 continue;
             };
 
+            {
+                let mut procs = self.procs.write();
+                let proc = procs.get_mut(&pid);
+                if let Some(proc) = proc {
+                    proc.last_used = now;
+                }
+            }
+
             for (i, addr) in ustack.addresses.into_iter().enumerate() {
                 if ustack.len <= i.try_into().unwrap() {
                     break;
                 }
 
-                let mapping = self
-                    .procs
-                    .read()
-                    .get(&pid)
-                    .unwrap()
-                    .mappings
-                    .for_address(addr);
+                let procs = self.procs.read();
+                let proc = procs.get(&pid);
+                let Some(proc) = proc else { continue };
+                let mapping = proc.mappings.for_address(addr);
                 if let Some(mapping) = mapping {
                     if let Some(executable) = self
                         .native_unwind_state
                         .known_executables
                         .get_mut(&mapping.executable_id)
                     {
-                        executable.last_used = Instant::now();
+                        executable.last_used = now;
                     }
                 }
             }
@@ -1073,7 +1100,7 @@ impl Profiler {
 
         debug!("===== got {} unique stacks", all_stacks_bytes.len());
 
-        self.bump_executable_stats(&result);
+        self.bump_last_used(&result);
         self.collect_unwinder_stats();
         self.clear_maps();
         self.setup_perf_events();
@@ -1638,11 +1665,9 @@ impl Profiler {
         let total_memory_used_after_mb = total_memory_used_mb + this_unwind_info_mb;
         let to_free_mb = std::cmp::max(0, total_memory_used_after_mb as i32 - max_memory_mb) as u32;
         let should_evict = !executables_to_evict.is_empty() || to_free_mb != 0;
-        let cant_evict =
-            self.native_unwind_state.last_eviction.elapsed() < std::time::Duration::from_secs(5);
 
         // Do not evict unwind information too often.
-        if should_evict && cant_evict {
+        if should_evict && !self.native_unwind_state.can_evict_executable() {
             return false;
         }
 
@@ -1689,12 +1714,12 @@ impl Profiler {
                     &mut self.native_unwind_state.unwind_info_bucket_usage,
                 );
                 if ret.is_err() {
-                    debug!("failed to evict unwind info map with {:?}", ret);
+                    error!("failed to evict unwind info map with {:?}", ret);
                 }
                 entry.remove_entry();
             }
 
-            self.native_unwind_state.last_eviction = Instant::now();
+            self.native_unwind_state.last_executable_eviction = Instant::now();
         }
 
         true
@@ -1762,9 +1787,47 @@ impl Profiler {
         }
     }
 
-    pub fn add_proc(&mut self, pid: Pid) -> anyhow::Result<()> {
-        let proc = procfs::process::Process::new(pid)?;
-        let maps = proc.maps()?;
+    /// Evict a process if there are more processes with [`ProcessStatus::Running`] status
+    /// than the maximum number of processes, [`MAX_PROCESSES`]. Returns false only if an
+    /// eviction is necessary but not enough time has elapsed since the last one.
+    fn maybe_evict_process(&mut self) -> bool {
+        let procs = self.procs.read();
+        let running_procs = procs
+            .iter()
+            .filter(|e| e.1.status == ProcessStatus::Running);
+        let should_evict = running_procs.clone().count() >= MAX_PROCESSES as usize;
+
+        if should_evict && !self.native_unwind_state.can_evict_process() {
+            return false;
+        }
+
+        let mut to_evict = None;
+        if should_evict {
+            let victim = running_procs
+                .sorted_by(|a, b| a.1.last_used.cmp(&b.1.last_used))
+                .next();
+
+            if let Some((pid, _)) = victim {
+                to_evict = Some(*pid);
+            }
+        }
+        std::mem::drop(procs);
+
+        if let Some(pid) = to_evict {
+            debug!("evicting pid{}", pid);
+            self.handle_process_exit(pid);
+            self.native_unwind_state.last_process_eviction = Instant::now();
+        }
+
+        true
+    }
+
+    pub fn add_proc(&mut self, pid: Pid) -> Result<(), AddProcessError> {
+        let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
+        let maps = proc.maps().map_err(|_| AddProcessError::ProcfsRace)?;
+        if !self.maybe_evict_process() {
+            return Err(AddProcessError::Eviction);
+        }
 
         let mut mappings = vec![];
         let object_files_clone = self.object_files.clone();
@@ -1819,7 +1882,7 @@ impl Profiler {
                     // Among other things, blazesym doesn't support symbolizing Go binaries.
                     if object_file.is_go() {
                         // todo: deal with CGO and friends
-                        return Err(anyhow!("Go applications are not supported yet"));
+                        return Err(AddProcessError::Go);
                     }
 
                     let build_id = object_file.build_id();
@@ -1978,6 +2041,7 @@ impl Profiler {
         let proc_info = ProcessInfo {
             status: ProcessStatus::Running,
             mappings: ExecutableMappings(mappings),
+            last_used: Instant::now(),
         };
         self.procs.clone().write().insert(pid, proc_info);
 
