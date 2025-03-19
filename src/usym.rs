@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use blazesym::symbolize::Elf;
+use blazesym::symbolize::source::Elf;
+use blazesym::symbolize::source::Source;
 use blazesym::symbolize::Input;
-use blazesym::symbolize::Source;
 use blazesym::symbolize::Sym;
 use blazesym::symbolize::Symbolized;
 use blazesym::symbolize::Symbolizer;
