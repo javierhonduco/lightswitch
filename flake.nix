@@ -68,7 +68,12 @@
           devShells.default = mkShell {
             nativeBuildInputs = nativeBuildInputs;
             buildInputs = buildInputs ++ [
-              rust-toolchain
+              (rust-toolchain.override {
+                extensions = [
+                  "rust-src"
+                  "rust-analyzer"
+                ];
+              })
               # Debugging tools
               strace
               gdb
