@@ -192,7 +192,7 @@ find_page(mapping_t *mapping, u64 object_relative_pc, u64 *low_index, u64 *high_
     }
   }
 
-  LOG("[error] could not find page");
+  LOG("[error] could not find page for executable_id: %llx at file_offset: %llx", mapping->executable_id, object_relative_pc);
   bump_unwind_error_chunk_not_found();
   return NULL;
 }

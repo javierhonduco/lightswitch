@@ -49,7 +49,6 @@ use crate::process::{
     ProcessStatus,
 };
 use crate::profile::*;
-use crate::unwind_info::log_unwind_info_sections;
 use crate::unwind_info::manager::UnwindInfoManager;
 use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::executable_path;
@@ -221,6 +220,27 @@ fn fetch_vdso_info(
     let object = ObjectFile::new(&dumped_vdso)?;
 
     Ok((dumped_vdso, object))
+}
+
+enum AddUnwindInformationResult {
+    /// The unwind information information and its pages were correctly loaded in BPF maps.
+    Success,
+    /// The unwind information information and its pages are already loaded in BPF maps.
+    AlreadyLoaded,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+enum AddUnwindInformationError {
+    #[error("could not evict unwind information")]
+    Eviction,
+    #[error("unwind information too large for executable: {0} which has {1} unwind rows")]
+    TooLarge(String, usize),
+    #[error("no unwind information, known naughty executable")]
+    NoUnwindInfoKnownNaughty,
+    #[error("no unwind information: {0} for executable: {1}")]
+    NoUnwindInfo(String, String),
+    #[error("unwind information contains no entries")]
+    Empty,
 }
 
 impl Profiler {
@@ -1438,7 +1458,17 @@ impl Profiler {
             });
 
             // Fetch unwind info and store it in in BPF maps.
-            self.add_unwind_information_for_executable(mapping.executable_id);
+            if let Err(e) = self.add_unwind_information_for_executable(mapping.executable_id) {
+                if e == AddUnwindInformationError::NoUnwindInfoKnownNaughty {
+                    return;
+                }
+                warn!(
+                    "error adding unwind information for executable {:x} due to {:?}",
+                    mapping.executable_id, e
+                );
+                // TODO: maybe cleanup written maps.
+                return;
+            }
         }
 
         // Store all mappings in BPF maps.
@@ -1458,18 +1488,12 @@ impl Profiler {
         ((unwind_info_len * 8 * 8) as f64 * overhead / 1e+6) as u32
     }
 
-    fn add_unwind_information_for_executable(&mut self, executable_id: ExecutableId) {
+    fn add_unwind_information_for_executable(
+        &mut self,
+        executable_id: ExecutableId,
+    ) -> Result<AddUnwindInformationResult, AddUnwindInformationError> {
         if self.native_unwind_state.is_known(executable_id) {
-            debug!(
-                "unwind info already loaded for executable id: {:x}",
-                executable_id
-            );
-            return;
-        } else {
-            debug!(
-                "unwind info not loaded for executable id: {:x}",
-                executable_id
-            );
+            return Ok(AddUnwindInformationResult::AlreadyLoaded);
         }
 
         let object_files = self.object_files.read();
@@ -1479,63 +1503,52 @@ impl Profiler {
         let needs_synthesis = executable_info.is_vdso && architecture() == Architecture::Arm64;
         std::mem::drop(object_files);
 
-        if needs_synthesis {
-            debug!("arm64 vDSO don't typically contain unwind information and synthesising it is not implemented yet");
-            return;
-        }
+        let unwind_info = if needs_synthesis {
+            debug!("synthetising arm64 unwind information using frame pointers for vDSO");
+            Ok(vec![CompactUnwindRow::frame_setup()])
+        } else {
+            let _span = span!(
+                Level::DEBUG,
+                "calling in_memory_unwind_info",
+                "{}",
+                executable_path
+            )
+            .entered();
+            self.unwind_info_manager
+                .fetch_unwind_info(&executable_path_open, executable_id)
+        };
 
-        let span = span!(
-            Level::DEBUG,
-            "calling in_memory_unwind_info",
-            "{}",
-            executable_path
-        )
-        .entered();
-
-        let unwind_info = self
-            .unwind_info_manager
-            .fetch_unwind_info(&executable_path_open, executable_id);
-        let unwind_info: Vec<CompactUnwindRow> = match unwind_info {
+        let unwind_info = match unwind_info {
             Ok(unwind_info) => unwind_info,
             Err(e) => {
-                let executable_path_str = executable_path;
-                let known_naughty = executable_path_str.contains("libicudata");
-
-                // tracing doesn't support a level chosen at runtime: https://github.com/tokio-rs/tracing/issues/2730
+                let known_naughty = executable_path.contains("libicudata");
                 if known_naughty {
-                    debug!(
-                        "failed to get unwind information for {} with {}",
-                        executable_path_str, e
-                    );
+                    return Err(AddUnwindInformationError::NoUnwindInfoKnownNaughty);
                 } else {
-                    info!(
-                        "failed to get unwind information for {} with {}",
-                        executable_path_str, e
-                    );
-
-                    if let Err(e) = log_unwind_info_sections(&executable_path_open) {
-                        warn!("log_unwind_info_sections failed with {}", e);
-                    }
+                    return Err(AddUnwindInformationError::NoUnwindInfo(
+                        e.to_string(),
+                        executable_path,
+                    ));
                 }
-                return;
             }
         };
-        span.exit();
 
         let bucket =
             Self::bucket_for_unwind_info(unwind_info.len(), &self.native_unwind_info_bucket_sizes);
 
         let Some((bucket_id, _)) = bucket else {
-            warn!(
-                "unwind information too big for executable {} ({} unwind rows)",
+            return Err(AddUnwindInformationError::TooLarge(
                 executable_path,
-                unwind_info.len()
-            );
-            return;
+                unwind_info.len(),
+            ));
         };
 
         if !self.maybe_evict_executables(bucket_id, self.max_native_unwind_info_size_mb) {
-            return;
+            return Err(AddUnwindInformationError::Eviction);
+        }
+
+        if unwind_info.is_empty() {
+            return Err(AddUnwindInformationError::Empty);
         }
 
         let inner_map_and_id = Self::create_and_insert_unwind_info_map(
@@ -1547,7 +1560,7 @@ impl Profiler {
         );
 
         // Add all unwind information and its pages.
-        match inner_map_and_id {
+        let result = match inner_map_and_id {
             Some((inner, bucket_id)) => {
                 Self::add_bpf_unwind_info(&inner, &unwind_info);
                 Self::add_bpf_pages(
@@ -1567,21 +1580,15 @@ impl Profiler {
                         last_used: Instant::now(),
                     },
                 );
+                Ok(AddUnwindInformationResult::Success)
             }
-            None => {
-                warn!(
-                    "unwind information too big for executable {} ({} unwind rows)",
-                    executable_path,
-                    unwind_info.len()
-                );
-            }
-        }
+            None => Err(AddUnwindInformationError::TooLarge(
+                executable_path,
+                unwind_info.len(),
+            )),
+        };
 
-        debug!(
-            "Unwind rows for executable {}: {}",
-            executable_path,
-            &unwind_info.len(),
-        );
+        result
     }
 
     /// Evict executables if a bucket is full or if the max memory is exceeded. Note that
@@ -1730,7 +1737,16 @@ impl Profiler {
         std::mem::drop(procs);
 
         if let Some(executable_id) = executable_id {
-            self.add_unwind_information_for_executable(executable_id);
+            if let Err(e) = self.add_unwind_information_for_executable(executable_id) {
+                if e == AddUnwindInformationError::NoUnwindInfoKnownNaughty {
+                    return;
+                }
+
+                warn!(
+                    "error adding unwind information for executable {:x} due to {:?}",
+                    executable_id, e
+                );
+            }
         }
     }
 
@@ -1780,7 +1796,7 @@ impl Profiler {
                     let object_file = match ObjectFile::new(&exe_path.clone()) {
                         Ok(f) => f,
                         Err(e) => {
-                            warn!("object_file {} failed with {}", exe_path.display(), e);
+                            debug!("object_file {} failed with {}", exe_path.display(), e);
                             // Rather than returning here, we prefer to be able to profile some
                             // parts of the binary
                             continue;
@@ -2053,9 +2069,6 @@ mod tests {
         assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
     }
 
-    // TODO: this tests fails in arm64, don't have the bandwidth to fix this now,
-    // but this looks quite suspicious, perhaps there's a deeper issue here.
-    #[cfg(target_arch = "x86_64")]
     #[test]
     fn test_bpf_cleanup() {
         let mut profiler = Profiler::default();
