@@ -66,14 +66,14 @@ mod tests {
     #[test]
     fn test_to_pages() {
         let unwind_info = vec![];
-        let chunks = to_pages(&unwind_info);
-        assert_eq!(chunks, vec![]);
+        let pages = to_pages(&unwind_info);
+        assert_eq!(pages, vec![]);
 
         let row = CompactUnwindRow::default();
         let unwind_info = vec![CompactUnwindRow { pc: 0x100, ..row }];
-        let chunks = to_pages(&unwind_info);
+        let pages = to_pages(&unwind_info);
         assert_eq!(
-            chunks,
+            pages,
             vec![Page {
                 address: 0x0,
                 low_index: 0,
@@ -95,13 +95,13 @@ mod tests {
                 ..row
             },
         ];
-        let chunks = to_pages(&unwind_info);
+        let pages = to_pages(&unwind_info);
         assert!(
             unwind_info.is_sorted_by(|a, b| a.pc <= b.pc),
             "unwind info is sorted"
         );
         assert_eq!(
-            chunks,
+            pages,
             vec![
                 Page {
                     address: 983040,
