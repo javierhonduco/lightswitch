@@ -444,6 +444,18 @@ impl Profiler {
             .exec_mappings
             .reuse_fd(exec_mappings_fd)
             .expect("reuse exec_mappings");
+        open_tracers
+            .maps
+            .rodata_data
+            .lightswitch_config
+            .verbose_logging
+            .write(profiler_config.bpf_logging);
+        open_tracers
+            .maps
+            .rodata_data
+            .lightswitch_config
+            .use_ring_buffers
+            .write(profiler_config.use_ring_buffers);
         Self::set_tracers_map_sizes(&mut open_tracers, &profiler_config);
 
         let tracers = ManuallyDrop::new(open_tracers.load().expect("load skel"));
