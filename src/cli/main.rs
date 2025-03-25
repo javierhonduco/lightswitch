@@ -234,6 +234,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Otherwise let's symbolize the profile and write it to disk.
     if args.symbolizer == Symbolizer::Local {
+        info!("Symbolizing profile...");
         profile = symbolize_profile(&profile, procs, objs);
     }
 
