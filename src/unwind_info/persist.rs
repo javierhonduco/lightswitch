@@ -1,11 +1,13 @@
-use plain::Plain;
-use ring::digest::{Context, SHA256};
 use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+
+use plain::Plain;
+use ring::digest::{Context, SHA256};
+use thiserror::Error;
 
 use crate::unwind_info::compact_unwind_info;
 use crate::unwind_info::types::CompactUnwindRow;
@@ -16,6 +18,14 @@ const MAGIC_NUMBER: u32 = 0x1357531;
 const VERSION: u32 = 1;
 
 type UnwindInformationDigest = u64;
+
+#[derive(Debug, Error)]
+pub enum WriterError {
+    #[error("generic unwind info error {0}")]
+    UnwindInfoGeneric(String),
+    #[error("i/o error")]
+    Io(#[from] std::io::Error),
+}
 
 #[derive(Debug, Default)]
 #[repr(C, packed)]
@@ -50,7 +60,10 @@ impl Writer {
         }
     }
 
-    pub fn write<W: Write + Seek>(self, writer: &mut W) -> anyhow::Result<Vec<CompactUnwindRow>> {
+    pub fn write<W: Write + Seek>(
+        self,
+        writer: &mut W,
+    ) -> Result<Vec<CompactUnwindRow>, WriterError> {
         let unwind_info = self.read_unwind_info()?;
         // Write dummy header.
         self.write_header(writer, 0, None)?;
@@ -61,8 +74,9 @@ impl Writer {
         Ok(unwind_info)
     }
 
-    fn read_unwind_info(&self) -> anyhow::Result<Vec<CompactUnwindRow>> {
+    fn read_unwind_info(&self) -> Result<Vec<CompactUnwindRow>, WriterError> {
         compact_unwind_info(&self.executable_path.to_string_lossy())
+            .map_err(|e| WriterError::UnwindInfoGeneric(e.to_string()))
     }
 
     fn write_header(
@@ -70,12 +84,14 @@ impl Writer {
         writer: &mut impl Write,
         unwind_info_len: usize,
         digest: Option<UnwindInformationDigest>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), WriterError> {
         let header = Header {
             magic: MAGIC_NUMBER,
             version: VERSION,
             unwind_info_digest: digest.unwrap_or(0),
-            unwind_info_len: unwind_info_len.try_into()?,
+            unwind_info_len: unwind_info_len.try_into().map_err(
+                |e: std::num::TryFromIntError| WriterError::UnwindInfoGeneric(e.to_string()),
+            )?,
         };
         writer.write_all(unsafe { plain::as_bytes(&header) })?;
         Ok(())
@@ -85,7 +101,7 @@ impl Writer {
         &self,
         writer: &mut impl Write,
         unwind_info: &[CompactUnwindRow],
-    ) -> anyhow::Result<UnwindInformationDigest> {
+    ) -> Result<UnwindInformationDigest, WriterError> {
         let mut context = Context::new(&SHA256);
 
         for unwind_row in unwind_info {

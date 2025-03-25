@@ -2,15 +2,18 @@ use lightswitch_object::ExecutableId;
 use std::collections::BinaryHeap;
 use std::fs;
 use std::io::BufWriter;
+use std::io::ErrorKind;
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
 use std::{fs::File, io::BufReader};
 
+use thiserror::Error;
 use tracing::debug;
 
 use super::persist::{Reader, Writer};
+use crate::unwind_info::persist::{ReaderError, WriterError};
 use crate::unwind_info::types::CompactUnwindRow;
 
 const DEFAULT_MAX_CACHED_FILES: usize = 1_000;
@@ -33,6 +36,20 @@ impl Ord for Usage {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         other.instant.cmp(&self.instant)
     }
+}
+
+#[derive(Debug, Error)]
+pub enum FetchUnwindInfoError {
+    #[error("not found in cache")]
+    NotFound,
+    #[error("i/o error")]
+    Io(#[from] std::io::Error),
+    #[error("reader error")]
+    Reader(#[from] ReaderError),
+    #[error("generic error {0}")]
+    UnwindInfoGeneric(String),
+    #[error("write error")]
+    Write(#[from] WriterError),
 }
 
 /// Provides unwind information with caching on the file system, expiring
@@ -63,14 +80,13 @@ impl UnwindInfoManager {
         &mut self,
         executable_path: &Path,
         executable_id: ExecutableId,
-    ) -> anyhow::Result<Vec<CompactUnwindRow>> {
+    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
         match self.read_from_cache(executable_id) {
             Ok(unwind_info) => Ok(unwind_info),
             Err(e) => {
-                debug!(
-                    "error fetch_unwind_info: {:?}, unwind information will be regenerated",
-                    e
-                );
+                if matches!(e, FetchUnwindInfoError::NotFound) {
+                    debug!("error fetch_unwind_info: {:?}, regenerating...", e);
+                }
                 // No matter the error, regenerate the unwind information.
                 let unwind_info = self.write_to_cache(executable_path, executable_id);
                 if unwind_info.is_ok() {
@@ -84,14 +100,20 @@ impl UnwindInfoManager {
     fn read_from_cache(
         &self,
         executable_id: ExecutableId,
-    ) -> anyhow::Result<Vec<CompactUnwindRow>> {
+    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
-        let file = File::open(unwind_info_path)?;
+        let file = File::open(unwind_info_path).map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                FetchUnwindInfoError::NotFound
+            } else {
+                FetchUnwindInfoError::Io(e)
+            }
+        })?;
 
         let mut buffer = BufReader::new(file);
         let mut data = Vec::new();
         buffer.read_to_end(&mut data)?;
-        let reader = Reader::new(&data)?;
+        let reader = Reader::new(&data).map_err(FetchUnwindInfoError::Reader)?;
 
         Ok(reader.unwind_info()?)
     }
@@ -100,12 +122,15 @@ impl UnwindInfoManager {
         &self,
         executable_path: &Path,
         executable_id: ExecutableId,
-    ) -> anyhow::Result<Vec<CompactUnwindRow>> {
+    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
         let unwind_info_writer = Writer::new(executable_path);
-        // `File::create()` will truncate an existing file to the size it needs.
-        let mut file = BufWriter::new(File::create(unwind_info_path)?);
-        unwind_info_writer.write(&mut file)
+        // [`File::create`] will truncate an existing file to the size it needs.
+        let mut file =
+            BufWriter::new(File::create(unwind_info_path).map_err(FetchUnwindInfoError::Io)?);
+        unwind_info_writer
+            .write(&mut file)
+            .map_err(FetchUnwindInfoError::Write)
     }
 
     fn path_for(&self, executable_id: ExecutableId) -> PathBuf {
