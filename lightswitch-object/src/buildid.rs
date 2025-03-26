@@ -2,7 +2,9 @@ use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::fmt::Formatter;
+use std::num::ParseIntError;
 use std::str;
+use std::str::FromStr;
 
 use anyhow::Result;
 use data_encoding::HEXLOWER;
@@ -13,7 +15,54 @@ use ring::digest::Digest;
 /// Compact identifier for executable files derived from the first 8 bytes
 /// of the build id. By using this smaller type for object files less memory
 /// is used and also comparison, and other operations are cheaper.
-pub type ExecutableId = u64;
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
+pub struct ExecutableId(pub u64);
+
+impl Display for ExecutableId {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{:x}", self.0)
+    }
+}
+
+impl From<ExecutableId> for u64 {
+    fn from(executable_id: ExecutableId) -> Self {
+        executable_id.0
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ParseBuildIdError {
+    #[error("wrong length, must be even")]
+    WrongLength,
+    #[error("parsing error")]
+    Parse,
+    #[error("did not fit in the given type")]
+    Fit,
+}
+
+impl FromStr for ExecutableId {
+    type Err = ParseBuildIdError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+   /*      if s.len() < 16 {
+            return Err(ParseBuildIdError::WrongLength);
+        } */
+
+        if s.len() % 2 != 0 {
+            return Err(ParseBuildIdError::WrongLength);
+        }
+
+        let bytes = (0..s.len())
+            .step_by(2)
+            .map(|idx| u8::from_str_radix(&s[idx..idx + 2], 16))
+            .collect::<Result<Vec<u8>, ParseIntError>>()
+            .map_err(|_| ParseBuildIdError::Parse)?;
+
+        Ok(ExecutableId(u64::from_ne_bytes(
+            bytes[..8].try_into().map_err(|_| ParseBuildIdError::Fit)?,
+        )))
+    }
+}
 
 #[derive(Hash, Eq, PartialEq, Clone)]
 pub enum BuildIdFlavour {
@@ -54,7 +103,7 @@ impl BuildId {
 
     /// Returns an identifier for the executable using the first 8 bytes of the build id.
     pub fn id(&self) -> Result<ExecutableId> {
-        Ok(u64::from_ne_bytes(self.data[..8].try_into()?))
+        Ok(ExecutableId(u64::from_ne_bytes(self.data[..8].try_into()?)))
     }
 
     pub fn short(&self) -> String {
@@ -111,6 +160,19 @@ impl Debug for BuildId {
 mod tests {
     use super::*;
     use ring::digest::{Context, SHA256};
+
+    #[test]
+    fn test_executable_id() {
+        assert_eq!(
+            ExecutableId(0xfabadafabadafaba).to_string(),
+            "fabadafabadafaba"
+        );
+
+        assert_eq!(
+            u64::from(ExecutableId::from_str("fabadafabadafaba").unwrap()),
+            0xfabadafabadafaba
+        );
+    }
 
     #[test]
     fn test_buildid() {

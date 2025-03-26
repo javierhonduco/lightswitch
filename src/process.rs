@@ -236,7 +236,7 @@ mod tests {
         };
 
         let mapping = ExecutableMapping {
-            executable_id: 0x0,
+            executable_id: ExecutableId(0x0),
             build_id: None,
             kind: ExecutableMappingType::FileBacked,
             start_addr: 0x100,
