@@ -394,7 +394,7 @@ impl Profiler {
 
     pub fn new(profiler_config: ProfilerConfig, stop_signal_receive: Receiver<()>) -> Self {
         debug!(
-            "Base cache directory {}",
+            "base cache directory {}",
             profiler_config.cache_dir_base.display()
         );
         let cache_dir = profiler_config.cache_dir_base.join("lightswitch");
