@@ -31,7 +31,7 @@ pub fn parse_gnu_build_id_from_notes(data: &[u8]) -> Result<BuildId, anyhow::Err
             continue;
         }
 
-        return Ok(BuildId::gnu_from_bytes(note.desc()));
+        return Ok(BuildId::gnu_from_bytes(note.desc())?);
     }
 
     Err(anyhow!("no GNU build id note found"))

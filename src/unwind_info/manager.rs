@@ -6,6 +6,7 @@ use std::io::ErrorKind;
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Instant;
 use std::{fs::File, io::BufReader};
 
@@ -134,14 +135,14 @@ impl UnwindInfoManager {
     }
 
     fn path_for(&self, executable_id: ExecutableId) -> PathBuf {
-        self.cache_dir.join(format!("{:x}", executable_id))
+        self.cache_dir.join(format!("{}", executable_id))
     }
 
     pub fn bump_already_present(&mut self) -> anyhow::Result<()> {
         for direntry in fs::read_dir(&self.cache_dir)?.flatten() {
             let name = direntry.file_name();
             let Some(name) = name.to_str() else { continue };
-            let executable_id = ExecutableId::from_str_radix(name, 16)?;
+            let executable_id = ExecutableId::from_str(name)?;
 
             let metadata = fs::metadata(direntry.path())?;
             let modified = metadata.created()?;
@@ -189,16 +190,19 @@ mod tests {
     fn test_custom_usage_ordering() {
         let now = Instant::now();
         let before = Usage {
-            executable_id: 0xBAD,
+            executable_id: ExecutableId(0xBAD),
             instant: now,
         };
         let after = Usage {
-            executable_id: 0xFAD,
+            executable_id: ExecutableId(0xFAD),
             instant: now + Duration::from_secs(10),
         };
 
         // `BinaryHeap::pop()` returns the max element so the ordering is switched.
-        assert_eq!([&before, &after].iter().max().unwrap().executable_id, 0xBAD);
+        assert_eq!(
+            [&before, &after].iter().max().unwrap().executable_id,
+            ExecutableId(0xBAD)
+        );
         // Ensure that `Ord` and `PartialOrd` agree.
         assert_eq!(before.cmp(&after), before.partial_cmp(&after).unwrap());
     }
@@ -213,7 +217,7 @@ mod tests {
         // both when it's a cache miss and a cache hit.
         for _ in 0..2 {
             let manager_unwind_info =
-                manager.fetch_unwind_info(&PathBuf::from("/proc/self/exe"), 0xFABADA);
+                manager.fetch_unwind_info(&PathBuf::from("/proc/self/exe"), ExecutableId(0xFABADA));
             let manager_unwind_info = manager_unwind_info.unwrap();
             assert_eq!(unwind_info, manager_unwind_info);
         }
@@ -227,7 +231,7 @@ mod tests {
 
         // Cache unwind info.
         let manager_unwind_info =
-            manager.fetch_unwind_info(&PathBuf::from("/proc/self/exe"), 0xFABADA);
+            manager.fetch_unwind_info(&PathBuf::from("/proc/self/exe"), ExecutableId(0xFABADA));
         assert!(manager_unwind_info.is_ok());
         let manager_unwind_info = manager_unwind_info.unwrap();
         assert_eq!(unwind_info, manager_unwind_info);
@@ -242,7 +246,7 @@ mod tests {
 
         // Make sure the corrupted one gets replaced and things work.
         let manager_unwind_info =
-            manager.fetch_unwind_info(&PathBuf::from("/proc/self/exe"), 0xFABADA);
+            manager.fetch_unwind_info(&PathBuf::from("/proc/self/exe"), ExecutableId(0xFABADA));
         let manager_unwind_info = manager_unwind_info.unwrap();
         assert_eq!(unwind_info, manager_unwind_info);
     }

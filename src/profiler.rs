@@ -1193,7 +1193,7 @@ impl Profiler {
         for file_offset in page_steps {
             let key = page_key_t {
                 file_offset: file_offset & HIGH_PC_MASK,
-                executable_id,
+                executable_id: executable_id.into(),
             };
 
             let ret = bpf
@@ -1335,7 +1335,7 @@ impl Profiler {
         let res = Self::delete_bpf_unwind_info_map(
             native_unwinder,
             entry.get().bucket_id,
-            mapping.executable_id,
+            mapping.executable_id.into(),
             unwind_info_bucket_usage,
         );
         if res.is_err() {
@@ -1488,7 +1488,7 @@ impl Profiler {
                 load_address,
                 begin: mapping.start_addr,
                 end: mapping.end_addr,
-                executable_id: mapping.executable_id,
+                executable_id: mapping.executable_id.into(),
                 type_: if mapping.kind == ExecutableMappingType::Vdso {
                     MAPPING_TYPE_VDSO
                 } else {
@@ -1502,7 +1502,7 @@ impl Profiler {
                     return;
                 }
                 warn!(
-                    "error adding unwind information for executable {:x} due to {:?}",
+                    "error adding unwind information for executable 0x{} due to {:?}",
                     mapping.executable_id, e
                 );
                 // TODO: maybe cleanup written maps.
@@ -1592,7 +1592,7 @@ impl Profiler {
 
         let inner_map_and_id = Self::create_and_insert_unwind_info_map(
             &mut self.native_unwinder,
-            executable_id,
+            executable_id.into(),
             unwind_info.len(),
             &self.native_unwind_info_bucket_sizes,
             &mut self.native_unwind_state.unwind_info_bucket_usage,
@@ -1605,7 +1605,7 @@ impl Profiler {
                 Self::add_bpf_pages(
                     &self.native_unwinder,
                     &unwind_info,
-                    executable_id,
+                    executable_id.into(),
                     bucket_id,
                 );
                 let unwind_info_start_address = unwind_info.first().unwrap().pc;
@@ -1710,7 +1710,7 @@ impl Profiler {
                 let ret = Self::delete_bpf_unwind_info_map(
                     &mut self.native_unwinder,
                     entry.get().bucket_id,
-                    executable_id,
+                    executable_id.into(),
                     &mut self.native_unwind_state.unwind_info_bucket_usage,
                 );
                 if ret.is_err() {
@@ -1780,7 +1780,7 @@ impl Profiler {
                 }
 
                 warn!(
-                    "error adding unwind information for executable {:x} due to {:?}",
+                    "error adding unwind information for executable 0x{} due to {:?}",
                     executable_id, e
                 );
             }
@@ -1969,7 +1969,7 @@ impl Profiler {
                 }
                 procfs::process::MMapPath::Anonymous => {
                     mappings.push(ExecutableMapping {
-                        executable_id: 0, // Placeholder for JIT.
+                        executable_id: ExecutableId(0), // Placeholder for JIT.
                         build_id: None,
                         kind: ExecutableMappingType::Anonymous,
                         start_addr: map.address.0,
