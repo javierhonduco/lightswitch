@@ -1353,6 +1353,7 @@ dependencies = [
  "memmap2 0.9.5",
  "object",
  "ring",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
