@@ -20,7 +20,7 @@ pub enum CfaType {
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub enum RbpType {
     #[default]
-    Unknown = 0,
+    Unchanged = 0,
     CfaOffset = 1,
     Register = 2,
     Expression = 3,
@@ -51,6 +51,16 @@ impl CompactUnwindRow {
             pc: last_addr,
             cfa_type: CfaType::EndFdeMarker,
             ..Default::default()
+        }
+    }
+
+    pub fn frame_setup() -> CompactUnwindRow {
+        CompactUnwindRow {
+            pc: 0,
+            cfa_type: CfaType::FramePointerOffset,
+            rbp_type: RbpType::CfaOffset,
+            cfa_offset: 16,
+            rbp_offset: -16,
         }
     }
 }

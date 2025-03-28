@@ -103,7 +103,7 @@ struct unwinder_stats_t {
   u64 error_should_never_happen;
   u64 error_mapping_not_found;
   u64 error_mapping_does_not_contain_pc;
-  u64 error_chunk_not_found;
+  u64 error_page_not_found;
   u64 error_binary_search_exhausted_iterations;
   u64 error_sending_new_process_event;
   u64 error_cfa_offset_did_not_fit;

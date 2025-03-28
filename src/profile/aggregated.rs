@@ -56,7 +56,7 @@ impl RawAggregatedSample {
                 let file_offset = match objs.get(&mapping.executable_id) {
                     Some(obj) => obj.normalized_address(virtual_address, &mapping),
                     None => {
-                        error!("executable with id {} not found", mapping.executable_id);
+                        error!("executable with id 0x{} not found", mapping.executable_id);
                         None
                     }
                 };
@@ -86,7 +86,7 @@ impl RawAggregatedSample {
                 let file_offset = match objs.get(&mapping.executable_id) {
                     Some(obj) => obj.normalized_address(virtual_address, &mapping),
                     None => {
-                        error!("executable with id {} not found", mapping.executable_id);
+                        error!("executable with id 0x{} not found", mapping.executable_id);
                         None
                     }
                 };
