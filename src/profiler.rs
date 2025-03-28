@@ -1,7 +1,6 @@
 use libbpf_rs::MapImpl;
 use libbpf_rs::OpenObject;
 use libbpf_rs::RingBufferBuilder;
-use lightswitch_metadata::types::TaskKey;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
 use std::collections::hash_map::OccupiedEntry;
@@ -23,7 +22,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossbeam_channel::{select, tick, unbounded, Receiver, Sender};
-
 use itertools::Itertools;
 use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
@@ -57,6 +55,7 @@ use crate::util::executable_path;
 use crate::util::Architecture;
 use crate::util::{architecture, get_online_cpus, summarize_address_range};
 use lightswitch_metadata::metadata_provider::ThreadSafeGlobalMetadataProvider;
+use lightswitch_metadata::types::TaskKey;
 use lightswitch_object::{ExecutableId, ObjectFile};
 
 pub enum TracerEvent {
@@ -2117,6 +2116,9 @@ impl Profiler {
 #[cfg(test)]
 mod tests {
     use crate::profiler::*;
+    use crossbeam_channel::bounded;
+    use lightswitch_metadata::metadata_provider::GlobalMetadataProvider;
+    use std::sync::Mutex;
 
     #[test]
     fn test_bpf_mappings_creation_and_deletion() {
@@ -2164,7 +2166,12 @@ mod tests {
 
     #[test]
     fn test_bpf_cleanup() {
-        let mut profiler = Profiler::default();
+        let (_, stop_signal_receive) = bounded(1);
+        let mut profiler = Profiler::new(
+            ProfilerConfig::default(),
+            stop_signal_receive,
+            Arc::new(Mutex::new(GlobalMetadataProvider::default())),
+        );
         assert_eq!(
             profiler.native_unwinder.maps.exec_mappings.keys().count(),
             0
