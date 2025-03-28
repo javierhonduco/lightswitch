@@ -44,7 +44,6 @@ use crate::debug_info::DebugInfoManager;
 use crate::kernel::get_all_kernel_modules;
 use crate::kernel::KERNEL_PID;
 use crate::perf_events::setup_perf_event;
-use crate::process::Tid;
 use crate::process::{
     ExecutableMapping, ExecutableMappingType, ExecutableMappings, ObjectFileInfo, Pid, ProcessInfo,
     ProcessStatus,
@@ -485,7 +484,6 @@ impl Profiler {
     pub fn profile_pids(&mut self, pids: Vec<Pid>) {
         for pid in pids {
             self.filter_pids.insert(pid, true);
-            self.event_new_proc(pid, pid); // TODO (patnebe): Look into this
         }
     }
 
@@ -731,7 +729,7 @@ impl Profiler {
                 recv(self.new_proc_chan_receive) -> read => {
                         if let Ok(event) = read {
                             if event.type_ == event_type_EVENT_NEW_PROCESS {
-                                self.event_new_proc(event.pid, event.tid);
+                                self.event_new_proc(event.pid);
                                 // Ensure we only remove the rate limits only if the above works.
                                 // This is probably suited for a batched operation.
                                 // let _ = self
@@ -1685,7 +1683,7 @@ impl Profiler {
         self.filter_pids.contains_key(&pid)
     }
 
-    fn event_new_proc(&mut self, pid: Pid, tid: Tid) {
+    fn event_new_proc(&mut self, pid: Pid) {
         if !self.should_profile(pid) {
             return;
         }
@@ -1708,7 +1706,7 @@ impl Profiler {
         self.metadata_provider
             .lock()
             .unwrap()
-            .register_task(TaskKey { pid, tid });
+            .register_task(TaskKey { pid: pid, tid: pid }); // TODO: Revisit this
     }
 
     fn event_need_unwind_info(&mut self, pid: Pid, address: u64) {

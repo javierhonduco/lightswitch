@@ -441,7 +441,6 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       Event event = {
           .type = EVENT_NEED_UNWIND_INFO,
           .pid = per_process_id,
-          .tid = per_thread_id,
           .address = unwind_state->ip,
       };
       send_event(&event, ctx);
@@ -708,7 +707,6 @@ SEC("perf_event")
 int on_event(struct bpf_perf_event_data *ctx) {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   int per_process_id = pid_tgid >> 32;
-  int per_thread_id = pid_tgid;
 
   // There's no point in checking for the swapper process.
   if (per_process_id == 0) {
@@ -738,7 +736,6 @@ int on_event(struct bpf_perf_event_data *ctx) {
   Event event = {
       .type = EVENT_NEW_PROCESS,
       .pid = per_process_id,
-      .tid = per_thread_id,
   };
   send_event(&event, ctx);
   return 0;
