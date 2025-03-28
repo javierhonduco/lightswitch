@@ -210,12 +210,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     })
     .expect("Error setting Ctrl-C handler");
 
-    let mut p: Profiler = Profiler::new(
-        profiler_config,
-        stop_signal_receive,
-        metadata_provider.clone(),
-    );
-
     // Start a thread to stop the profiler if the killswitch is enabled
     let killswitch_ticker = tick(KILLSWITCH_POLL_INTERVAL);
     let killswitch_poll_thread = thread::Builder::new().name("killswitch-poll-thread".to_string());
@@ -227,6 +221,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
+    let mut p: Profiler = Profiler::new(
+        profiler_config,
+        stop_signal_receive,
+        metadata_provider.clone(),
+    );
     p.profile_pids(args.pids);
     let profile_duration = p.run(collector.clone());
 
