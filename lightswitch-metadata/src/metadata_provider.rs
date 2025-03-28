@@ -19,7 +19,7 @@ pub type ThreadSafeGlobalMetadataProvider = Arc<Mutex<GlobalMetadataProvider>>;
 
 impl Default for GlobalMetadataProvider {
     fn default() -> Self {
-        Self::new(NonZeroUsize::new(1000).unwrap(), Vec::new(), Vec::new())
+        Self::new(NonZeroUsize::new(5000).unwrap(), Vec::new(), Vec::new())
     }
 }
 
