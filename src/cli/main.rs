@@ -227,8 +227,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    let mut p: Profiler = Profiler::new(profiler_config, stop_signal_receive);
-
     p.profile_pids(args.pids);
     let profile_duration = p.run(collector.clone());
 

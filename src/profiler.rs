@@ -22,7 +22,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
+use crossbeam_channel::{select, tick, unbounded, Receiver, Sender};
 
 use itertools::Itertools;
 use libbpf_rs::num_possible_cpus;
@@ -204,14 +204,6 @@ pub enum AddProcessError {
     Go,
     #[error("procfs race")]
     ProcfsRace,
-}
-
-impl Default for Profiler {
-    fn default() -> Self {
-        let (_stop_signal_send, stop_signal_receive) = bounded(1);
-
-        Self::new(ProfilerConfig::default(), stop_signal_receive)
-    }
 }
 
 impl Drop for Profiler {
@@ -1764,11 +1756,6 @@ impl Profiler {
                 // probabaly a procfs race
             }
         }
-
-        self.metadata_provider
-            .lock()
-            .unwrap()
-            .register_task(TaskKey { pid: pid, tid: pid }); // TODO: Revisit this
     }
 
     fn event_need_unwind_info(&mut self, pid: Pid, address: u64) {
@@ -2057,6 +2044,23 @@ impl Profiler {
             last_used: Instant::now(),
         };
         self.procs.clone().write().insert(pid, proc_info);
+
+        for thread in proc.tasks().map_err(|_| AddProcessError::ProcfsRace)? {
+            match thread {
+                Ok(thread) => {
+                    self.metadata_provider
+                        .lock()
+                        .unwrap()
+                        .register_task(TaskKey {
+                            pid,
+                            tid: thread.tid,
+                        });
+                }
+                Err(e) => {
+                    warn!("failed to get thread info due to {:?}", e);
+                }
+            }
+        }
 
         Ok(())
     }
