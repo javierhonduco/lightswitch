@@ -16,12 +16,12 @@ use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossbeam_channel::{select, tick, unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
 use itertools::Itertools;
 use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
@@ -54,7 +54,9 @@ use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::executable_path;
 use crate::util::Architecture;
 use crate::util::{architecture, get_online_cpus, summarize_address_range};
-use lightswitch_metadata::metadata_provider::ThreadSafeGlobalMetadataProvider;
+use lightswitch_metadata::metadata_provider::{
+    GlobalMetadataProvider, ThreadSafeGlobalMetadataProvider,
+};
 use lightswitch_metadata::types::TaskKey;
 use lightswitch_object::{ExecutableId, ObjectFile};
 
@@ -203,6 +205,19 @@ pub enum AddProcessError {
     Go,
     #[error("procfs race")]
     ProcfsRace,
+}
+
+impl Default for Profiler {
+    fn default() -> Self {
+        let (_stop_signal_send, stop_signal_receive) = bounded(1);
+        let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+
+        Self::new(
+            ProfilerConfig::default(),
+            stop_signal_receive,
+            metadata_provider,
+        )
+    }
 }
 
 impl Drop for Profiler {
@@ -2166,12 +2181,7 @@ mod tests {
 
     #[test]
     fn test_bpf_cleanup() {
-        let (_, stop_signal_receive) = bounded(1);
-        let mut profiler = Profiler::new(
-            ProfilerConfig::default(),
-            stop_signal_receive,
-            Arc::new(Mutex::new(GlobalMetadataProvider::default())),
-        );
+        let mut profiler = Profiler::default();
         assert_eq!(
             profiler.native_unwinder.maps.exec_mappings.keys().count(),
             0
