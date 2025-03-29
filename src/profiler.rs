@@ -2131,8 +2131,6 @@ impl Profiler {
 #[cfg(test)]
 mod tests {
     use crate::profiler::*;
-    use crossbeam_channel::bounded;
-    use lightswitch_metadata::metadata_provider::GlobalMetadataProvider;
 
     #[test]
     fn test_bpf_mappings_creation_and_deletion() {

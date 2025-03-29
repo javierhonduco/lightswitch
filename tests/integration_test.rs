@@ -10,9 +10,7 @@ use lightswitch::collector::{AggregatorCollector, Collector};
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::AggregatedProfile;
 use lightswitch::profiler::{Profiler, ProfilerConfig};
-use lightswitch_metadata::metadata_provider::{
-    GlobalMetadataProvider, ThreadSafeGlobalMetadataProvider,
-};
+use lightswitch_metadata::metadata_provider::GlobalMetadataProvider;
 
 /// Find the `nix` binary either in the $PATH or in the below hardcoded location.
 fn nix_bin() -> String {
