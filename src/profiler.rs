@@ -16,7 +16,7 @@ use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -54,6 +54,10 @@ use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::executable_path;
 use crate::util::Architecture;
 use crate::util::{architecture, get_online_cpus, summarize_address_range};
+use lightswitch_metadata::metadata_provider::{
+    GlobalMetadataProvider, ThreadSafeGlobalMetadataProvider,
+};
+use lightswitch_metadata::types::TaskKey;
 use lightswitch_object::{ExecutableId, ObjectFile};
 
 pub enum TracerEvent {
@@ -145,6 +149,7 @@ pub struct Profiler {
     max_native_unwind_info_size_mb: i32,
     unwind_info_manager: UnwindInfoManager,
     use_ring_buffers: bool,
+    metadata_provider: ThreadSafeGlobalMetadataProvider,
 }
 
 pub struct ProfilerConfig {
@@ -205,8 +210,13 @@ pub enum AddProcessError {
 impl Default for Profiler {
     fn default() -> Self {
         let (_stop_signal_send, stop_signal_receive) = bounded(1);
+        let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
 
-        Self::new(ProfilerConfig::default(), stop_signal_receive)
+        Self::new(
+            ProfilerConfig::default(),
+            stop_signal_receive,
+            metadata_provider,
+        )
     }
 }
 
@@ -392,7 +402,11 @@ impl Profiler {
         );
     }
 
-    pub fn new(profiler_config: ProfilerConfig, stop_signal_receive: Receiver<()>) -> Self {
+    pub fn new(
+        profiler_config: ProfilerConfig,
+        stop_signal_receive: Receiver<()>,
+        metadata_provider: ThreadSafeGlobalMetadataProvider,
+    ) -> Self {
         debug!(
             "base cache directory {}",
             profiler_config.cache_dir_base.display()
@@ -531,13 +545,13 @@ impl Profiler {
             max_native_unwind_info_size_mb: profiler_config.max_native_unwind_info_size_mb,
             unwind_info_manager: UnwindInfoManager::new(&unwind_cache_dir, None),
             use_ring_buffers: profiler_config.use_ring_buffers,
+            metadata_provider,
         }
     }
 
     pub fn profile_pids(&mut self, pids: Vec<Pid>) {
         for pid in pids {
             self.filter_pids.insert(pid, true);
-            self.event_new_proc(pid);
         }
     }
 
@@ -2044,6 +2058,23 @@ impl Profiler {
             last_used: Instant::now(),
         };
         self.procs.clone().write().insert(pid, proc_info);
+
+        for thread in proc.tasks().map_err(|_| AddProcessError::ProcfsRace)? {
+            match thread {
+                Ok(thread) => {
+                    self.metadata_provider
+                        .lock()
+                        .unwrap()
+                        .register_task(TaskKey {
+                            pid,
+                            tid: thread.tid,
+                        });
+                }
+                Err(e) => {
+                    warn!("failed to get thread info due to {:?}", e);
+                }
+            }
+        }
 
         Ok(())
     }
