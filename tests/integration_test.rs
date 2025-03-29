@@ -111,8 +111,7 @@ fn test_integration() {
         ..Default::default()
     };
     let (_stop_signal_send, stop_signal_receive) = bounded(1);
-    let metadata_provider =
-        Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+    let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
     let mut p = Profiler::new(profiler_config, stop_signal_receive, metadata_provider);
     p.profile_pids(vec![cpp_proc.pid()]);
     p.run(collector.clone());
