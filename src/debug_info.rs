@@ -85,6 +85,7 @@ impl DebugInfoBackendFilesystem {
 
 #[derive(Debug)]
 pub struct DebugInfoBackendRemote {
+    pub token: Option<String>,
     pub server_url: String,
     pub query_client: reqwest::blocking::Client,
     pub upload_client: reqwest::blocking::Client,
@@ -92,11 +93,13 @@ pub struct DebugInfoBackendRemote {
 
 impl DebugInfoBackendRemote {
     pub fn new(
+        token: Option<String>,
         server_url: String,
         query_timeout: Duration,
         upload_timeout: Duration,
     ) -> anyhow::Result<Self> {
         Ok(DebugInfoBackendRemote {
+            token,
             server_url,
             query_client: reqwest::blocking::Client::builder()
                 .timeout(query_timeout)
@@ -156,7 +159,7 @@ impl DebugInfoBackendRemote {
         build_id: &BuildId,
         debug_info: &Path,
     ) -> anyhow::Result<()> {
-        let response = self
+        let mut request = self
             .upload_client
             .post(format!(
                 "{}/debuginfo/new/{}/{}",
@@ -164,8 +167,13 @@ impl DebugInfoBackendRemote {
                 name,
                 build_id
             ))
-            .body(File::open(debug_info)?)
-            .send()?;
+            .body(File::open(debug_info)?);
+
+        if let Some(token) = &self.token {
+            request = request.bearer_auth(token);
+        }
+
+        let response = request.send()?;
 
         if !response.status().is_success() {
             return Err(anyhow!("debuginfo upload failed with {:?}", response));

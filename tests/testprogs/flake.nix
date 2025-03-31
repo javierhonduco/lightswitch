@@ -110,7 +110,7 @@
             ];
           };
 
-          test-go = pkgs.stdenv.mkDerivation {
+          test-go-progs = pkgs.stdenv.mkDerivation {
             name = "build-test-go-prog";
             src = ./.;
             buildPhase = ''
@@ -127,17 +127,17 @@
             ];
           };
 
-          test-cgo = pkgs.stdenv.mkDerivation {
+          test-cgo-progs = pkgs.stdenv.mkDerivation {
             name = "build-test-cgo-prog";
             src = ./.;
             buildPhase = ''
               export HOME=$TMPDIR
               cd src/cgo
-              go build -o main-cgo main_cgo.go
+              go build -o main main.go
             '';
             installPhase = ''
               mkdir -p $out/bin
-              cp main-cgo $out/bin
+              cp main $out/bin
             '';
             buildInputs = [
               pkgs.go
@@ -158,6 +158,8 @@
           packages = rec {
             default = test-cpp-progs;
             cpp-progs = test-cpp-progs;
+            go-progs = test-go-progs;
+            cgo-progs = test-cgo-progs;
           };
         }
       );

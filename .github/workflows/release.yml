@@ -24,9 +24,9 @@ jobs:
         contents: read
 
     steps:
-    - uses: actions/checkout@main
-    - uses: DeterminateSystems/nix-installer-action@main
-    - uses: DeterminateSystems/flakehub-cache-action@main
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+    - uses: DeterminateSystems/nix-installer-action@e50d5f73bfe71c2dd0aa4218de8f4afa59f8f81d # v16
+    - uses: DeterminateSystems/flakehub-cache-action@146f476c94460cb634f9ade79470fcbc3f7e5b36 # v1
     - name: Set up nix dev env
       run: nix develop --command echo 0
     - name: Run `cargo test`
@@ -34,14 +34,14 @@ jobs:
     - name: Build container image
       run: nix build .#container
     - name: Upload container
-      uses: actions/upload-artifact@main
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
         name: lightswitch-container-${{ matrix.config.target }}
         path: ./result
     - name: Build `lightswitch` statically linked with glibc
       run: nix develop --ignore-environment --keep TARGET --command bash -c 'RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target $TARGET'
     - name: Upload static binary
-      uses: actions/upload-artifact@main
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
         name: lightswitch-static-glibc-${{ matrix.config.target }}
         path: ./target/${{ matrix.config.target }}/release/lightswitch
@@ -52,7 +52,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
       - name: Display artifacts structure
         run: tree -h
       - name: Rename artifacts
@@ -64,7 +64,7 @@ jobs:
           cp lightswitch-static-glibc-aarch64-unknown-linux-gnu/lightswitch renamed/lightswitch-static-glibc-aarch64-unknown-linux-gnu
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
         with:
           files: |
             renamed/lightswitch-container-x86_64-unknown-linux-gnu

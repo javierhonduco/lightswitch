@@ -72,14 +72,14 @@ impl ObjectFile {
         let gnu_build_id = object.build_id()?;
 
         if let Some(data) = gnu_build_id {
-            return Ok(BuildId::gnu_from_bytes(data));
+            return Ok(BuildId::gnu_from_bytes(data)?);
         }
 
         // Golang (the Go toolchain does not interpret these bytes as we do).
         for section in object.sections() {
             if section.name()? == ".note.go.buildid" {
                 if let Ok(data) = section.data() {
-                    return Ok(BuildId::go_from_bytes(data));
+                    return Ok(BuildId::go_from_bytes(data)?);
                 }
             }
         }
@@ -88,7 +88,7 @@ impl ObjectFile {
         let Some(code_hash) = code_hash(object) else {
             return Err(anyhow!("code hash is None"));
         };
-        Ok(BuildId::sha256_from_digest(&code_hash))
+        Ok(BuildId::sha256_from_digest(&code_hash)?)
     }
 
     /// Returns whether the object has debug symbols.

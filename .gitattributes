@@ -1,1 +1,2 @@
 vmlinux_*.h linguist-vendored
+tests/testprogs/* linguist-vendored

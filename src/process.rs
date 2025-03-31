@@ -4,6 +4,7 @@ use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::process;
+use std::time::Instant;
 
 use tracing::debug;
 
@@ -25,16 +26,17 @@ pub enum ExecutableMappingType {
     Kernel,
 }
 
-#[derive(Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum ProcessStatus {
     Running,
     Exited,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ProcessInfo {
     pub status: ProcessStatus,
     pub mappings: ExecutableMappings,
+    pub last_used: Instant,
 }
 
 /// Stores information for a executable mapping with all
@@ -54,7 +56,7 @@ pub struct ExecutableMapping {
     pub soft_delete: bool,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ExecutableMappings(pub Vec<ExecutableMapping>);
 
 impl ExecutableMappings {
@@ -234,7 +236,7 @@ mod tests {
         };
 
         let mapping = ExecutableMapping {
-            executable_id: 0x0,
+            executable_id: ExecutableId(0x0),
             build_id: None,
             kind: ExecutableMappingType::FileBacked,
             start_addr: 0x100,
