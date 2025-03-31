@@ -19,7 +19,15 @@
           pkgs = import nixpkgs {
             inherit system overlays;
           };
+          # Pinning to a previous release due to https://github.com/NixOS/nixpkgs/issues/373516.
           elfutils' = (pkgs.elfutils.override { enableDebuginfod = false; }).overrideAttrs (attrs: {
+            version = "0.191";
+            src = pkgs.fetchurl {
+              url = "https://sourceware.org/elfutils/ftp/0.191/elfutils-0.191.tar.bz2";
+              hash = "sha256-33bbcTZtHXCDZfx6bGDKSDmPFDZ+sriVTvyIlxR62HE=";
+            };
+            doCheck = false;
+            doInstallCheck = false;
             configureFlags = attrs.configureFlags ++ [ "--without-zstd" ];
           });
           buildInputs = with pkgs; [

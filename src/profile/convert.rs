@@ -153,7 +153,7 @@ pub fn to_pprof(
                         obj.path
                             .to_string_lossy()
                             .split('/')
-                            .last()
+                            .next_back()
                             .unwrap_or("could not get executable name"),
                         &build_id,
                     );
