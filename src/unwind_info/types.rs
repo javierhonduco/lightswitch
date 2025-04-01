@@ -30,7 +30,7 @@ pub enum RbpType {
 
 #[repr(u16)]
 pub enum PltType {
-    // Unknown = 0,
+    Unknown = 0,
     Plt1 = 1,
     Plt2 = 2,
 }
