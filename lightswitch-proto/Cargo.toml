@@ -8,7 +8,7 @@ repository = "https://github.com/javierhonduco/lightswitch"
 
 [dependencies]
 prost = "0.13"
-anyhow = { workspace = true }
+thiserror = { workspace = true }
 
 [build-dependencies]
 prost-build = "0.13.5"
