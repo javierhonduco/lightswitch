@@ -1,13 +1,11 @@
+use std::io;
 use std::os::raw::c_int;
-
-use anyhow::{anyhow, Result};
-use errno::errno;
 
 use perf_event_open_sys as sys;
 use perf_event_open_sys::bindings::perf_event_attr;
 
 /// # Safety
-pub unsafe fn setup_perf_event(cpu: i32, sample_freq: u64) -> Result<c_int> {
+pub unsafe fn setup_perf_event(cpu: i32, sample_freq: u64) -> Result<c_int, io::Error> {
     let mut attrs: perf_event_attr = perf_event_open_sys::bindings::perf_event_attr {
         size: std::mem::size_of::<sys::bindings::perf_event_attr>() as u32,
         type_: sys::bindings::PERF_TYPE_SOFTWARE,
@@ -25,7 +23,7 @@ pub unsafe fn setup_perf_event(cpu: i32, sample_freq: u64) -> Result<c_int> {
     ) as c_int;
 
     if ret < 0 {
-        return Err(anyhow!("setup_perf_event failed with errno {}", errno()));
+        return Err(io::Error::last_os_error());
     }
 
     Ok(ret)
