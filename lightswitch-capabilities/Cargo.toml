@@ -12,7 +12,6 @@ anyhow = { workspace = true}
 thiserror = { workspace = true}
 libbpf-rs = { workspace = true}
 perf-event-open-sys = { workspace = true}
-errno = { workspace = true}
 tracing = { workspace = true}
 nix = { workspace = true, features = ["feature"] }
 

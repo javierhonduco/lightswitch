@@ -1283,7 +1283,6 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "ctrlc",
- "errno",
  "gimli",
  "glob",
  "inferno",
@@ -1321,7 +1320,6 @@ name = "lightswitch-capabilities"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "errno",
  "glob",
  "libbpf-cargo",
  "libbpf-rs",

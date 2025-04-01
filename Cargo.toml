@@ -21,7 +21,6 @@ object = "0.36.7"
 libbpf-rs = { version = "0.25.0-beta.1", features = ["static"] }
 tracing = "0.1.41"
 thiserror = "2.0.12"
-errno = "0.3.10"
 perf-event-open-sys = "4.0.0"
 procfs = "0.17.0"
 nix = { version = "0.29.0" }
@@ -58,7 +57,6 @@ libbpf-rs = { workspace = true }
 tracing = { workspace = true }
 perf-event-open-sys = { workspace = true }
 thiserror = { workspace = true }
-errno = { workspace = true }
 procfs = { workspace = true }
 nix = { workspace = true, features = ["user"] }
 parking_lot = { version = "0.12.3", features = ["deadlock_detection"] }
