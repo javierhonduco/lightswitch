@@ -58,7 +58,7 @@ use lightswitch_metadata::metadata_provider::{
     GlobalMetadataProvider, ThreadSafeGlobalMetadataProvider,
 };
 use lightswitch_metadata::types::TaskKey;
-use lightswitch_object::{ExecutableId, ObjectFile};
+use lightswitch_object::{ExecutableId, ObjectFile, Runtime};
 
 pub enum TracerEvent {
     ProcessExit(Pid),
@@ -201,8 +201,6 @@ impl Default for ProfilerConfig {
 pub enum AddProcessError {
     #[error("could not evict process information")]
     Eviction,
-    #[error("go applications are not supported")]
-    Go,
     #[error("procfs race")]
     ProcfsRace,
 }
@@ -650,7 +648,7 @@ impl Profiler {
                                 .iter()
                                 .map(|e| {
                                     debug!(
-                                        "kernel module {} 0x{:x} - 0x{:x}",
+                                        "adding kernel module {} [0x{:x} - 0x{:x})",
                                         e.name, e.start, e.end
                                     );
                                     ExecutableMapping {
@@ -685,6 +683,7 @@ impl Profiler {
                             references: 1,
                             native_unwind_info_size: None,
                             is_vdso: false,
+                            runtime: Runtime::CLike,
                         },
                     );
                 }
@@ -1511,7 +1510,11 @@ impl Profiler {
             });
 
             // Fetch unwind info and store it in in BPF maps.
-            if let Err(e) = self.add_unwind_information_for_executable(mapping.executable_id) {
+            if let Err(e) = self.add_unwind_information_for_executable(
+                mapping.executable_id,
+                mapping.start_addr,
+                mapping.end_addr,
+            ) {
                 if e == AddUnwindInformationError::NoUnwindInfoKnownNaughty {
                     return;
                 }
@@ -1544,31 +1547,58 @@ impl Profiler {
     fn add_unwind_information_for_executable(
         &mut self,
         executable_id: ExecutableId,
+        start_address: u64,
+        end_address: u64,
     ) -> Result<AddUnwindInformationResult, AddUnwindInformationError> {
         if self.native_unwind_state.is_known(executable_id) {
             return Ok(AddUnwindInformationResult::AlreadyLoaded);
         }
-
         let object_files = self.object_files.read();
         let executable_info = object_files.get(&executable_id).unwrap();
         let executable_path_open = executable_info.open_file_path();
         let executable_path = executable_info.path.to_string_lossy().to_string();
         let needs_synthesis = executable_info.is_vdso && architecture() == Architecture::Arm64;
+        let runtime = executable_info.runtime.clone();
         std::mem::drop(object_files);
 
-        let unwind_info = if needs_synthesis {
-            debug!("synthetising arm64 unwind information using frame pointers for vDSO");
-            Ok(vec![CompactUnwindRow::frame_setup()])
-        } else {
-            let _span = span!(
-                Level::DEBUG,
-                "calling in_memory_unwind_info",
-                "{}",
-                executable_path
-            )
-            .entered();
-            self.unwind_info_manager
-                .fetch_unwind_info(&executable_path_open, executable_id)
+        let unwind_info = match runtime {
+            Runtime::Go(stop_frames) => {
+                let mut unwind_info = Vec::new();
+
+                // For each bottom frame, add a end of function marker to stop unwinding
+                // covering the exact size of the function, assuming the function after it
+                // has frame pointers.
+                for stop_frame in stop_frames {
+                    unwind_info.push(CompactUnwindRow::stop_unwinding(stop_frame.start_address));
+                    unwind_info.push(CompactUnwindRow::frame_setup(stop_frame.end_address));
+                }
+
+                // Go since pretty early on compiles with frame pointers by default.
+                unwind_info.push(CompactUnwindRow::frame_setup(start_address));
+                unwind_info.push(CompactUnwindRow::stop_unwinding(end_address));
+
+                unwind_info.sort_by_key(|e| e.pc);
+                Ok(unwind_info)
+            }
+            Runtime::CLike => {
+                if needs_synthesis {
+                    debug!("synthetising arm64 unwind information using frame pointers for vDSO");
+                    Ok(vec![
+                        CompactUnwindRow::frame_setup(start_address),
+                        CompactUnwindRow::stop_unwinding(end_address),
+                    ])
+                } else {
+                    let _span = span!(
+                        Level::DEBUG,
+                        "calling in_memory_unwind_info",
+                        "{}",
+                        executable_path
+                    )
+                    .entered();
+                    self.unwind_info_manager
+                        .fetch_unwind_info(&executable_path_open, executable_id)
+                }
+            }
         };
 
         let unwind_info = match unwind_info {
@@ -1779,16 +1809,16 @@ impl Profiler {
             return;
         };
 
-        let executable_id = if let Some(mapping) = proc_info.mappings.for_address(address) {
-            Some(mapping.executable_id)
+        let mapping_data = if let Some(mapping) = proc_info.mappings.for_address(address) {
+            Some((mapping.executable_id, mapping.start_addr, mapping.end_addr))
         } else {
             info!("event_need_unwind_info, mapping not known");
             None
         };
         std::mem::drop(procs);
 
-        if let Some(executable_id) = executable_id {
-            if let Err(e) = self.add_unwind_information_for_executable(executable_id) {
+        if let Some((executable_id, s, e)) = mapping_data {
+            if let Err(e) = self.add_unwind_information_for_executable(executable_id, s, e) {
                 if e == AddUnwindInformationError::NoUnwindInfoKnownNaughty {
                     return;
                 }
@@ -1892,18 +1922,13 @@ impl Profiler {
                         }
                     };
 
-                    // Disable profiling Go applications as they are not properly supported yet.
-                    // Among other things, blazesym doesn't support symbolizing Go binaries.
-                    if object_file.is_go() {
-                        // todo: deal with CGO and friends
-                        return Err(AddProcessError::Go);
-                    }
-
                     let build_id = object_file.build_id();
                     let Ok(executable_id) = object_file.id() else {
                         info!("could not get id for object file: {}", exe_path.display());
                         continue;
                     };
+
+                    debug!("Path {:?} executable_id 0x{}", path, executable_id);
 
                     // Find the first address for a file backed mapping. Some loaders split
                     // the .rodata section in their own non-executable section, which we need
@@ -1970,6 +1995,7 @@ impl Profiler {
                                     references: 1,
                                     native_unwind_info_size: None,
                                     is_vdso: false,
+                                    runtime: object_file.runtime(),
                                 });
                             }
                             Err(e) => {
@@ -2031,6 +2057,7 @@ impl Profiler {
                                 references: 1,
                                 native_unwind_info_size: None,
                                 is_vdso: true,
+                                runtime: Runtime::CLike,
                             },
                         );
                         mappings.push(ExecutableMapping {

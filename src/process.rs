@@ -11,6 +11,7 @@ use tracing::debug;
 use lightswitch_object::BuildId;
 use lightswitch_object::ElfLoad;
 use lightswitch_object::ExecutableId;
+use lightswitch_object::Runtime;
 
 pub type Pid = i32;
 
@@ -122,6 +123,7 @@ pub struct ObjectFileInfo {
     pub references: i64,
     pub native_unwind_info_size: Option<u64>,
     pub is_vdso: bool,
+    pub runtime: Runtime,
 }
 
 impl Clone for ObjectFileInfo {
@@ -134,6 +136,7 @@ impl Clone for ObjectFileInfo {
             references: self.references,
             native_unwind_info_size: self.native_unwind_info_size,
             is_vdso: self.is_vdso,
+            runtime: self.runtime.clone(),
         }
     }
 }
@@ -213,6 +216,7 @@ mod tests {
             references: 1,
             native_unwind_info_size: None,
             is_vdso: false,
+            runtime: Runtime::CLike,
         };
 
         remove_file(file_path).unwrap();
@@ -233,6 +237,7 @@ mod tests {
             references: 0,
             native_unwind_info_size: None,
             is_vdso: false,
+            runtime: Runtime::CLike,
         };
 
         let mapping = ExecutableMapping {
