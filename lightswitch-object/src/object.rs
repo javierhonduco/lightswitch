@@ -14,6 +14,7 @@ use object::FileKind;
 use object::Object;
 use object::ObjectKind;
 use object::ObjectSection;
+use object::ObjectSymbol;
 
 use crate::{BuildId, ExecutableId};
 
@@ -24,6 +25,21 @@ pub struct ElfLoad {
     pub p_offset: u64,
     pub p_vaddr: u64,
     pub p_filesz: u64,
+}
+
+#[derive(Clone)]
+pub enum Runtime {
+    /// C, C++, Rust, Fortran.
+    CLike,
+    /// Golang.
+    Go(Vec<StopUnwindingFrames>),
+}
+
+#[derive(Debug, Clone)]
+pub struct StopUnwindingFrames {
+    pub name: String,
+    pub start_address: u64,
+    pub end_address: u64,
 }
 
 #[derive(Debug)]
@@ -100,6 +116,14 @@ impl ObjectFile {
         self.object.kind() == ObjectKind::Dynamic
     }
 
+    pub fn runtime(&self) -> Runtime {
+        if self.is_go() {
+            Runtime::Go(self.go_stop_unwinding_frames())
+        } else {
+            Runtime::CLike
+        }
+    }
+
     pub fn is_go(&self) -> bool {
         for section in self.object.sections() {
             if let Ok(section_name) = section.name() {
@@ -112,6 +136,31 @@ impl ObjectFile {
             }
         }
         false
+    }
+
+    pub fn go_stop_unwinding_frames(&self) -> Vec<StopUnwindingFrames> {
+        let mut r = Vec::new();
+
+        for symbol in self.object.symbols() {
+            let Ok(name) = symbol.name() else { continue };
+            for func in [
+                "runtime.mcall",
+                "runtime.goexit",
+                "runtime.mstart",
+                "runtime.systemstack",
+            ] {
+                // In some occasions functions might get some suffixes added to them like `runtime.mcall0`.
+                if name.contains(func) {
+                    r.push(StopUnwindingFrames {
+                        name: name.to_string(),
+                        start_address: symbol.address(),
+                        end_address: symbol.address() + symbol.size(),
+                    });
+                }
+            }
+        }
+
+        r
     }
 
     pub fn elf_load_segments(&self) -> Result<Vec<ElfLoad>> {

@@ -46,7 +46,7 @@ pub struct CompactUnwindRow {
 }
 
 impl CompactUnwindRow {
-    pub fn end_of_function_marker(last_addr: u64) -> CompactUnwindRow {
+    pub fn stop_unwinding(last_addr: u64) -> CompactUnwindRow {
         CompactUnwindRow {
             pc: last_addr,
             cfa_type: CfaType::EndFdeMarker,
@@ -54,9 +54,9 @@ impl CompactUnwindRow {
         }
     }
 
-    pub fn frame_setup() -> CompactUnwindRow {
+    pub fn frame_setup(pc: u64) -> CompactUnwindRow {
         CompactUnwindRow {
-            pc: 0,
+            pc,
             cfa_type: CfaType::FramePointerOffset,
             rbp_type: RbpType::CfaOffset,
             cfa_offset: 16,
