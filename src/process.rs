@@ -180,7 +180,7 @@ impl ObjectFileInfo {
         let offset = virtual_address - mapping.start_addr + mapping.offset;
 
         for segment in &self.elf_load_segments {
-            let address_range = segment.p_vaddr..(segment.p_vaddr + segment.p_filesz);
+            let address_range = segment.p_offset..(segment.p_offset + segment.p_filesz);
             if address_range.contains(&offset) {
                 return Some(offset - segment.p_offset + segment.p_vaddr);
             }
