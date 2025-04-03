@@ -1,12 +1,24 @@
+use std::fmt;
+
 use crate::unwind_info::types::CompactUnwindRow;
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub struct Page {
     pub address: u64,
     /// Low index in the unwind table. Inclusive.
     pub low_index: u32,
     /// High index in the unwind table. Not inclusive.
     pub high_index: u32,
+}
+
+impl fmt::Debug for Page {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Page")
+            .field("address", &format_args!("0x{:x}", self.address))
+            .field("low_index", &self.low_index)
+            .field("high_index", &self.high_index)
+            .finish()
+    }
 }
 
 /// Splits a slice of unwind info in 16 bit pages.
@@ -18,37 +30,51 @@ pub struct Page {
 /// which is enough as the upper 16 bits are unused).
 pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
     let page_size_bits = 16;
-    let low_bits_mask = u64::pow(2, page_size_bits) - 1;
+    let page_size = 2_u64.pow(page_size_bits);
+    let low_bits_mask = page_size - 1;
     let high_bits_mask = u64::MAX ^ low_bits_mask;
 
-    let mut pages = vec![];
-    let mut curr_page_id = None;
+    let mut pages = Vec::new();
+    let mut prev_high_pc = None;
     let mut prev_index = 0;
 
     for (i, row) in unwind_info.iter().enumerate() {
-        let pc = row.pc;
-        let pc_high = pc & high_bits_mask;
-        match curr_page_id {
+        let high_pc = row.pc & high_bits_mask;
+        match prev_high_pc {
             None => {
                 // First one we see.
-                curr_page_id = Some(pc_high);
+                prev_high_pc = Some(high_pc);
             }
-            Some(current_page_id) => {
-                if current_page_id != pc_high {
+            Some(prev_pc_high) => {
+                // There's a gap larger than the page size, we need to insert pages that map
+                // to the same range of unwind information rows.
+                if prev_pc_high + page_size < high_pc {
+                    for address in (prev_pc_high..high_pc).step_by(page_size as usize) {
+                        pages.push(Page {
+                            address,
+                            low_index: prev_index.try_into().unwrap(),
+                            high_index: i.try_into().unwrap(),
+                        });
+                    }
+                    prev_index = i;
+                    prev_high_pc = Some(high_pc);
+                // If the high PC changes, add it.
+                } else if prev_pc_high != high_pc {
                     pages.push(Page {
-                        address: current_page_id,
+                        address: prev_pc_high,
                         low_index: prev_index.try_into().unwrap(),
                         high_index: i.try_into().unwrap(),
                     });
                     prev_index = i;
-                    curr_page_id = Some(pc_high);
+                    prev_high_pc = Some(high_pc);
                 }
+                // Nothing to do if the higher bits of the PC don't change.
             }
         }
     }
 
     // Add last page.
-    if let Some(id) = curr_page_id {
+    if let Some(id) = prev_high_pc {
         pages.push(Page {
             address: id,
             low_index: prev_index.try_into().unwrap(),
@@ -81,6 +107,7 @@ mod tests {
             }]
         );
 
+        let row = CompactUnwindRow::default();
         let unwind_info = vec![
             CompactUnwindRow { pc: 0xf7527, ..row },
             CompactUnwindRow { pc: 0xf7530, ..row },
@@ -104,15 +131,63 @@ mod tests {
             pages,
             vec![
                 Page {
-                    address: 983040,
+                    address: 0xf0000,
                     low_index: 0,
-                    high_index: 4,
+                    high_index: 4
                 },
                 Page {
-                    address: 1114112,
-                    low_index: 4,
-                    high_index: 6,
+                    address: 0x100000,
+                    low_index: 0,
+                    high_index: 4
                 },
+                Page {
+                    address: 0x110000,
+                    low_index: 4,
+                    high_index: 6
+                }
+            ]
+        );
+
+        let unwind_info = vec![
+            CompactUnwindRow { pc: 0x0, ..row },
+            CompactUnwindRow {
+                pc: 2_u64.pow(16),
+                ..row
+            },
+            CompactUnwindRow {
+                pc: 4 * 2_u64.pow(16),
+                ..row
+            },
+        ];
+        let pages = to_pages(&unwind_info);
+        assert_eq!(
+            pages,
+            vec![
+                Page {
+                    address: 0x0,
+                    low_index: 0,
+                    high_index: 1
+                },
+                Page {
+                    address: 0x10000,
+                    low_index: 1,
+                    high_index: 2
+                },
+                Page {
+                    address: 0x20000,
+                    low_index: 1,
+                    high_index: 2
+                },
+                Page {
+                    address: 0x30000,
+                    low_index: 1,
+                    high_index: 2
+                },
+                Page {
+                    address: 0x40000,
+                    low_index: 2,
+                    high_index: 3
+                }
             ]
         );
 
