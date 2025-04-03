@@ -3,20 +3,24 @@ package main
 import "C"
 import "fmt"
 
+//go:noinline
 func top1() {
 	for i := 0; i < 10000; i++ {
 		fmt.Println("top1")
 	}
 }
 
+//go:noinline
 func c1() {
 	top1()
 }
 
+//go:noinline
 func b1() {
 	c1()
 }
 
+//go:noinline
 func a1() {
 	b1()
 }
