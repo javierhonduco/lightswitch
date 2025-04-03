@@ -1358,9 +1358,9 @@ dependencies = [
 name = "lightswitch-proto"
 version = "0.1.1"
 dependencies = [
- "anyhow",
  "prost",
  "prost-build",
+ "thiserror 2.0.12",
 ]
 
 [[package]]

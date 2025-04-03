@@ -8,8 +8,7 @@ pub mod pprof {
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
-
-use anyhow::{anyhow, Result};
+use thiserror;
 
 pub struct PprofBuilder {
     time_nanos: i64,
@@ -36,6 +35,30 @@ pub enum LabelStringOrNumber {
     String(String),
     /// Value and unit.
     Number(i64, String),
+}
+
+#[derive(Debug, thiserror::Error, Eq, PartialEq)]
+pub enum PprofError {
+    #[error("null function (id=0)")]
+    NullFunction,
+    #[error("null location (id=0)")]
+    NullLocation,
+    #[error("null mapping (id=0)")]
+    NullMapping,
+
+    #[error("string not found (id={0})")]
+    StringNotFound(i64),
+    #[error("function not found (id={0})")]
+    FunctionNotFound(u64),
+    #[error("location not found (id={0})")]
+    LocationNotFound(u64),
+    #[error("mapping not found (id={0})")]
+    MappingNotFound(u64),
+
+    #[error("function id is null (id={0})")]
+    NullFunctionId(u64),
+    #[error("mapping id is null (id={0})")]
+    NullMappingId(u64),
 }
 
 impl PprofBuilder {
@@ -65,28 +88,27 @@ impl PprofBuilder {
     }
 
     /// Run some validations to ensure that the profile is semantically correct.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), PprofError> {
         let validate_line = |line: &pprof::Line| {
             let function_id = line.function_id;
             if function_id == 0 {
-                return Err(anyhow!("Found a null function_id (id=0)"));
+                return Err(PprofError::NullFunction);
             }
 
             let maybe_function = self.functions.get(function_id as usize - 1);
             match maybe_function {
                 Some(function) => {
                     if function.id == 0 {
-                        return Err(anyhow!("Found a null function (id=0)"));
+                        return Err(PprofError::NullFunctionId(function_id));
                     }
 
-                    let function_id = function.name;
-                    self.string_table.get(function_id as usize).ok_or(anyhow!(
-                        "Could not find function name with id {}",
-                        function_id
-                    ))?;
+                    let function_name_id = function.name;
+                    self.string_table
+                        .get(function_name_id as usize)
+                        .ok_or(PprofError::StringNotFound(function_name_id))?;
                 }
                 None => {
-                    return Err(anyhow!("Function with id {} not found", function_id));
+                    return Err(PprofError::FunctionNotFound(function_id));
                 }
             }
             Ok(())
@@ -95,17 +117,17 @@ impl PprofBuilder {
         let validate_location = |location: &pprof::Location| {
             let mapping_id = location.mapping_id;
             if mapping_id == 0 {
-                return Err(anyhow!("Found a null mapping (id=0)"));
+                return Err(PprofError::NullMapping);
             }
             let maybe_mapping = self.mappings.get(mapping_id as usize - 1);
             match maybe_mapping {
                 Some(mapping) => {
                     if mapping.id == 0 {
-                        return Err(anyhow!("Found a null mapping (id=0)"));
+                        return Err(PprofError::NullMappingId(mapping_id));
                     }
                 }
                 None => {
-                    return Err(anyhow!("Mapping with id {} not found", mapping_id));
+                    return Err(PprofError::MappingNotFound(mapping_id));
                 }
             }
 
@@ -119,14 +141,14 @@ impl PprofBuilder {
         for sample in &self.samples {
             for location_id in &sample.location_id {
                 if *location_id == 0 {
-                    return Err(anyhow!("Found a null location (id=0)"));
+                    return Err(PprofError::NullLocation);
                 }
 
                 let maybe_location = self.locations.get(*location_id as usize - 1);
                 match maybe_location {
                     Some(location) => validate_location(location)?,
                     None => {
-                        return Err(anyhow!("Location with id {} not found", location_id));
+                        return Err(PprofError::LocationNotFound(*location_id));
                     }
                 }
             }
