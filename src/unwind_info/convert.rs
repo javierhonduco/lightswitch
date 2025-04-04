@@ -238,7 +238,7 @@ pub fn compact_unwind_info(path: &str) -> anyhow::Result<Vec<CompactUnwindRow>> 
                 // Add the end addr when we hit a new func
                 match last_function_end_addr {
                     Some(addr) => {
-                        let marker = CompactUnwindRow::end_of_function_marker(addr);
+                        let marker = CompactUnwindRow::stop_unwinding(addr);
 
                         let row = CompactUnwindRow {
                             pc: marker.pc,
@@ -276,7 +276,7 @@ pub fn compact_unwind_info(path: &str) -> anyhow::Result<Vec<CompactUnwindRow>> 
     }
 
     // Add the last marker
-    let marker = CompactUnwindRow::end_of_function_marker(last_function_end_addr.unwrap());
+    let marker = CompactUnwindRow::stop_unwinding(last_function_end_addr.unwrap());
     unwind_info.push(marker);
 
     // Reduce the unwind information size

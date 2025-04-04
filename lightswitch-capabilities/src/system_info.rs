@@ -10,7 +10,6 @@ use tracing::{error, warn};
 use crate::bpf::features_skel::FeaturesSkelBuilder;
 
 use anyhow::Result;
-use errno::errno;
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libc::close;
 use nix::sys::utsname;
@@ -115,7 +114,10 @@ fn software_perfevents_detected() -> bool {
     };
 
     if fd.fd < 0 {
-        error!("setup_perf_event failed with errno {}", errno());
+        error!(
+            "setup_perf_event failed with error {}",
+            std::io::Error::last_os_error()
+        );
         return false;
     }
     true

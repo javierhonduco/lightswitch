@@ -68,6 +68,7 @@ impl Collector for NullCollector {
 
 #[derive(Default)]
 pub struct StreamingCollector {
+    token: Option<String>,
     local_symbolizer: bool,
     pprof_ingest_url: String,
     http_client_timeout: Duration,
@@ -80,6 +81,7 @@ pub struct StreamingCollector {
 
 impl StreamingCollector {
     pub fn new(
+        token: Option<String>,
         local_symbolizer: bool,
         pprof_ingest_url: &str,
         profile_duration: Duration,
@@ -87,6 +89,7 @@ impl StreamingCollector {
         metadata_provider: ThreadSafeGlobalMetadataProvider,
     ) -> Self {
         Self {
+            token,
             local_symbolizer,
             pprof_ingest_url: format!("{}/pprof/new", pprof_ingest_url),
             http_client_timeout: Duration::from_secs(30),
@@ -124,11 +127,13 @@ impl Collector for StreamingCollector {
 
         let client_builder = reqwest::blocking::Client::builder().timeout(self.http_client_timeout);
         let client = client_builder.build().unwrap();
-        let response = client
+        let mut request = client
             .post(self.pprof_ingest_url.clone())
-            .body(pprof_profile.encode_to_vec())
-            .send();
-
+            .body(pprof_profile.encode_to_vec());
+        if let Some(token) = &self.token {
+            request = request.bearer_auth(token);
+        }
+        let response = request.send();
         tracing::debug!("http response: {:?}", response);
     }
 

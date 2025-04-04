@@ -14,6 +14,7 @@ use object::FileKind;
 use object::Object;
 use object::ObjectKind;
 use object::ObjectSection;
+use object::ObjectSymbol;
 
 use crate::{BuildId, ExecutableId};
 
@@ -24,6 +25,21 @@ pub struct ElfLoad {
     pub p_offset: u64,
     pub p_vaddr: u64,
     pub p_filesz: u64,
+}
+
+#[derive(Clone)]
+pub enum Runtime {
+    /// C, C++, Rust, Fortran.
+    CLike,
+    /// Golang.
+    Go(Vec<StopUnwindingFrames>),
+}
+
+#[derive(Debug, Clone)]
+pub struct StopUnwindingFrames {
+    pub name: String,
+    pub start_address: u64,
+    pub end_address: u64,
 }
 
 #[derive(Debug)]
@@ -72,14 +88,14 @@ impl ObjectFile {
         let gnu_build_id = object.build_id()?;
 
         if let Some(data) = gnu_build_id {
-            return Ok(BuildId::gnu_from_bytes(data));
+            return Ok(BuildId::gnu_from_bytes(data)?);
         }
 
         // Golang (the Go toolchain does not interpret these bytes as we do).
         for section in object.sections() {
             if section.name()? == ".note.go.buildid" {
                 if let Ok(data) = section.data() {
-                    return Ok(BuildId::go_from_bytes(data));
+                    return Ok(BuildId::go_from_bytes(data)?);
                 }
             }
         }
@@ -88,7 +104,7 @@ impl ObjectFile {
         let Some(code_hash) = code_hash(object) else {
             return Err(anyhow!("code hash is None"));
         };
-        Ok(BuildId::sha256_from_digest(&code_hash))
+        Ok(BuildId::sha256_from_digest(&code_hash)?)
     }
 
     /// Returns whether the object has debug symbols.
@@ -98,6 +114,14 @@ impl ObjectFile {
 
     pub fn is_dynamic(&self) -> bool {
         self.object.kind() == ObjectKind::Dynamic
+    }
+
+    pub fn runtime(&self) -> Runtime {
+        if self.is_go() {
+            Runtime::Go(self.go_stop_unwinding_frames())
+        } else {
+            Runtime::CLike
+        }
     }
 
     pub fn is_go(&self) -> bool {
@@ -112,6 +136,31 @@ impl ObjectFile {
             }
         }
         false
+    }
+
+    pub fn go_stop_unwinding_frames(&self) -> Vec<StopUnwindingFrames> {
+        let mut r = Vec::new();
+
+        for symbol in self.object.symbols() {
+            let Ok(name) = symbol.name() else { continue };
+            for func in [
+                "runtime.mcall",
+                "runtime.goexit",
+                "runtime.mstart",
+                "runtime.systemstack",
+            ] {
+                // In some occasions functions might get some suffixes added to them like `runtime.mcall0`.
+                if name.contains(func) {
+                    r.push(StopUnwindingFrames {
+                        name: name.to_string(),
+                        start_address: symbol.address(),
+                        end_address: symbol.address() + symbol.size(),
+                    });
+                }
+            }
+        }
+
+        r
     }
 
     pub fn elf_load_segments(&self) -> Result<Vec<ElfLoad>> {

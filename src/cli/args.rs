@@ -97,6 +97,8 @@ pub(crate) struct CliArgs {
     pub(crate) sender: ProfileSender,
     #[arg(long)]
     pub(crate) server_url: Option<String>,
+    #[arg(long)]
+    pub(crate) token: Option<String>,
     // Buffer Sizes with defaults
     #[arg(long, default_value_t = ProfilerConfig::default().perf_buffer_bytes, value_name = "PERF_BUFFER_BYTES",
           help="Size of each profiler perf buffer, in bytes (must be a power of 2)",

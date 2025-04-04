@@ -2,15 +2,19 @@ use lightswitch_object::ExecutableId;
 use std::collections::BinaryHeap;
 use std::fs;
 use std::io::BufWriter;
+use std::io::ErrorKind;
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Instant;
 use std::{fs::File, io::BufReader};
 
+use thiserror::Error;
 use tracing::debug;
 
 use super::persist::{Reader, Writer};
+use crate::unwind_info::persist::{ReaderError, WriterError};
 use crate::unwind_info::types::CompactUnwindRow;
 
 const DEFAULT_MAX_CACHED_FILES: usize = 1_000;
@@ -33,6 +37,20 @@ impl Ord for Usage {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         other.instant.cmp(&self.instant)
     }
+}
+
+#[derive(Debug, Error)]
+pub enum FetchUnwindInfoError {
+    #[error("not found in cache")]
+    NotFound,
+    #[error("i/o error")]
+    Io(#[from] std::io::Error),
+    #[error("reader error")]
+    Reader(#[from] ReaderError),
+    #[error("generic error {0}")]
+    UnwindInfoGeneric(String),
+    #[error("write error")]
+    Write(#[from] WriterError),
 }
 
 /// Provides unwind information with caching on the file system, expiring
@@ -63,14 +81,13 @@ impl UnwindInfoManager {
         &mut self,
         executable_path: &Path,
         executable_id: ExecutableId,
-    ) -> anyhow::Result<Vec<CompactUnwindRow>> {
+    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
         match self.read_from_cache(executable_id) {
             Ok(unwind_info) => Ok(unwind_info),
             Err(e) => {
-                debug!(
-                    "error fetch_unwind_info: {:?}, unwind information will be regenerated",
-                    e
-                );
+                if matches!(e, FetchUnwindInfoError::NotFound) {
+                    debug!("error fetch_unwind_info: {:?}, regenerating...", e);
+                }
                 // No matter the error, regenerate the unwind information.
                 let unwind_info = self.write_to_cache(executable_path, executable_id);
                 if unwind_info.is_ok() {
@@ -84,14 +101,20 @@ impl UnwindInfoManager {
     fn read_from_cache(
         &self,
         executable_id: ExecutableId,
-    ) -> anyhow::Result<Vec<CompactUnwindRow>> {
+    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
-        let file = File::open(unwind_info_path)?;
+        let file = File::open(unwind_info_path).map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                FetchUnwindInfoError::NotFound
+            } else {
+                FetchUnwindInfoError::Io(e)
+            }
+        })?;
 
         let mut buffer = BufReader::new(file);
         let mut data = Vec::new();
         buffer.read_to_end(&mut data)?;
-        let reader = Reader::new(&data)?;
+        let reader = Reader::new(&data).map_err(FetchUnwindInfoError::Reader)?;
 
         Ok(reader.unwind_info()?)
     }
@@ -100,23 +123,26 @@ impl UnwindInfoManager {
         &self,
         executable_path: &Path,
         executable_id: ExecutableId,
-    ) -> anyhow::Result<Vec<CompactUnwindRow>> {
+    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
         let unwind_info_writer = Writer::new(executable_path);
-        // `File::create()` will truncate an existing file to the size it needs.
-        let mut file = BufWriter::new(File::create(unwind_info_path)?);
-        unwind_info_writer.write(&mut file)
+        // [`File::create`] will truncate an existing file to the size it needs.
+        let mut file =
+            BufWriter::new(File::create(unwind_info_path).map_err(FetchUnwindInfoError::Io)?);
+        unwind_info_writer
+            .write(&mut file)
+            .map_err(FetchUnwindInfoError::Write)
     }
 
     fn path_for(&self, executable_id: ExecutableId) -> PathBuf {
-        self.cache_dir.join(format!("{:x}", executable_id))
+        self.cache_dir.join(format!("{}", executable_id))
     }
 
     pub fn bump_already_present(&mut self) -> anyhow::Result<()> {
         for direntry in fs::read_dir(&self.cache_dir)?.flatten() {
             let name = direntry.file_name();
             let Some(name) = name.to_str() else { continue };
-            let executable_id = ExecutableId::from_str_radix(name, 16)?;
+            let executable_id = ExecutableId::from_str(name)?;
 
             let metadata = fs::metadata(direntry.path())?;
             let modified = metadata.created()?;
@@ -164,16 +190,19 @@ mod tests {
     fn test_custom_usage_ordering() {
         let now = Instant::now();
         let before = Usage {
-            executable_id: 0xBAD,
+            executable_id: ExecutableId(0xBAD),
             instant: now,
         };
         let after = Usage {
-            executable_id: 0xFAD,
+            executable_id: ExecutableId(0xFAD),
             instant: now + Duration::from_secs(10),
         };
 
         // `BinaryHeap::pop()` returns the max element so the ordering is switched.
-        assert_eq!([&before, &after].iter().max().unwrap().executable_id, 0xBAD);
+        assert_eq!(
+            [&before, &after].iter().max().unwrap().executable_id,
+            ExecutableId(0xBAD)
+        );
         // Ensure that `Ord` and `PartialOrd` agree.
         assert_eq!(before.cmp(&after), before.partial_cmp(&after).unwrap());
     }
@@ -188,7 +217,7 @@ mod tests {
         // both when it's a cache miss and a cache hit.
         for _ in 0..2 {
             let manager_unwind_info =
-                manager.fetch_unwind_info(&PathBuf::from("/proc/self/exe"), 0xFABADA);
+                manager.fetch_unwind_info(&PathBuf::from("/proc/self/exe"), ExecutableId(0xFABADA));
             let manager_unwind_info = manager_unwind_info.unwrap();
             assert_eq!(unwind_info, manager_unwind_info);
         }
@@ -202,7 +231,7 @@ mod tests {
 
         // Cache unwind info.
         let manager_unwind_info =
-            manager.fetch_unwind_info(&PathBuf::from("/proc/self/exe"), 0xFABADA);
+            manager.fetch_unwind_info(&PathBuf::from("/proc/self/exe"), ExecutableId(0xFABADA));
         assert!(manager_unwind_info.is_ok());
         let manager_unwind_info = manager_unwind_info.unwrap();
         assert_eq!(unwind_info, manager_unwind_info);
@@ -217,7 +246,7 @@ mod tests {
 
         // Make sure the corrupted one gets replaced and things work.
         let manager_unwind_info =
-            manager.fetch_unwind_info(&PathBuf::from("/proc/self/exe"), 0xFABADA);
+            manager.fetch_unwind_info(&PathBuf::from("/proc/self/exe"), ExecutableId(0xFABADA));
         let manager_unwind_info = manager_unwind_info.unwrap();
         assert_eq!(unwind_info, manager_unwind_info);
     }

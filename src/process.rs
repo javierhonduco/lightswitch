@@ -4,12 +4,14 @@ use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::process;
+use std::time::Instant;
 
 use tracing::debug;
 
 use lightswitch_object::BuildId;
 use lightswitch_object::ElfLoad;
 use lightswitch_object::ExecutableId;
+use lightswitch_object::Runtime;
 
 pub type Pid = i32;
 
@@ -25,16 +27,17 @@ pub enum ExecutableMappingType {
     Kernel,
 }
 
-#[derive(Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum ProcessStatus {
     Running,
     Exited,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ProcessInfo {
     pub status: ProcessStatus,
     pub mappings: ExecutableMappings,
+    pub last_used: Instant,
 }
 
 /// Stores information for a executable mapping with all
@@ -54,7 +57,7 @@ pub struct ExecutableMapping {
     pub soft_delete: bool,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ExecutableMappings(pub Vec<ExecutableMapping>);
 
 impl ExecutableMappings {
@@ -120,6 +123,7 @@ pub struct ObjectFileInfo {
     pub references: i64,
     pub native_unwind_info_size: Option<u64>,
     pub is_vdso: bool,
+    pub runtime: Runtime,
 }
 
 impl Clone for ObjectFileInfo {
@@ -132,6 +136,7 @@ impl Clone for ObjectFileInfo {
             references: self.references,
             native_unwind_info_size: self.native_unwind_info_size,
             is_vdso: self.is_vdso,
+            runtime: self.runtime.clone(),
         }
     }
 }
@@ -175,7 +180,7 @@ impl ObjectFileInfo {
         let offset = virtual_address - mapping.start_addr + mapping.offset;
 
         for segment in &self.elf_load_segments {
-            let address_range = segment.p_vaddr..(segment.p_vaddr + segment.p_filesz);
+            let address_range = segment.p_offset..(segment.p_offset + segment.p_filesz);
             if address_range.contains(&offset) {
                 return Some(offset - segment.p_offset + segment.p_vaddr);
             }
@@ -211,6 +216,7 @@ mod tests {
             references: 1,
             native_unwind_info_size: None,
             is_vdso: false,
+            runtime: Runtime::CLike,
         };
 
         remove_file(file_path).unwrap();
@@ -231,10 +237,11 @@ mod tests {
             references: 0,
             native_unwind_info_size: None,
             is_vdso: false,
+            runtime: Runtime::CLike,
         };
 
         let mapping = ExecutableMapping {
-            executable_id: 0x0,
+            executable_id: ExecutableId(0x0),
             build_id: None,
             kind: ExecutableMappingType::FileBacked,
             start_addr: 0x100,

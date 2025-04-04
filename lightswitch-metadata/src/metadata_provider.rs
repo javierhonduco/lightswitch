@@ -19,7 +19,7 @@ pub type ThreadSafeGlobalMetadataProvider = Arc<Mutex<GlobalMetadataProvider>>;
 
 impl Default for GlobalMetadataProvider {
     fn default() -> Self {
-        Self::new(NonZeroUsize::new(1000).unwrap(), Vec::new(), Vec::new())
+        Self::new(NonZeroUsize::new(5000).unwrap(), Vec::new(), Vec::new())
     }
 }
 
@@ -101,6 +101,13 @@ impl GlobalMetadataProvider {
             let labels = self.get_labels(task_key);
             self.process_label_cache.push(task_key, labels.clone());
             labels
+        }
+    }
+
+    pub fn register_task(&mut self, task_key: TaskKey) {
+        if !self.process_label_cache.contains(&task_key) {
+            let labels = self.get_labels(task_key);
+            self.process_label_cache.push(task_key, labels);
         }
     }
 }

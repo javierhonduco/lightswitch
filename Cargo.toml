@@ -21,7 +21,6 @@ object = "0.36.7"
 libbpf-rs = { version = "0.25.0-beta.1", features = ["static"] }
 tracing = "0.1.41"
 thiserror = "2.0.12"
-errno = "0.3.10"
 perf-event-open-sys = "4.0.0"
 procfs = "0.17.0"
 nix = { version = "0.29.0" }
@@ -37,9 +36,10 @@ lazy_static = "1.5.0"
 plain = "0.2.3"
 page_size = "0.6.0"
 clap = { version = "4.5.32", features = ["derive", "string"] }
-blazesym = "0.2.0-rc.3"
+# See https://github.com/libbpf/blazesym/issues/1105.
+blazesym = { git = "https://github.com/libbpf/blazesym", rev = "94821e3", features = ["zlib"] }
 tracing-subscriber = "0.3.19"
-inferno = "0.12.1"
+inferno = "0.12.2"
 primal = "0.3.3"
 prost = "0.13" # Needed to encode protocol buffers to bytes.
 reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false }
@@ -58,7 +58,6 @@ libbpf-rs = { workspace = true }
 tracing = { workspace = true }
 perf-event-open-sys = { workspace = true }
 thiserror = { workspace = true }
-errno = { workspace = true }
 procfs = { workspace = true }
 nix = { workspace = true, features = ["user"] }
 parking_lot = { version = "0.12.3", features = ["deadlock_detection"] }
@@ -69,7 +68,7 @@ assert_cmd = { version = "2.0.16" }
 insta = { version = "1.42.2", features = ["yaml"] }
 rstest = "0.25.0"
 criterion = "0.5.1"
-tempfile = "3.19.0"
+tempfile = "3.19.1"
 
 [build-dependencies]
 libbpf-cargo = { workspace = true }

@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn test_remove_unnecesary_markers() {
         let unwind_info = vec![
-            CompactUnwindRow::end_of_function_marker(0x100),
+            CompactUnwindRow::stop_unwinding(0x100),
             CompactUnwindRow {
                 pc: 0x100,
                 ..Default::default()

@@ -78,7 +78,7 @@ pub fn to_pprof(
                     }
 
                     let mapping_id = pprof.add_mapping(
-                        mapping.executable_id,
+                        mapping.executable_id.into(),
                         mapping.start_addr,
                         mapping.end_addr,
                         0x0,
@@ -108,7 +108,7 @@ pub fn to_pprof(
                     location_ids.push(location);
                 }
                 None => {
-                    error!("executable with id {} not found", mapping.executable_id);
+                    error!("executable with id 0x{} not found", mapping.executable_id);
                 }
             }
         }
@@ -146,14 +146,14 @@ pub fn to_pprof(
                         None => "no-build-id".into(),
                     };
                     let mapping_id: u64 = pprof.add_mapping(
-                        mapping.executable_id,
+                        mapping.executable_id.into(),
                         mapping.start_addr,
                         mapping.end_addr,
                         mapping.offset,
                         obj.path
                             .to_string_lossy()
                             .split('/')
-                            .last()
+                            .next_back()
                             .unwrap_or("could not get executable name"),
                         &build_id,
                     );
@@ -176,7 +176,7 @@ pub fn to_pprof(
                     location_ids.push(location);
                 }
                 None => {
-                    debug!("executable with id {} not found", mapping.executable_id);
+                    debug!("executable with id 0x{} not found", mapping.executable_id);
                 }
             }
         }
@@ -345,7 +345,7 @@ pub fn fetch_symbols_for_profile(
                         );
                 }
                 None => {
-                    error!("executable with id {} not found", mapping.executable_id);
+                    error!("executable with id 0x{} not found", mapping.executable_id);
                 }
             }
         }
