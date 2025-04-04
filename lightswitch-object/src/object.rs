@@ -150,7 +150,7 @@ impl ObjectFile {
                 "runtime.systemstack",
             ] {
                 // In some occasions functions might get some suffixes added to them like `runtime.mcall0`.
-                if name.contains(func) {
+                if name.starts_with(func) {
                     r.push(StopUnwindingFrames {
                         name: name.to_string(),
                         start_address: symbol.address(),
