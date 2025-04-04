@@ -12,20 +12,34 @@
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
-
+/*
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
   __uint(max_entries, 100000);
   __type(key, u64);
   __type(value, native_stack_t);
-} stacks SEC(".maps");
+} stacks SEC(".maps"); */
 
-struct {
+/* struct {
   __uint(type, BPF_MAP_TYPE_HASH);
   __uint(max_entries, MAX_AGGREGATED_STACKS_ENTRIES);
   __type(key, stack_count_key_t);
   __type(value, u64);
 } aggregated_stacks SEC(".maps");
+ */
+
+struct {
+  __uint(type, BPF_MAP_TYPE_RINGBUF);
+  __uint(max_entries, 256 * 1024 /* 256 KB */); // adjust max entries based on frequency on userspace
+} stacks_rb SEC(".maps");
+
+struct {
+  __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+  __uint(key_size, sizeof(u32));
+  __uint(value_size, sizeof(u32));
+  __uint(max_entries, 1);
+  // adjust max entries based on frequency on userspace
+} stacks SEC(".maps");
 
 struct {
   __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -312,7 +326,7 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u
   return true;
 }
 
-static __always_inline void *
+/* static __always_inline void *
 bpf_map_lookup_or_try_init(void *map, const void *key, const void *init) {
   void *val;
   long err;
@@ -330,9 +344,29 @@ bpf_map_lookup_or_try_init(void *map, const void *key, const void *init) {
 
   return bpf_map_lookup_elem(map, key);
 }
+ */
+
+
+static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
+u64 pid_tgid,
+unwind_state_t *unwind_state) {
+  int ret = bpf_get_stack(ctx, unwind_state->kernel_stack.addresses, MAX_STACK_DEPTH * sizeof(u64), 0);
+  if (ret >= 0) {
+    unwind_state->kernel_stack.len = ret / sizeof(u64);
+  }
+
+  ret = bpf_ringbuf_output(&stacks_rb, unwind_state, sizeof(unwind_state_t), 0);
+  (void)pid_tgid;
+  (void)ctx;
+  if (ret < 0) {
+    bpf_printk("add_stack ringbuf failed ret=%d", ret);
+    // TODO: add counter
+  }
+}
+
 
 // Aggregate the given stacktrace.
-static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
+/* static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
                                       u64 pid_tgid,
                                       unwind_state_t *unwind_state) {
   stack_count_key_t *stack_key = &unwind_state->stack_key;
@@ -379,7 +413,7 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
   if (count) {
     __sync_fetch_and_add(count, 1);
   }
-}
+} */
 
 // The unwinding machinery lives here.
 SEC("perf_event")
@@ -679,12 +713,13 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 // Set up the initial unwinding state.
 static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_user_pt_regs_t *regs) {
   unwind_state->stack.len = 0;
+  unwind_state->kernel_stack.len = 0;
   unwind_state->tail_calls = 0;
 
   unwind_state->stack_key.pid = 0;
   unwind_state->stack_key.task_id = 0;
-  unwind_state->stack_key.user_stack_id = 0;
-  unwind_state->stack_key.kernel_stack_id = 0;
+/*   unwind_state->stack_key.user_stack_id = 0;
+  unwind_state->stack_key.kernel_stack_id = 0; */
 
   if (in_kernel(PT_REGS_IP(regs))) {
     if (!retrieve_task_registers(&unwind_state->ip, &unwind_state->sp, &unwind_state->bp, &unwind_state->lr)) {

@@ -170,12 +170,13 @@ typedef struct {
 typedef struct {
   int task_id;
   int pid;
-  unsigned long long user_stack_id;
-  unsigned long long kernel_stack_id;
+/*   unsigned long long user_stack_id;
+  unsigned long long kernel_stack_id; */
 } stack_count_key_t;
 
 typedef struct {
   native_stack_t stack;
+  native_stack_t kernel_stack;
 
   unsigned long long ip;
   unsigned long long sp;

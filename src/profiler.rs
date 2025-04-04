@@ -316,16 +316,16 @@ impl Profiler {
         open_skel: &mut OpenProfilerSkel,
         profiler_config: &ProfilerConfig,
     ) {
-        open_skel
+/*         open_skel
             .maps
             .stacks
             .set_max_entries(profiler_config.mapsize_stacks)
-            .expect("Unable to set stacks map max_entries");
-        open_skel
+            .expect("Unable to set stacks map max_entries"); */
+/*         open_skel
             .maps
             .aggregated_stacks
             .set_max_entries(profiler_config.mapsize_aggregated_stacks)
-            .expect("Unable to set aggregated_stacks map max_entries");
+            .expect("Unable to set aggregated_stacks map max_entries"); */
         open_skel
             .maps
             .rate_limits
@@ -386,14 +386,14 @@ impl Profiler {
 
     pub fn show_actual_profiler_map_sizes(bpf: &ProfilerSkel) {
         info!("BPF map sizes:");
-        info!(
+/*         info!(
             "stacks: {}",
             bpf.maps.stacks.info().unwrap().info.max_entries
         );
         info!(
             "aggregated_stacks: {}",
             bpf.maps.aggregated_stacks.info().unwrap().info.max_entries
-        );
+        ); */
         info!(
             "rate_limits: {}",
             bpf.maps.rate_limits.info().unwrap().info.max_entries
@@ -710,6 +710,15 @@ impl Profiler {
         self.tracers.attach().expect("attach tracers");
 
         let chan_send = self.new_proc_chan_send.clone();
+
+        self.start_poll_thread(
+            "aaaaaa",
+            &self.native_unwinder.maps.stacks_rb,
+            &self.native_unwinder.maps.stacks,
+            move |data| Self::handle_stack(&data),
+            Self::handle_lost_stack,
+        );
+
         self.start_poll_thread(
             "unwinder_events",
             &self.native_unwinder.maps.events_rb,
@@ -1043,22 +1052,24 @@ impl Profiler {
     pub fn clear_maps(&mut self) {
         let _span = span!(Level::DEBUG, "clear_maps").entered();
 
-        self.clear_map("stacks");
-        self.clear_map("aggregated_stacks");
+/*         self.clear_map("stacks");
+        self.clear_map("aggregated_stacks"); */
         self.clear_map("rate_limits");
     }
 
     pub fn collect_profile(&mut self) -> RawAggregatedProfile {
         debug!("collecting profile");
 
-        self.teardown_perf_events();
-
-        let mut result = Vec::new();
+        // self.teardown_perf_events();
+        let result = Vec::new();
+      /*
         let maps = &self.native_unwinder.maps;
         let aggregated_stacks = &maps.aggregated_stacks;
         let stacks = &maps.stacks;
-
-        let mut all_stacks_bytes = Vec::new();
+ */
+       /*  let mut all_stacks_bytes = Vec::new();
+        // -- storage   (stack_hash) => [addr1, addr2]
+        // -- agg       (pid, tid, stack_hash) => count
         for aggregated_stack_key_bytes in aggregated_stacks.keys() {
             match aggregated_stacks.lookup(&aggregated_stack_key_bytes, MapFlags::ANY) {
                 Ok(Some(aggregated_value_bytes)) => {
@@ -1113,10 +1124,10 @@ impl Profiler {
 
         debug!("===== got {} unique stacks", all_stacks_bytes.len());
 
-        self.bump_last_used(&result);
+        self.bump_last_used(&result); */
         self.collect_unwinder_stats();
         self.clear_maps();
-        self.setup_perf_events();
+        // self.setup_perf_events();
         result
     }
 
@@ -2104,6 +2115,17 @@ impl Profiler {
         }
 
         Ok(())
+    }
+
+    fn handle_stack(data: &[u8]) {
+        let mut unwind_state = unwind_state_t::default();
+        plain::copy_from_bytes(&mut unwind_state, data).expect("handle stack serde");
+
+        println!("!!!! got a stack !!!! user len: {} kernel len: {}", unwind_state.stack.len, unwind_state.kernel_stack.len);
+    }
+
+    fn handle_lost_stack(_cpu: i32, _count: u64) {
+
     }
 
     fn handle_event(sender: &Arc<Sender<Event>>, data: &[u8]) {
