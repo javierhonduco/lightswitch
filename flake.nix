@@ -85,6 +85,7 @@
               # Debugging tools
               strace
               gdb
+              bpftools
               # Upload container image to registry
               skopeo
               # Cargo subcommand tools
