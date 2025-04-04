@@ -29,6 +29,7 @@ pub struct BpfFeatures {
     pub has_map_of_maps: bool,
     pub has_batch_map_operations: bool,
     pub has_mmapable_bpf_array: bool,
+    pub has_task_pt_regs_helper: bool,
 }
 
 #[derive(Debug)]
@@ -209,6 +210,7 @@ fn check_bpf_features() -> Result<BpfFeatures> {
         has_map_of_maps: bpf_features_bss.has_map_of_maps,
         has_batch_map_operations: bpf_features_bss.has_batch_map_operations,
         has_mmapable_bpf_array: has_mmapable_bpf_array(),
+        has_task_pt_regs_helper: bpf_features_bss.has_task_pt_regs_helper,
     };
 
     Ok(features)
