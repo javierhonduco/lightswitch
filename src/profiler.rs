@@ -171,6 +171,7 @@ pub struct ProfilerConfig {
     pub debug_info_manager: Box<dyn DebugInfoManager>,
     pub max_native_unwind_info_size_mb: i32,
     pub use_ring_buffers: bool,
+    pub use_task_pt_regs_helper: bool,
 }
 
 impl Default for ProfilerConfig {
@@ -195,6 +196,7 @@ impl Default for ProfilerConfig {
             debug_info_manager: Box::new(DebugInfoBackendNull {}),
             max_native_unwind_info_size_mb: i32::MAX,
             use_ring_buffers: true,
+            use_task_pt_regs_helper: true,
         }
     }
 }

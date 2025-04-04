@@ -88,6 +88,7 @@ typedef struct {
 struct lightswitch_config_t {
   bool verbose_logging;
   bool use_ring_buffers;
+  bool use_task_pt_regs_helper;
 };
 
 struct unwinder_stats_t {
@@ -116,6 +117,7 @@ struct unwinder_stats_t {
 const volatile struct lightswitch_config_t lightswitch_config = {
     .verbose_logging = false,
     .use_ring_buffers = false,
+    .use_task_pt_regs_helper = false,
 };
 
 // A different stack produced the same hash.
