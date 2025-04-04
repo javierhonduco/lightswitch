@@ -441,7 +441,11 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       Event event = {
           .type = EVENT_NEED_UNWIND_INFO,
           .pid = per_process_id,
-          .address = unwind_state->ip,
+          // Assume 4KB pages, hence the offset within the page won't give us any
+          // additional information to find the right memory mapping. This way the
+          // rate limiting logic will work better due to the reduced cardinality of
+          // the rate limiting key.
+          .address = HIGH_PC(unwind_state->ip),
       };
       send_event(&event, ctx);
       return 1;
