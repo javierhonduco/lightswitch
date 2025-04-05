@@ -2,7 +2,7 @@
 
 lightswitch
 ===========
-**lightswitch** is a profiler as a library for Linux suitable for on-demand and continuous profiling. It's mostly written in Rust but the unwinders are written in C and run in BPF. Currently C, C++, Rust, and Zig are fully supported on x86_64 (arm64 support is experimental).
+**lightswitch** is a profiler as a library for Linux suitable for on-demand and continuous profiling. It's mostly written in Rust but the unwinders are written in C and run in BPF. Currently C, C++, Rust, Zig, and Go are fully supported on x86_64 (arm64 support is experimental).
 
 Installation
 ------------
@@ -51,7 +51,7 @@ $ nix run .#vmtest
 
 Reporting bugs
 --------------
-When reporting any bugs, please share which version / revision you are running, the arguments, the output of `uname -a` and if relevant, the logs with `--logging=debug`. If you suspect there is a bug in the unwinders, adding `--bpf-logging` and sharing the output from `bpftool prog tracelog` or `/sys/kernel/debug/tracing/trace_pipe` will be very helpful.
+When reporting any bugs, please share which version / revision you are running, the arguments, the output of `lightswitch system-info` and if relevant, the logs with `--logging=debug`. If you suspect there is a bug in the unwinders, adding `--bpf-logging` and sharing the output from `bpftool prog tracelog` or `/sys/kernel/debug/tracing/trace_pipe` will be very helpful.
 
 Project status
 ---------------
