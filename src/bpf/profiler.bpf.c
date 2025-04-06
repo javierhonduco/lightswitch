@@ -294,14 +294,19 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u
     return false;
   }
 
-  err = bpf_probe_read_kernel(&stack, 8, &task->stack);
-  if (err) {
-    LOG("[warn] bpf_probe_read_kernel failed with %d", err);
-    return false;
-  }
+  struct pt_regs *regs;
 
-  void *ptr = stack + THREAD_SIZE - TOP_OF_KERNEL_STACK_PADDING;
-  struct pt_regs *regs = ((struct pt_regs *)ptr) - 1;
+  if (lightswitch_config.use_task_pt_regs_helper) {
+    regs = (struct pt_regs *) bpf_task_pt_regs(task);
+  } else {
+    err = bpf_probe_read_kernel(&stack, 8, &task->stack);
+    if (err) {
+      LOG("[warn] bpf_probe_read_kernel failed with %d", err);
+      return false;
+    }
+    void *ptr = stack + THREAD_SIZE - TOP_OF_KERNEL_STACK_PADDING;
+    regs = ((struct pt_regs *)ptr) - 1;
+  }
 
   *ip = PT_REGS_IP_CORE(regs);
   *sp = PT_REGS_SP_CORE(regs);

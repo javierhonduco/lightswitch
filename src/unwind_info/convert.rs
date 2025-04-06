@@ -170,16 +170,15 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                                 }
                             }
                             CfaRule::Expression(exp) => {
-                                let found_expression = exp
-                                    .get(&eh_frame)
-                                    .expect("getting the expression should never fail")
-                                    .0
-                                    .slice();
-
-                                if found_expression == *PLT1 {
-                                    compact_row.cfa_offset = PltType::Plt1 as u16;
-                                } else if found_expression == *PLT2 {
-                                    compact_row.cfa_offset = PltType::Plt2 as u16;
+                                if let Ok(expression) = exp.get(&eh_frame) {
+                                    let expression_data = expression.0.slice();
+                                    if expression_data == *PLT1 {
+                                        compact_row.cfa_offset = PltType::Plt1 as u16;
+                                    } else if expression_data == *PLT2 {
+                                        compact_row.cfa_offset = PltType::Plt2 as u16;
+                                    }
+                                } else {
+                                    compact_row.cfa_offset = PltType::Unknown as u16;
                                 }
 
                                 compact_row.cfa_type = CfaType::Expression;
@@ -271,12 +270,12 @@ pub fn compact_unwind_info(path: &str) -> anyhow::Result<Vec<CompactUnwindRow>> 
 
     builder?.process()?;
 
-    if last_function_end_addr.is_none() {
+    let Some(last_function_end_addr) = last_function_end_addr else {
         return Err(UnwindInfoError::NoFunctionsFoundInEhFrameData.into());
-    }
+    };
 
     // Add the last marker
-    let marker = CompactUnwindRow::stop_unwinding(last_function_end_addr.unwrap());
+    let marker = CompactUnwindRow::stop_unwinding(last_function_end_addr);
     unwind_info.push(marker);
 
     // Reduce the unwind information size

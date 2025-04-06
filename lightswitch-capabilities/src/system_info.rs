@@ -11,6 +11,8 @@ use crate::bpf::features_skel::FeaturesSkelBuilder;
 
 use anyhow::Result;
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
+use libbpf_rs::MapHandle;
+use libbpf_rs::MapType;
 use libc::close;
 use nix::sys::utsname;
 use perf_event_open_sys as sys;
@@ -26,6 +28,8 @@ pub struct BpfFeatures {
     pub has_tail_call: bool,
     pub has_map_of_maps: bool,
     pub has_batch_map_operations: bool,
+    pub has_mmapable_bpf_array: bool,
+    pub has_task_pt_regs_helper: bool,
 }
 
 #[derive(Debug)]
@@ -152,6 +156,25 @@ fn tracepoints_detected() -> bool {
     fd.fd >= 0
 }
 
+/// Attempts to create a mmapable BPF array.
+fn has_mmapable_bpf_array() -> bool {
+    let opts = libbpf_sys::bpf_map_create_opts {
+        sz: size_of::<libbpf_sys::bpf_map_create_opts>() as libbpf_sys::size_t,
+        map_flags: libbpf_sys::BPF_F_MMAPABLE,
+        ..Default::default()
+    };
+    let map = MapHandle::create(
+        MapType::Array,
+        Some("unwind_info_test_map".to_string()),
+        4,
+        8,
+        10_000,
+        &opts,
+    );
+
+    map.is_ok()
+}
+
 fn check_bpf_features() -> Result<BpfFeatures> {
     let skel_builder = FeaturesSkelBuilder::default();
     let mut a = MaybeUninit::uninit();
@@ -180,12 +203,14 @@ fn check_bpf_features() -> Result<BpfFeatures> {
         });
     }
 
-    let features: BpfFeatures = BpfFeatures {
+    let features = BpfFeatures {
         can_load_trivial_bpf_program: true,
         has_tail_call: bpf_features_bss.has_tail_call,
         has_ring_buf: bpf_features_bss.has_ringbuf,
         has_map_of_maps: bpf_features_bss.has_map_of_maps,
         has_batch_map_operations: bpf_features_bss.has_batch_map_operations,
+        has_mmapable_bpf_array: has_mmapable_bpf_array(),
+        has_task_pt_regs_helper: bpf_features_bss.has_task_pt_regs_helper,
     };
 
     Ok(features)

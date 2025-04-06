@@ -30,6 +30,7 @@ use libbpf_rs::MapCore;
 use libbpf_rs::MapHandle;
 use libbpf_rs::MapType;
 use libbpf_rs::{Link, MapFlags, PerfBufferBuilder};
+use memmap2::MmapOptions;
 use procfs;
 use tracing::{debug, error, info, span, warn, Level};
 
@@ -52,6 +53,7 @@ use crate::profile::*;
 use crate::unwind_info::manager::UnwindInfoManager;
 use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::executable_path;
+use crate::util::roundup_page;
 use crate::util::Architecture;
 use crate::util::{architecture, get_online_cpus, summarize_address_range};
 use lightswitch_metadata::metadata_provider::{
@@ -169,6 +171,7 @@ pub struct ProfilerConfig {
     pub debug_info_manager: Box<dyn DebugInfoManager>,
     pub max_native_unwind_info_size_mb: i32,
     pub use_ring_buffers: bool,
+    pub use_task_pt_regs_helper: bool,
 }
 
 impl Default for ProfilerConfig {
@@ -193,6 +196,7 @@ impl Default for ProfilerConfig {
             debug_info_manager: Box::new(DebugInfoBackendNull {}),
             max_native_unwind_info_size_mb: i32::MAX,
             use_ring_buffers: true,
+            use_task_pt_regs_helper: true,
         }
     }
 }
@@ -286,6 +290,7 @@ impl Profiler {
         {
             let opts = libbpf_sys::bpf_map_create_opts {
                 sz: size_of::<libbpf_sys::bpf_map_create_opts>() as libbpf_sys::size_t,
+                map_flags: libbpf_sys::BPF_F_MMAPABLE,
                 ..Default::default()
             };
             let inner_map_shape = MapHandle::create(
@@ -1125,40 +1130,19 @@ impl Profiler {
     }
 
     fn add_bpf_unwind_info(inner: &MapHandle, unwind_info: &[CompactUnwindRow]) {
-        let chunk_size = std::cmp::min(500_000, unwind_info.len()); // 500k entries fit in 8MB.
-        let mut keys: Vec<u8> = Vec::with_capacity(std::mem::size_of::<u32>() * chunk_size);
-        let mut values: Vec<u8> =
-            Vec::with_capacity(std::mem::size_of::<stack_unwind_row_t>() * chunk_size);
+        let size = inner.value_size() as usize * unwind_info.len();
+        let mut mmap = unsafe {
+            MmapOptions::new()
+                .len(roundup_page(size))
+                .map_mut(&inner.as_fd())
+        }
+        .unwrap();
+        let (prefix, middle, suffix) = unsafe { mmap.align_to_mut::<stack_unwind_row_t>() };
+        assert_eq!(prefix.len(), 0);
+        assert_eq!(suffix.len(), 0);
 
-        for indices_and_rows in &unwind_info.iter().enumerate().chunks(chunk_size) {
-            keys.clear();
-            values.clear();
-
-            let mut chunk_len = 0;
-
-            for (i, row) in indices_and_rows {
-                let i = i as u32;
-                let row: stack_unwind_row_t = row.into();
-
-                for byte in i.to_le_bytes() {
-                    keys.push(byte);
-                }
-                for byte in unsafe { plain::as_bytes(&row) } {
-                    values.push(*byte);
-                }
-
-                chunk_len += 1;
-            }
-
-            inner
-                .update_batch(
-                    &keys[..],
-                    &values[..],
-                    chunk_len,
-                    MapFlags::ANY,
-                    MapFlags::ANY,
-                )
-                .unwrap();
+        for (row, write) in unwind_info.iter().zip(middle) {
+            *write = row.into();
         }
     }
 
@@ -1406,6 +1390,7 @@ impl Profiler {
     ) -> Option<(MapHandle, u32)> {
         let opts = libbpf_sys::bpf_map_create_opts {
             sz: size_of::<libbpf_sys::bpf_map_create_opts>() as libbpf_sys::size_t,
+            map_flags: libbpf_sys::BPF_F_MMAPABLE,
             ..Default::default()
         };
 
@@ -1604,7 +1589,7 @@ impl Profiler {
         let unwind_info = match unwind_info {
             Ok(unwind_info) => unwind_info,
             Err(e) => {
-                let known_naughty = executable_path.contains("libicudata");
+                let known_naughty = executable_path.contains("libicudata.so");
                 if known_naughty {
                     return Err(AddUnwindInformationError::NoUnwindInfoKnownNaughty);
                 } else {

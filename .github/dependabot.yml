@@ -8,3 +8,15 @@ updates:
       github-actions:
         patterns:
           - "*"
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      cargo-dependencies:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+    versioning-strategy: "lockfile-only"
+    allow:
+      - dependency-type: "all"
