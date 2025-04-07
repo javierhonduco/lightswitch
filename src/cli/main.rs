@@ -13,7 +13,7 @@ use clap::Parser;
 use crossbeam_channel::bounded;
 use crossbeam_channel::tick;
 use inferno::flamegraph;
-use lightswitch::collector::{AggregatorCollector, Collector, NullCollector, StreamingCollector};
+use lightswitch::collector::{AggregatorCollector, Collector, NullCollector, StreamingCollector, DuckdbCollector};
 use lightswitch::debug_info::DebugInfoManager;
 use nix::unistd::Uid;
 use prost::Message;
@@ -154,7 +154,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let metadata_provider: ThreadSafeGlobalMetadataProvider =
         Arc::new(Mutex::new(GlobalMetadataProvider::default()));
 
-    let collector: Arc<Mutex<Box<dyn Collector + Send>>> =
+    let mut collector: Arc<Mutex<Box<dyn Collector + Send>>> =
         Arc::new(Mutex::new(match args.sender {
             ProfileSender::None => Box::new(NullCollector::new()),
             ProfileSender::LocalDisk => Box::new(AggregatorCollector::new()),
@@ -167,6 +167,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 metadata_provider.clone(),
             )),
         }));
+    // override
+    collector = Arc::new(Mutex::new(Box::new(DuckdbCollector::new())));
 
     let debug_info_manager: Box<dyn DebugInfoManager> = match args.debug_info_backend {
         DebugInfoBackend::None => Box::new(DebugInfoBackendNull {}),

@@ -1,5 +1,6 @@
 use prost::Message;
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, span, Level};
@@ -109,7 +110,7 @@ impl Collector for StreamingCollector {
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
-        let _span = span!(Level::DEBUG, "StreamingCollector.finish").entered();
+        let _span = span!(Level::DEBUG, "StreamingCollector.collect").entered();
 
         let mut profile = raw_to_processed(&profile, procs, objs);
         if self.local_symbolizer {
@@ -215,5 +216,90 @@ impl Collector for AggregatorCollector {
             .collect();
 
         (profile, &self.procs, &self.objs)
+    }
+}
+
+// TODO:
+// - gate behind a feature
+
+use duckdb::arrow::record_batch::RecordBatch;
+use duckdb::arrow::util::pretty::print_batches;
+use duckdb::{params, Connection as DuckdbConnection, Result};
+
+pub struct DuckdbCollector {
+    duckdb_connection: DuckdbConnection,
+    profiles: Vec<AggregatedProfile>,
+    procs: HashMap<i32, ProcessInfo>,
+    objs: HashMap<ExecutableId, ObjectFileInfo>,
+}
+
+struct DuckdbSample {
+    id: i32,
+    raw_stack: Vec<u64>,
+    symbolized_stack: Vec<String>,
+    metadata: HashMap<String, String>,
+}
+
+impl DuckdbCollector {
+    pub fn new() -> Self {
+        let duckdb_connection = DuckdbConnection::open_in_memory().unwrap();
+        duckdb_connection.execute_batch(
+            r"
+                CREATE SEQUENCE seq;
+                CREATE TABLE samples (
+                    id                  INTEGER PRIMARY KEY DEFAULT NEXTVAL('seq'),
+                    raw_stack           INTEGER[],
+                    symbolized_stack    TEXT[],
+                    metadata            MAP(TEXT, TEXT),
+                );
+            ",
+        ).unwrap();
+
+        duckdb_connection.execute(
+            "INSERT INTO samples (raw_stack, symbolized_stack) VALUES (?, ?)",
+            [vec![0_u64], vec!["a".to_string()]],
+        ).unwrap();
+
+
+        Self {
+            duckdb_connection,
+            profiles: Vec::new(),
+            procs: HashMap::new(),
+            objs: HashMap::new(),
+        }
+    }
+}
+
+impl Collector for DuckdbCollector {
+    fn collect(
+        &mut self,
+        profile: RawAggregatedProfile,
+        procs: &HashMap<i32, ProcessInfo>,
+        objs: &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        let _span = span!(Level::DEBUG, "DuckdbCollector.collect").entered();
+
+        let mut profile = raw_to_processed(&profile, procs, objs);
+        profile = symbolize_profile(&profile, procs, objs);
+
+        /*
+        let pprof_profile = to_pprof(
+            profile,
+            procs,
+            objs,
+            &self.metadata_provider,
+            self.profile_duration,
+            self.profile_frequency_hz,
+        ); */
+    }
+
+    fn finish(
+        &self,
+    ) -> (
+        AggregatedProfile,
+        &HashMap<i32, ProcessInfo>,
+        &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        (AggregatedProfile::new(), &self.procs, &self.objs)
     }
 }

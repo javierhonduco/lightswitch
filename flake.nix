@@ -99,6 +99,7 @@
               cargo-release
               # Commented out because this is typically not cached and it's rarely used
               # ocamlPackages.magic-trace
+              duckdb
             ];
             hardeningDisable = [ "all" ];
             LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_16.libclang ];
