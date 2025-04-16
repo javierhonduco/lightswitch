@@ -2,7 +2,15 @@
 
 lightswitch
 ===========
-**lightswitch** is a profiler as a library for Linux suitable for on-demand and continuous profiling. It's mostly written in Rust but the unwinders are written in C and run in BPF. Currently C, C++, Rust, Zig, and Go are fully supported on x86_64 (arm64 support is experimental).
+**lightswitch** is a profiler as a library for Linux suitable for on-demand and continuous on-CPU profiling. It's mostly written in Rust but the unwinders are written in C and run in BPF. Currently C, C++, Rust, Zig, and Go are fully supported on x86_64 (arm64 support is experimental).
+
+The main features / design goals are:
+
+* Low overhead: currently targeting 3% CPU utilization and 500MB of memory.
+* No requirement for applications to be compiled with frame pointers.
+* Detailed metrics to understand profiling effectiveness and troubleshoot issues.
+* Enhanced unwinding capability for larger process stacks by not relying on [`PERF_SAMPLE_STACK_USER`](https://man7.org/linux/man-pages/man2/perf_event_open.2.html).
+* Support for modern kernels, released approximately 4y ago.
 
 Installation
 ------------
