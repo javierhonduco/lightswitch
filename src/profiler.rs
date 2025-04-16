@@ -1023,7 +1023,15 @@ impl Profiler {
                 })
                 .fold(unwinder_stats_t::default(), |a, b| a + b);
 
-            info!("unwinder stats: {:?}", total_value);
+            match total_value.summary() {
+                Ok(s) => {
+                    debug!("unwinder stats {:?}: {:?}", s, total_value);
+                },
+                Err(e) => {
+                    warn!("unwinder stats: {:?}: {:?}", e, total_value);
+                }
+            }
+
         }
     }
 

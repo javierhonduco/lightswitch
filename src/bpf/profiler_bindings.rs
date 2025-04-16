@@ -36,6 +36,35 @@ impl exec_mappings_key {
     }
 }
 
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum UnwindSummmaryError {
+    #[error("expected at least 8 bytes")]
+    Critical,
+    #[error("expected at least 8 bytes")]
+    TooManyUnwindFailuresError(f64),
+}
+
+impl unwinder_stats_t {
+    pub fn summary(&self) -> Result<f64, UnwindSummmaryError> {
+        if self.error_should_never_happen > 0 || self.error_binary_search_exhausted_iterations > 0 {
+            return Err(UnwindSummmaryError::Critical);
+        }
+
+        if self.total == 0 {
+            return Ok(1.0)
+        }
+
+        let success_rate = self.success_dwarf as f64 / self.total as f64;
+
+        if success_rate < 0.75 {
+            return Err(UnwindSummmaryError::TooManyUnwindFailuresError(success_rate))
+        }
+
+        return Ok(success_rate)
+
+    }
+}
+
 impl Add for unwinder_stats_t {
     type Output = Self;
 
