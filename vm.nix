@@ -135,7 +135,7 @@ let
       rev = "51f11bf301fea054342996802a16ed21fb5054f4";
       sha256 = "sha256-qtTq0dnDHi1ITfQzKrXz+1dRMymAFBivWpjXntD09+A=";
     };
-    cargoHash = "sha256-SHjjCWz4FVVk1cczkMltRVEB3GK8jz2tVABNSlSZiUc=";
+    cargoHash = "sha256-HLpb4l2LoYdC3k7NH5DRqd9zXqQ/2w6nkUKLGiAsR28=";
     # nativeCheckInputs = [ pkgs.qemu ];
 
     # There are some errors trying to access `/build/source/tests/*`.
