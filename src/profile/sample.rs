@@ -13,11 +13,43 @@ use crate::process::ProcessInfo;
 use crate::profile::Frame;
 
 #[derive(Debug, Hash, Eq, PartialEq)]
-pub struct RawAggregatedSample {
+pub struct RawSample {
     pub pid: Pid,
     pub tid: Pid,
     pub ustack: Option<native_stack_t>,
     pub kstack: Option<native_stack_t>,
+}
+
+impl fmt::Display for RawSample {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        let format_native_stack = |native_stack: Option<native_stack_t>| -> String {
+            let mut res: Vec<String> = Vec::new();
+            match native_stack {
+                Some(native_stack) => {
+                    for (i, addr) in native_stack.addresses.into_iter().enumerate() {
+                        if native_stack.len <= i.try_into().unwrap() {
+                            break;
+                        }
+                        res.push(format!("{:3}: {:#018x}", i, addr));
+                    }
+                }
+                None => res.push("NONE".into()),
+            };
+            format!("[{}]", res.join(","))
+        };
+
+        fmt.debug_struct("RawSample")
+            .field("pid", &self.pid)
+            .field("tid", &self.tid)
+            .field("ustack", &format_native_stack(self.ustack))
+            .field("kstack", &format_native_stack(self.kstack))
+            .finish()
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq)]
+pub struct RawAggregatedSample {
+    pub sample: RawSample,
     pub count: u64,
 }
 
@@ -32,15 +64,15 @@ impl RawAggregatedSample {
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) -> Result<AggregatedSample, anyhow::Error> {
         let mut processed_sample = AggregatedSample {
-            pid: self.pid,
-            tid: self.tid,
+            pid: self.sample.pid,
+            tid: self.sample.tid,
             ustack: Vec::new(),
             kstack: Vec::new(),
             count: self.count,
         };
 
-        if let Some(native_stack) = self.ustack {
-            let Some(info) = procs.get(&self.pid) else {
+        if let Some(native_stack) = self.sample.ustack {
+            let Some(info) = procs.get(&self.sample.pid) else {
                 return Err(anyhow!("process not found"));
             };
 
@@ -69,7 +101,7 @@ impl RawAggregatedSample {
             }
         }
 
-        if let Some(kernel_stack) = self.kstack {
+        if let Some(kernel_stack) = self.sample.kstack {
             let Some(info) = procs.get(&KERNEL_PID) else {
                 return Err(anyhow!("kernel process not found"));
             };
@@ -111,27 +143,8 @@ impl RawAggregatedSample {
 
 impl fmt::Display for RawAggregatedSample {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        let format_native_stack = |native_stack: Option<native_stack_t>| -> String {
-            let mut res: Vec<String> = Vec::new();
-            match native_stack {
-                Some(native_stack) => {
-                    for (i, addr) in native_stack.addresses.into_iter().enumerate() {
-                        if native_stack.len <= i.try_into().unwrap() {
-                            break;
-                        }
-                        res.push(format!("{:3}: {:#018x}", i, addr));
-                    }
-                }
-                None => res.push("NONE".into()),
-            };
-            format!("[{}]", res.join(","))
-        };
-
         fmt.debug_struct("RawAggregatedSample")
-            .field("pid", &self.pid)
-            .field("tid", &self.tid)
-            .field("ustack", &format_native_stack(self.ustack))
-            .field("kstack", &format_native_stack(self.kstack))
+            .field("sample", &format!("{}", self.sample))
             .field("count", &self.count)
             .finish()
     }
@@ -203,24 +216,28 @@ mod tests {
             len: 2,
         });
 
-        let sample = RawAggregatedSample {
-            pid: 1234,
-            tid: 1235,
-            ustack: ustack_data,
-            kstack: None,
+        let raw_aggregated_sample = RawAggregatedSample {
+            sample: RawSample {
+                pid: 1234,
+                tid: 1235,
+                ustack: ustack_data,
+                kstack: None,
+            },
             count: 1,
         };
-        insta::assert_yaml_snapshot!(format!("{}", sample), @r#""RawAggregatedSample { pid: 1234, tid: 1235, ustack: \"[  0: 0x000000000000ffff,  1: 0x00000000deadbeef]\", kstack: \"[NONE]\", count: 1 }""#);
+        insta::assert_yaml_snapshot!(format!("{}", raw_aggregated_sample), @r#""RawAggregatedSample { sample: \"RawSample { pid: 1234, tid: 1235, ustack: \\\"[  0: 0x000000000000ffff,  1: 0x00000000deadbeef]\\\", kstack: \\\"[NONE]\\\" }\", count: 1 }""#);
 
         // No user or kernel stacks
-        let sample = RawAggregatedSample {
-            pid: 1234,
-            tid: 1235,
-            ustack: None,
-            kstack: None,
+        let raw_aggregated_sample = RawAggregatedSample {
+            sample: RawSample {
+                pid: 1234,
+                tid: 1235,
+                ustack: None,
+                kstack: None,
+            },
             count: 1,
         };
-        insta::assert_yaml_snapshot!(format!("{}", sample), @r#""RawAggregatedSample { pid: 1234, tid: 1235, ustack: \"[NONE]\", kstack: \"[NONE]\", count: 1 }""#);
+        insta::assert_yaml_snapshot!(format!("{}", raw_aggregated_sample), @r#""RawAggregatedSample { sample: \"RawSample { pid: 1234, tid: 1235, ustack: \\\"[NONE]\\\", kstack: \\\"[NONE]\\\" }\", count: 1 }""#);
 
         // user and kernel stacks
         let mut ustack = addrs;
@@ -262,14 +279,16 @@ mod tests {
             len: kreplace.len() as u64,
         });
 
-        let sample = RawAggregatedSample {
-            pid: 128821,
-            tid: 128822,
-            ustack: ustack_data,
-            kstack: kstack_data,
+        let raw_aggregated_sample = RawAggregatedSample {
+            sample: RawSample {
+                pid: 128821,
+                tid: 128822,
+                ustack: ustack_data,
+                kstack: kstack_data,
+            },
             count: 42,
         };
-        insta::assert_yaml_snapshot!(format!("{}", sample), @r#""RawAggregatedSample { pid: 128821, tid: 128822, ustack: \"[  0: 0x00007f7c91c82314,  1: 0x00007f7c91c4ff93,  2: 0x00007f7c91c5d8ae,  3: 0x00007f7c91c4d2c3,  4: 0x00007f7c91c45400,  5: 0x00007f7c91c10933,  6: 0x00007f7c91c38153,  7: 0x00007f7c91c331d9,  8: 0x00007f7c91dfa501,  9: 0x00007f7c91c16b05, 10: 0x00007f7c91e22038, 11: 0x00007f7c91e23fc6]\", kstack: \"[  0: 0xffffffff8749ae51,  1: 0xffffffffc04c4804,  2: 0xffffffff874ddfd0,  3: 0xffffffff874e0843,  4: 0xffffffff874e0b8a,  5: 0xffffffff8727f600,  6: 0xffffffff8727f8a7,  7: 0xffffffff87e0116e]\", count: 42 }""#);
+        insta::assert_yaml_snapshot!(format!("{}", raw_aggregated_sample), @r#""RawAggregatedSample { sample: \"RawSample { pid: 128821, tid: 128822, ustack: \\\"[  0: 0x00007f7c91c82314,  1: 0x00007f7c91c4ff93,  2: 0x00007f7c91c5d8ae,  3: 0x00007f7c91c4d2c3,  4: 0x00007f7c91c45400,  5: 0x00007f7c91c10933,  6: 0x00007f7c91c38153,  7: 0x00007f7c91c331d9,  8: 0x00007f7c91dfa501,  9: 0x00007f7c91c16b05, 10: 0x00007f7c91e22038, 11: 0x00007f7c91e23fc6]\\\", kstack: \\\"[  0: 0xffffffff8749ae51,  1: 0xffffffffc04c4804,  2: 0xffffffff874ddfd0,  3: 0xffffffff874e0843,  4: 0xffffffff874e0b8a,  5: 0xffffffff8727f600,  6: 0xffffffff8727f8a7,  7: 0xffffffff87e0116e]\\\" }\", count: 42 }""#);
     }
 
     #[test]

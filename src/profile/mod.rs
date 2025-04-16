@@ -1,7 +1,7 @@
-mod aggregated;
 mod convert;
 mod frame;
+mod sample;
 
-pub use aggregated::*;
 pub use convert::*;
 pub use frame::*;
+pub use sample::*;
