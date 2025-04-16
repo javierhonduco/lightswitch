@@ -275,6 +275,10 @@ enum AddUnwindInformationError {
     NoUnwindInfo(String, String),
     #[error("unwind information contains no entries")]
     Empty,
+    #[error("failed to write to BPF map that stores unwind information: {0}")]
+    BpfUnwindInfo(String),
+    #[error("failed to write to BPF map that stores pages: {0}")]
+    BpfPages(String),
 }
 
 impl Profiler {
@@ -1131,14 +1135,16 @@ impl Profiler {
         self.procs.read().get(&pid).is_some()
     }
 
-    fn add_bpf_unwind_info(inner: &MapHandle, unwind_info: &[CompactUnwindRow]) {
+    fn add_bpf_unwind_info(
+        inner: &MapHandle,
+        unwind_info: &[CompactUnwindRow],
+    ) -> Result<(), anyhow::Error> {
         let size = inner.value_size() as usize * unwind_info.len();
         let mut mmap = unsafe {
             MmapOptions::new()
                 .len(roundup_page(size))
                 .map_mut(&inner.as_fd())
-        }
-        .unwrap();
+        }?;
         let (prefix, middle, suffix) = unsafe { mmap.align_to_mut::<stack_unwind_row_t>() };
         assert_eq!(prefix.len(), 0);
         assert_eq!(suffix.len(), 0);
@@ -1146,6 +1152,8 @@ impl Profiler {
         for (row, write) in unwind_info.iter().zip(middle) {
             *write = row.into();
         }
+
+        Ok(())
     }
 
     fn add_bpf_pages(
@@ -1153,7 +1161,7 @@ impl Profiler {
         unwind_info: &[CompactUnwindRow],
         executable_id: u64,
         bucket_id: u32,
-    ) {
+    ) -> Result<(), libbpf_rs::Error> {
         let pages = crate::unwind_info::pages::to_pages(unwind_info);
         for page in pages {
             let page_key = page_key_t {
@@ -1167,11 +1175,14 @@ impl Profiler {
             };
 
             let value = unsafe { plain::as_bytes(&page_value) };
-            bpf.maps
-                .executable_to_page
-                .update(unsafe { plain::as_bytes(&page_key) }, value, MapFlags::ANY)
-                .unwrap();
+            bpf.maps.executable_to_page.update(
+                unsafe { plain::as_bytes(&page_key) },
+                value,
+                MapFlags::ANY,
+            )?
         }
+
+        Ok(())
     }
 
     fn delete_bpf_pages(
@@ -1632,13 +1643,15 @@ impl Profiler {
         // Add all unwind information and its pages.
         let result = match inner_map_and_id {
             Some((inner, bucket_id)) => {
-                Self::add_bpf_unwind_info(&inner, &unwind_info);
+                Self::add_bpf_unwind_info(&inner, &unwind_info)
+                    .map_err(|e| AddUnwindInformationError::BpfUnwindInfo(e.to_string()))?;
                 Self::add_bpf_pages(
                     &self.native_unwinder,
                     &unwind_info,
                     executable_id.into(),
                     bucket_id,
-                );
+                )
+                .map_err(|e| AddUnwindInformationError::BpfPages(e.to_string()))?;
                 let unwind_info_start_address = unwind_info.first().unwrap().pc;
                 let unwind_info_end_address = unwind_info.last().unwrap().pc;
                 self.native_unwind_state.known_executables.insert(
