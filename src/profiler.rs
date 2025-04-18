@@ -30,6 +30,7 @@ use libbpf_rs::MapCore;
 use libbpf_rs::MapHandle;
 use libbpf_rs::MapType;
 use libbpf_rs::{Link, MapFlags, PerfBufferBuilder};
+use memmap2::MmapOptions;
 use procfs;
 use tracing::{debug, error, info, span, warn, Level};
 
@@ -52,6 +53,7 @@ use crate::profile::*;
 use crate::unwind_info::manager::UnwindInfoManager;
 use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::executable_path;
+use crate::util::roundup_page;
 use crate::util::Architecture;
 use crate::util::{architecture, get_online_cpus, summarize_address_range};
 use lightswitch_metadata::metadata_provider::{
@@ -169,6 +171,7 @@ pub struct ProfilerConfig {
     pub debug_info_manager: Box<dyn DebugInfoManager>,
     pub max_native_unwind_info_size_mb: i32,
     pub use_ring_buffers: bool,
+    pub use_task_pt_regs_helper: bool,
 }
 
 impl Default for ProfilerConfig {
@@ -193,6 +196,7 @@ impl Default for ProfilerConfig {
             debug_info_manager: Box::new(DebugInfoBackendNull {}),
             max_native_unwind_info_size_mb: i32::MAX,
             use_ring_buffers: true,
+            use_task_pt_regs_helper: true,
         }
     }
 }
@@ -271,6 +275,10 @@ enum AddUnwindInformationError {
     NoUnwindInfo(String, String),
     #[error("unwind information contains no entries")]
     Empty,
+    #[error("failed to write to BPF map that stores unwind information: {0}")]
+    BpfUnwindInfo(String),
+    #[error("failed to write to BPF map that stores pages: {0}")]
+    BpfPages(String),
 }
 
 impl Profiler {
@@ -286,6 +294,7 @@ impl Profiler {
         {
             let opts = libbpf_sys::bpf_map_create_opts {
                 sz: size_of::<libbpf_sys::bpf_map_create_opts>() as libbpf_sys::size_t,
+                map_flags: libbpf_sys::BPF_F_MMAPABLE,
                 ..Default::default()
             };
             let inner_map_shape = MapHandle::create(
@@ -941,12 +950,12 @@ impl Profiler {
     }
 
     /// Updates the last time processes and executables were seen. This is used during evictions.
-    pub fn bump_last_used(&mut self, raw_samples: &[RawAggregatedSample]) {
+    pub fn bump_last_used(&mut self, raw_aggregated_samples: &[RawAggregatedSample]) {
         let now = Instant::now();
 
-        for raw_sample in raw_samples {
-            let pid = raw_sample.pid;
-            let ustack = raw_sample.ustack;
+        for aggregated_sample in raw_aggregated_samples {
+            let pid = aggregated_sample.sample.pid;
+            let ustack = aggregated_sample.sample.ustack;
             let Some(ustack) = ustack else {
                 continue;
             };
@@ -1109,14 +1118,16 @@ impl Profiler {
                         }
                     }
 
-                    let raw_sample = RawAggregatedSample {
-                        pid: key.pid,
-                        tid: key.task_id,
-                        ustack: result_ustack,
-                        kstack: result_kstack,
+                    let raw_aggregated_sample = RawAggregatedSample {
+                        sample: RawSample {
+                            pid: key.pid,
+                            tid: key.task_id,
+                            ustack: result_ustack,
+                            kstack: result_kstack,
+                        },
                         count: *count,
                     };
-                    result.push(raw_sample);
+                    result.push(raw_aggregated_sample);
                 }
                 _ => continue,
             }
@@ -1135,42 +1146,25 @@ impl Profiler {
         self.procs.read().get(&pid).is_some()
     }
 
-    fn add_bpf_unwind_info(inner: &MapHandle, unwind_info: &[CompactUnwindRow]) {
-        let chunk_size = std::cmp::min(500_000, unwind_info.len()); // 500k entries fit in 8MB.
-        let mut keys: Vec<u8> = Vec::with_capacity(std::mem::size_of::<u32>() * chunk_size);
-        let mut values: Vec<u8> =
-            Vec::with_capacity(std::mem::size_of::<stack_unwind_row_t>() * chunk_size);
+    fn add_bpf_unwind_info(
+        inner: &MapHandle,
+        unwind_info: &[CompactUnwindRow],
+    ) -> Result<(), anyhow::Error> {
+        let size = inner.value_size() as usize * unwind_info.len();
+        let mut mmap = unsafe {
+            MmapOptions::new()
+                .len(roundup_page(size))
+                .map_mut(&inner.as_fd())
+        }?;
+        let (prefix, middle, suffix) = unsafe { mmap.align_to_mut::<stack_unwind_row_t>() };
+        assert_eq!(prefix.len(), 0);
+        assert_eq!(suffix.len(), 0);
 
-        for indices_and_rows in &unwind_info.iter().enumerate().chunks(chunk_size) {
-            keys.clear();
-            values.clear();
-
-            let mut chunk_len = 0;
-
-            for (i, row) in indices_and_rows {
-                let i = i as u32;
-                let row: stack_unwind_row_t = row.into();
-
-                for byte in i.to_le_bytes() {
-                    keys.push(byte);
-                }
-                for byte in unsafe { plain::as_bytes(&row) } {
-                    values.push(*byte);
-                }
-
-                chunk_len += 1;
-            }
-
-            inner
-                .update_batch(
-                    &keys[..],
-                    &values[..],
-                    chunk_len,
-                    MapFlags::ANY,
-                    MapFlags::ANY,
-                )
-                .unwrap();
+        for (row, write) in unwind_info.iter().zip(middle) {
+            *write = row.into();
         }
+
+        Ok(())
     }
 
     fn add_bpf_pages(
@@ -1178,7 +1172,7 @@ impl Profiler {
         unwind_info: &[CompactUnwindRow],
         executable_id: u64,
         bucket_id: u32,
-    ) {
+    ) -> Result<(), libbpf_rs::Error> {
         let pages = crate::unwind_info::pages::to_pages(unwind_info);
         for page in pages {
             let page_key = page_key_t {
@@ -1192,11 +1186,14 @@ impl Profiler {
             };
 
             let value = unsafe { plain::as_bytes(&page_value) };
-            bpf.maps
-                .executable_to_page
-                .update(unsafe { plain::as_bytes(&page_key) }, value, MapFlags::ANY)
-                .unwrap();
+            bpf.maps.executable_to_page.update(
+                unsafe { plain::as_bytes(&page_key) },
+                value,
+                MapFlags::ANY,
+            )?
         }
+
+        Ok(())
     }
 
     fn delete_bpf_pages(
@@ -1417,6 +1414,7 @@ impl Profiler {
     ) -> Option<(MapHandle, u32)> {
         let opts = libbpf_sys::bpf_map_create_opts {
             sz: size_of::<libbpf_sys::bpf_map_create_opts>() as libbpf_sys::size_t,
+            map_flags: libbpf_sys::BPF_F_MMAPABLE,
             ..Default::default()
         };
 
@@ -1615,7 +1613,7 @@ impl Profiler {
         let unwind_info = match unwind_info {
             Ok(unwind_info) => unwind_info,
             Err(e) => {
-                let known_naughty = executable_path.contains("libicudata");
+                let known_naughty = executable_path.contains("libicudata.so");
                 if known_naughty {
                     return Err(AddUnwindInformationError::NoUnwindInfoKnownNaughty);
                 } else {
@@ -1656,13 +1654,15 @@ impl Profiler {
         // Add all unwind information and its pages.
         let result = match inner_map_and_id {
             Some((inner, bucket_id)) => {
-                Self::add_bpf_unwind_info(&inner, &unwind_info);
+                Self::add_bpf_unwind_info(&inner, &unwind_info)
+                    .map_err(|e| AddUnwindInformationError::BpfUnwindInfo(e.to_string()))?;
                 Self::add_bpf_pages(
                     &self.native_unwinder,
                     &unwind_info,
                     executable_id.into(),
                     bucket_id,
-                );
+                )
+                .map_err(|e| AddUnwindInformationError::BpfPages(e.to_string()))?;
                 let unwind_info_start_address = unwind_info.first().unwrap().pc;
                 let unwind_info_end_address = unwind_info.last().unwrap().pc;
                 self.native_unwind_state.known_executables.insert(
