@@ -47,7 +47,6 @@ impl fmt::Display for RawSample {
     }
 }
 
-// todo - opatnebe (do we need to derive hash for this?)
 #[derive(Debug, PartialEq)]
 pub struct RawAggregatedSample {
     pub sample: RawSample,

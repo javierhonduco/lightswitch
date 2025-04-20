@@ -134,9 +134,9 @@ pub struct Profiler {
     profile_receive: Arc<Receiver<RawAggregatedProfile>>,
     // A vector of raw samples received from bpf in the current profiling session
     raw_samples: Vec<RawSample>,
-    // Raw sample channel
+    // Raw sample channel. Used for receiving raw samples from the rinbuf/perfbuf poll thread
     raw_sample_send: Arc<Sender<RawSample>>,
-    raw_sample_receive: Arc<Receiver<RawSample>>, // TODO: Does this need to be ARCed
+    raw_sample_receive: Arc<Receiver<RawSample>>,
     /// For how long to profile.
     duration: Duration,
     /// Per-CPU sampling frequency in Hz.
@@ -731,7 +731,7 @@ impl Profiler {
         let raw_sample_send = self.raw_sample_send.clone();
 
         self.start_poll_thread(
-            "raw_samples",
+            "raw-samples-poll-thread",
             &self.native_unwinder.maps.stacks_rb,
             &self.native_unwinder.maps.stacks,
             move |data| Self::handle_stack(&raw_sample_send, data),
@@ -793,7 +793,6 @@ impl Profiler {
         let session_tick = tick(self.session_duration);
 
         loop {
-            // TODO: Should we use select_biased here?
             select! {
                 recv(self.stop_chan_receive) -> _ => {
                     debug!("received ctrl+c");
@@ -1085,7 +1084,6 @@ impl Profiler {
 
     pub fn collect_profile(&mut self) -> RawAggregatedProfile {
         debug!("collecting profile");
-        println!("Num raw samples {}", self.raw_samples.len());
         let result = self.aggregator.aggregate(self.raw_samples.clone());
         self.raw_samples.clear();
 
