@@ -50,7 +50,6 @@ typedef struct {
   u32 high_index;
 } page_value_t;
 
-#define MAX_AGGREGATED_STACKS_ENTRIES 10000
 
 // Values for dwarf expressions.
 #define DWARF_EXPRESSION_UNKNOWN 0
@@ -120,11 +119,6 @@ const volatile struct lightswitch_config_t lightswitch_config = {
     .use_task_pt_regs_helper = false,
 };
 
-// A different stack produced the same hash.
-#define STACK_COLLISION(err) (err == -EEXIST)
-// Tried to read a kernel stack from a non-kernel context.
-#define IN_USERSPACE(err) (err == -EFAULT)
-
 #define LOG(fmt, ...)                                                          \
   ({                                                                           \
     if (lightswitch_config.verbose_logging) {                                  \
@@ -172,9 +166,7 @@ typedef struct {
 typedef struct {
   int task_id;
   int pid;
-/*   unsigned long long user_stack_id;
-  unsigned long long kernel_stack_id; */
-} stack_count_key_t;
+} stack_key_t;
 
 typedef struct {
   native_stack_t stack;
@@ -186,7 +178,7 @@ typedef struct {
   unsigned long long lr;
   int tail_calls;
 
-  stack_count_key_t stack_key;
+  stack_key_t stack_key;
 } unwind_state_t;
 
 enum event_type {

@@ -34,6 +34,7 @@ use memmap2::MmapOptions;
 use procfs;
 use tracing::{debug, error, info, span, warn, Level};
 
+use crate::aggregator::Aggregator;
 use crate::bpf::profiler_bindings::*;
 use crate::bpf::profiler_skel::{OpenProfilerSkel, ProfilerSkel, ProfilerSkelBuilder};
 use crate::bpf::tracers_bindings::*;
@@ -131,6 +132,11 @@ pub struct Profiler {
     // Profile channel
     profile_send: Arc<Sender<RawAggregatedProfile>>,
     profile_receive: Arc<Receiver<RawAggregatedProfile>>,
+    // A vector of raw samples received from bpf in the current profiling session
+    raw_samples: Vec<RawSample>,
+    // Raw sample channel
+    raw_sample_send: Arc<Sender<RawSample>>,
+    raw_sample_receive: Arc<Receiver<RawSample>>, // TODO: Does this need to be ARCed
     /// For how long to profile.
     duration: Duration,
     /// Per-CPU sampling frequency in Hz.
@@ -151,6 +157,7 @@ pub struct Profiler {
     max_native_unwind_info_size_mb: i32,
     unwind_info_manager: UnwindInfoManager,
     use_ring_buffers: bool,
+    aggregator: Aggregator,
     metadata_provider: ThreadSafeGlobalMetadataProvider,
 }
 
@@ -281,6 +288,8 @@ enum AddUnwindInformationError {
     BpfPages(String),
 }
 
+static MAX_AGGREGATED_STACKS_ENTRIES: u64 = 10000;
+
 impl Profiler {
     pub fn create_unwind_info_maps(
         open_skel: &mut OpenProfilerSkel,
@@ -325,16 +334,16 @@ impl Profiler {
         open_skel: &mut OpenProfilerSkel,
         profiler_config: &ProfilerConfig,
     ) {
-/*         open_skel
-            .maps
-            .stacks
-            .set_max_entries(profiler_config.mapsize_stacks)
-            .expect("Unable to set stacks map max_entries"); */
-/*         open_skel
-            .maps
-            .aggregated_stacks
-            .set_max_entries(profiler_config.mapsize_aggregated_stacks)
-            .expect("Unable to set aggregated_stacks map max_entries"); */
+        /*         open_skel
+        .maps
+        .stacks
+        .set_max_entries(profiler_config.mapsize_stacks)
+        .expect("Unable to set stacks map max_entries"); */
+        /*         open_skel
+        .maps
+        .aggregated_stacks
+        .set_max_entries(profiler_config.mapsize_aggregated_stacks)
+        .expect("Unable to set aggregated_stacks map max_entries"); */
         open_skel
             .maps
             .rate_limits
@@ -395,14 +404,6 @@ impl Profiler {
 
     pub fn show_actual_profiler_map_sizes(bpf: &ProfilerSkel) {
         info!("BPF map sizes:");
-/*         info!(
-            "stacks: {}",
-            bpf.maps.stacks.info().unwrap().info.max_entries
-        );
-        info!(
-            "aggregated_stacks: {}",
-            bpf.maps.aggregated_stacks.info().unwrap().info.max_entries
-        ); */
         info!(
             "rate_limits: {}",
             bpf.maps.rate_limits.info().unwrap().info.max_entries
@@ -524,6 +525,10 @@ impl Profiler {
         let profile_send = Arc::new(sender);
         let profile_receive = Arc::new(receiver);
 
+        let (sender, receiver) = unbounded();
+        let raw_sample_sender = Arc::new(sender);
+        let raw_sample_receiver = Arc::new(receiver);
+
         Profiler {
             cache_dir,
             _links: Vec::new(),
@@ -542,6 +547,9 @@ impl Profiler {
             filter_pids: HashMap::new(),
             profile_send,
             profile_receive,
+            raw_samples: Vec::new(),
+            raw_sample_send: raw_sample_sender,
+            raw_sample_receive: raw_sample_receiver,
             duration: profiler_config.duration,
             sample_freq: profiler_config.sample_freq,
             perf_buffer_bytes: profiler_config.perf_buffer_bytes,
@@ -552,6 +560,7 @@ impl Profiler {
             max_native_unwind_info_size_mb: profiler_config.max_native_unwind_info_size_mb,
             unwind_info_manager: UnwindInfoManager::new(&unwind_cache_dir, None),
             use_ring_buffers: profiler_config.use_ring_buffers,
+            aggregator: Aggregator::default(),
             metadata_provider,
         }
     }
@@ -708,7 +717,7 @@ impl Profiler {
         // number of "online" CPUs, not "possible" CPUs, which they sometimes differ.
         let num_cpus = get_online_cpus().expect("get online CPUs").len() as u64;
         let max_samples_per_session = self.sample_freq * num_cpus * self.session_duration.as_secs();
-        if max_samples_per_session >= MAX_AGGREGATED_STACKS_ENTRIES.into() {
+        if max_samples_per_session >= MAX_AGGREGATED_STACKS_ENTRIES {
             warn!("samples might be lost due to too many samples in a profile session");
         }
 
@@ -719,12 +728,13 @@ impl Profiler {
         self.tracers.attach().expect("attach tracers");
 
         let chan_send = self.new_proc_chan_send.clone();
+        let raw_sample_send = self.raw_sample_send.clone();
 
         self.start_poll_thread(
-            "aaaaaa",
+            "raw_samples",
             &self.native_unwinder.maps.stacks_rb,
             &self.native_unwinder.maps.stacks,
-            move |data| Self::handle_stack(&data),
+            move |data| Self::handle_stack(&raw_sample_send, data),
             Self::handle_lost_stack,
         );
 
@@ -783,6 +793,7 @@ impl Profiler {
         let session_tick = tick(self.session_duration);
 
         loop {
+            // TODO: Should we use select_biased here?
             select! {
                 recv(self.stop_chan_receive) -> _ => {
                     debug!("received ctrl+c");
@@ -800,7 +811,15 @@ impl Profiler {
                     debug!("collecting profiles on schedule");
                     let profile = self.collect_profile();
                     self.send_profile(profile);
-                }
+                },
+                recv(self.raw_sample_receive) -> raw_sample => {
+                    if let Ok(raw_sample) = raw_sample {
+                        self.raw_samples.push(raw_sample);
+                    }
+                    else {
+                        warn!("Failed to receive raw sample, what={:?}", raw_sample.err());
+                    }
+                },
                 recv(self.tracers_chan_receive) -> read => {
                     match read {
                         Ok(TracerEvent::Munmap(pid, start_address)) => {
@@ -1057,88 +1076,22 @@ impl Profiler {
             .expect("zero percpu_stats");
     }
 
-    /// Clear the `percpu_stats`, `stacks`, and `aggregated_stacks` maps one entry at a time.
+    /// Clear the `percpu_stats` maps one entry at a time.
     pub fn clear_maps(&mut self) {
         let _span = span!(Level::DEBUG, "clear_maps").entered();
 
-/*         self.clear_map("stacks");
-        self.clear_map("aggregated_stacks"); */
         self.clear_map("rate_limits");
     }
 
     pub fn collect_profile(&mut self) -> RawAggregatedProfile {
         debug!("collecting profile");
+        println!("Num raw samples {}", self.raw_samples.len());
+        let result = self.aggregator.aggregate(self.raw_samples.clone());
+        self.raw_samples.clear();
 
-        // self.teardown_perf_events();
-        let result = Vec::new();
-      /*
-        let maps = &self.native_unwinder.maps;
-        let aggregated_stacks = &maps.aggregated_stacks;
-        let stacks = &maps.stacks;
- */
-       /*  let mut all_stacks_bytes = Vec::new();
-        // -- storage   (stack_hash) => [addr1, addr2]
-        // -- agg       (pid, tid, stack_hash) => count
-        for aggregated_stack_key_bytes in aggregated_stacks.keys() {
-            match aggregated_stacks.lookup(&aggregated_stack_key_bytes, MapFlags::ANY) {
-                Ok(Some(aggregated_value_bytes)) => {
-                    let mut result_ustack: Option<native_stack_t> = None;
-                    let mut result_kstack: Option<native_stack_t> = None;
-
-                    let key: &stack_count_key_t =
-                        plain::from_bytes(&aggregated_stack_key_bytes).unwrap();
-                    let count: &u64 = plain::from_bytes(&aggregated_value_bytes).unwrap();
-
-                    all_stacks_bytes.push(aggregated_stack_key_bytes.clone());
-
-                    // Maybe check if procinfo is up to date
-                    // Fetch actual stacks
-                    // Handle errors later
-                    if key.user_stack_id > 0 {
-                        match stacks.lookup(&key.user_stack_id.to_ne_bytes(), MapFlags::ANY) {
-                            Ok(Some(stack_bytes)) => {
-                                result_ustack = Some(*plain::from_bytes(&stack_bytes).unwrap());
-                            }
-                            Ok(None) => {
-                                warn!("NO USER STACK FOUND");
-                            }
-                            Err(e) => {
-                                error!("\tfailed getting user stack {}", e);
-                            }
-                        }
-                    }
-                    if key.kernel_stack_id > 0 {
-                        match stacks.lookup(&key.kernel_stack_id.to_ne_bytes(), MapFlags::ANY) {
-                            Ok(Some(stack_bytes)) => {
-                                result_kstack = Some(*plain::from_bytes(&stack_bytes).unwrap());
-                            }
-                            _ => {
-                                error!("\tfailed getting kernel stack");
-                            }
-                        }
-                    }
-
-                    let raw_aggregated_sample = RawAggregatedSample {
-                        sample: RawSample {
-                            pid: key.pid,
-                            tid: key.task_id,
-                            ustack: result_ustack,
-                            kstack: result_kstack,
-                        },
-                        count: *count,
-                    };
-                    result.push(raw_aggregated_sample);
-                }
-                _ => continue,
-            }
-        }
-
-        debug!("===== got {} unique stacks", all_stacks_bytes.len());
-
-        self.bump_last_used(&result); */
+        self.bump_last_used(&result);
         self.collect_unwinder_stats();
         self.clear_maps();
-        // self.setup_perf_events();
         result
     }
 
@@ -2117,16 +2070,20 @@ impl Profiler {
         Ok(())
     }
 
-    fn handle_stack(data: &[u8]) {
+    fn handle_stack(raw_sample_send: &Arc<Sender<RawSample>>, data: &[u8]) {
         let mut unwind_state = unwind_state_t::default();
         plain::copy_from_bytes(&mut unwind_state, data).expect("handle stack serde");
 
-        println!("!!!! got a stack !!!! user len: {} kernel len: {}", unwind_state.stack.len, unwind_state.kernel_stack.len);
+        let raw_sample = RawSample {
+            pid: unwind_state.stack_key.pid,
+            tid: unwind_state.stack_key.task_id,
+            ustack: Some(unwind_state.stack),
+            kstack: Some(unwind_state.kernel_stack),
+        };
+        raw_sample_send.send(raw_sample).expect("Send raw sample");
     }
 
-    fn handle_lost_stack(_cpu: i32, _count: u64) {
-
-    }
+    fn handle_lost_stack(_cpu: i32, _count: u64) {}
 
     fn handle_event(sender: &Arc<Sender<Event>>, data: &[u8]) {
         let mut event = Event::default();

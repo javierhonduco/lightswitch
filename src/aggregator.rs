@@ -1,0 +1,114 @@
+use std::hash::DefaultHasher;
+use std::{collections::HashMap, hash::Hash, hash::Hasher};
+
+use tracing::warn;
+
+use crate::profile::{RawAggregatedProfile, RawAggregatedSample, RawSample};
+
+#[derive(Default)]
+pub struct Aggregator {}
+
+impl Aggregator {
+    pub fn aggregate(&self, raw_samples: Vec<RawSample>) -> RawAggregatedProfile {
+        if raw_samples.is_empty() {
+            return Vec::new(); // TODO: return error if nothing to aggregate?
+        }
+
+        let mut sample_hash_to_aggregated: HashMap<u64, RawAggregatedSample> = HashMap::new();
+        for sample in raw_samples {
+            if sample.ustack.is_none() & sample.kstack.is_none() {
+                warn!(
+                    "No stack present in provided sample={}, skipping...",
+                    sample
+                );
+                continue;
+            }
+
+            let mut hasher = DefaultHasher::new();
+            sample.hash(&mut hasher);
+            let sample_hash = hasher.finish();
+
+            sample_hash_to_aggregated
+                .entry(sample_hash)
+                .and_modify(|aggregated_sample| aggregated_sample.count += 1)
+                .or_insert(RawAggregatedSample { sample, count: 1 });
+        }
+        sample_hash_to_aggregated.into_values().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::aggregator::Aggregator;
+    use crate::bpf::profiler_bindings::native_stack_t;
+    use crate::profile::RawSample;
+
+    #[test]
+    fn test_aggregate_raw_samples() {
+        // Given
+        let mut ustack1_data = [0; 127];
+        ustack1_data[0] = 0xffff;
+        ustack1_data[1] = 0xdeadbeef;
+        let ustack1 = Some(native_stack_t {
+            addresses: ustack1_data,
+            len: 2,
+        });
+
+        // todo: opatnebe (add kstack)
+        let raw_sample_1 = RawSample {
+            pid: 1234,
+            tid: 1235,
+            ustack: ustack1,
+            kstack: None,
+        };
+
+        let mut ustack2_data = [0; 127];
+        ustack2_data[0] = 0xdddd;
+        ustack2_data[1] = 0xfeedbee;
+        ustack2_data[0] = 0xddddef;
+        ustack2_data[1] = 0xbeefdad;
+        let ustack2 = Some(native_stack_t {
+            addresses: ustack2_data,
+            len: 4,
+        });
+
+        let raw_sample_2 = RawSample {
+            pid: 1234,
+            tid: 1235,
+            ustack: ustack2,
+            kstack: None,
+        };
+
+        let raw_samples = vec![
+            raw_sample_1,
+            raw_sample_2,
+            raw_sample_1,
+            raw_sample_2,
+            raw_sample_2,
+            raw_sample_2,
+        ];
+
+        let aggregator = Aggregator::default();
+
+        // When
+        let raw_aggregated_profile = aggregator.aggregate(raw_samples);
+
+        // Then
+        assert_eq!(raw_aggregated_profile.len(), 2);
+    }
+
+    #[test]
+    fn test_aggregate_raw_samples_diff_ustack_same_kstack() {}
+
+    #[test]
+    fn test_aggregate_raw_samples_same_ustack_diff_kstack() {}
+
+    #[test]
+    fn test_aggregate_raw_samples_no_ustack() {}
+
+    #[test]
+    fn test_aggregate_raw_samples_no_kstack() {}
+
+    #[test]
+    fn test_aggregate_same_stack_traces_different_pid_tid() {}
+}
