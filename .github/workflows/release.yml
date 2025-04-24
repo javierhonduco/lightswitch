@@ -25,7 +25,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-    - uses: DeterminateSystems/nix-installer-action@e50d5f73bfe71c2dd0aa4218de8f4afa59f8f81d # v16
+    - uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3 # v17
     - uses: DeterminateSystems/flakehub-cache-action@146f476c94460cb634f9ade79470fcbc3f7e5b36 # v1
     - name: Set up nix dev env
       run: nix develop --command echo 0
@@ -64,7 +64,7 @@ jobs:
           cp lightswitch-static-glibc-aarch64-unknown-linux-gnu/lightswitch renamed/lightswitch-static-glibc-aarch64-unknown-linux-gnu
 
       - name: Create release
-        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
+        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
         with:
           files: |
             renamed/lightswitch-container-x86_64-unknown-linux-gnu
