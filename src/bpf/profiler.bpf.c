@@ -333,14 +333,14 @@ unwind_state_t *unwind_state) {
 
   if (lightswitch_config.use_ring_buffers) {
     ret = bpf_ringbuf_output(&stacks_rb, unwind_state, sizeof(unwind_state_t), 0);
-    if (ret < 0) {
-      bpf_printk("add_stack ringbuf failed ret=%d", ret);
-      // TODO: add counter
-      // What will the counter be used for?
-    }
+    
   } else {
     ret = bpf_perf_event_output(ctx, &stacks, BPF_F_CURRENT_CPU, unwind_state, sizeof(unwind_state_t));
-    // todo: What is ret used for here?
+  }
+
+  if (ret < 0) {
+    bpf_printk("add_stack failed ret=%d", ret);
+    bump_unwind_error_failure_adding_stack();
   }
 }
 

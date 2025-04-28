@@ -170,8 +170,6 @@ pub struct ProfilerConfig {
     pub perf_buffer_bytes: usize,
     pub session_duration: Duration,
     pub mapsize_info: bool,
-    pub mapsize_stacks: u32,
-    pub mapsize_aggregated_stacks: u32,
     pub mapsize_rate_limits: u32,
     pub exclude_self: bool,
     pub native_unwind_info_bucket_sizes: Vec<u32>,
@@ -192,8 +190,6 @@ impl Default for ProfilerConfig {
             perf_buffer_bytes: 512 * 1024,
             session_duration: Duration::from_secs(5),
             mapsize_info: false,
-            mapsize_stacks: 100000,
-            mapsize_aggregated_stacks: 10000,
             mapsize_rate_limits: 5000,
             exclude_self: false,
             native_unwind_info_bucket_sizes: vec![
@@ -288,8 +284,6 @@ enum AddUnwindInformationError {
     BpfPages(String),
 }
 
-static MAX_AGGREGATED_STACKS_ENTRIES: u64 = 10000;
-
 impl Profiler {
     pub fn create_unwind_info_maps(
         open_skel: &mut OpenProfilerSkel,
@@ -334,16 +328,6 @@ impl Profiler {
         open_skel: &mut OpenProfilerSkel,
         profiler_config: &ProfilerConfig,
     ) {
-        /*         open_skel
-        .maps
-        .stacks
-        .set_max_entries(profiler_config.mapsize_stacks)
-        .expect("Unable to set stacks map max_entries"); */
-        /*         open_skel
-        .maps
-        .aggregated_stacks
-        .set_max_entries(profiler_config.mapsize_aggregated_stacks)
-        .expect("Unable to set aggregated_stacks map max_entries"); */
         open_skel
             .maps
             .rate_limits
@@ -362,7 +346,18 @@ impl Profiler {
             .use_ring_buffers
             .write(profiler_config.use_ring_buffers);
 
+        let max_raw_sample_entries = Profiler::get_stacks_sampling_buffer_size(
+            profiler_config.sample_freq as u32,
+            profiler_config.session_duration,
+        );
+
         if profiler_config.use_ring_buffers {
+            open_skel
+                .maps
+                .stacks_rb
+                .set_max_entries(max_raw_sample_entries)
+                .expect("failed to set stacks_rb max entries");
+
             // Even set to zero it will create as many entries as CPUs.
             open_skel
                 .maps
@@ -370,6 +365,12 @@ impl Profiler {
                 .set_max_entries(0)
                 .expect("set perf buffer entries to zero as it's unused");
         } else {
+            open_skel
+                .maps
+                .stacks
+                .set_max_entries(max_raw_sample_entries)
+                .expect("failed to set stacks max entries");
+
             // Seems like ring buffers need to have size of at least 1...
             // It will use at least a page.
             open_skel
@@ -712,15 +713,24 @@ impl Profiler {
         }
     }
 
-    pub fn run(mut self, collector: ThreadSafeCollector) -> Duration {
-        // In this case, we only want to calculate maximum sampling buffer sizes based on the
+    fn get_stacks_sampling_buffer_size(sample_freq: u32, session_duration: Duration) -> u32 {
+        // In this case, we only want to calculate maximum sampling buffer size based on the
         // number of "online" CPUs, not "possible" CPUs, which they sometimes differ.
-        let num_cpus = get_online_cpus().expect("get online CPUs").len() as u64;
-        let max_samples_per_session = self.sample_freq * num_cpus * self.session_duration.as_secs();
-        if max_samples_per_session >= MAX_AGGREGATED_STACKS_ENTRIES {
-            warn!("samples might be lost due to too many samples in a profile session");
-        }
+        let num_cpus: u32 = get_online_cpus().expect("get online CPUs").len() as u32;
+        let max_entries: u32 = sample_freq * num_cpus * session_duration.as_secs() as u32;
 
+        info!(
+            "num_cpus={} sample_freq={} duration={} max_entries={}",
+            num_cpus,
+            sample_freq,
+            session_duration.as_secs(),
+            max_entries
+        );
+        // max_entries
+        4096
+    }
+
+    pub fn run(mut self, collector: ThreadSafeCollector) -> Duration {
         self.setup_perf_events();
         self.set_bpf_map_info();
         self.add_kernel_modules();
