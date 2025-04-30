@@ -79,6 +79,8 @@ impl GlobalMetadataProvider {
                     warn!("Failed to retrieve custom system metadata, error = {}", err);
                 }
             }
+
+            warn!("remove-me!");
         }
 
         for provider in &self.custom_task_metadata_providers {
