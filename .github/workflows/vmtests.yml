@@ -22,5 +22,8 @@ jobs:
         export DEBIAN_FRONTEND=noninteractive
         sudo apt-get update && sudo apt-get -y install --no-install-recommends qemu-system-x86 qemu-guest-agent
 
+    - name: Show nix version
+      run: nix --version
+
     - name: Run kernel tests
       run: nix run .#vmtest
