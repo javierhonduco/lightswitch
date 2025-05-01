@@ -320,7 +320,7 @@ fn show_unwind_info(path: &str) {
 }
 
 fn show_object_file_info(path: &str) {
-    let object_file = ObjectFile::new(&PathBuf::from(path)).unwrap();
+    let object_file = ObjectFile::from_path(&PathBuf::from(path)).unwrap();
     println!("- build id: {:?}", object_file.build_id());
     if let Ok(executable_id) = object_file.build_id().id() {
         println!("- executable id: 0x{}", executable_id);

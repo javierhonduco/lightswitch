@@ -251,7 +251,7 @@ fn fetch_vdso_info(
     fs::write(&dumped_vdso, &buf)?;
 
     // Pass that to the object parser
-    let object = ObjectFile::new(&dumped_vdso)?;
+    let object = ObjectFile::from_path(&dumped_vdso)?;
 
     Ok((dumped_vdso, object))
 }
@@ -685,7 +685,6 @@ impl Profiler {
                             .id()
                             .expect("should never happen"),
                         ObjectFileInfo {
-                            file: File::open("/").expect("should never fail"), // TODO: placeholder, but this will be removed soon
                             path: PathBuf::from(kernel_code_range.name),
                             elf_load_segments: vec![],
                             is_dyn: false,
@@ -1551,8 +1550,7 @@ impl Profiler {
         }
         let object_files = self.object_files.read();
         let executable_info = object_files.get(&executable_id).unwrap();
-        let executable_path_open = executable_info.open_file_path();
-        let executable_path = executable_info.path.to_string_lossy().to_string();
+        let executable_path = executable_info.path.clone();
         let needs_synthesis = executable_info.is_vdso && architecture() == Architecture::Arm64;
         let runtime = executable_info.runtime.clone();
         std::mem::drop(object_files);
@@ -1588,11 +1586,11 @@ impl Profiler {
                         Level::DEBUG,
                         "calling in_memory_unwind_info",
                         "{}",
-                        executable_path
+                        executable_path.display()
                     )
                     .entered();
                     self.unwind_info_manager
-                        .fetch_unwind_info(&executable_path_open, executable_id)
+                        .fetch_unwind_info(&executable_path, executable_id)
                 }
             }
         };
@@ -1600,13 +1598,13 @@ impl Profiler {
         let unwind_info = match unwind_info {
             Ok(unwind_info) => unwind_info,
             Err(e) => {
-                let known_naughty = executable_path.contains("libicudata.so");
+                let known_naughty = executable_path.to_string_lossy().contains("libicudata.so");
                 if known_naughty {
                     return Err(AddUnwindInformationError::NoUnwindInfoKnownNaughty);
                 } else {
                     return Err(AddUnwindInformationError::NoUnwindInfo(
                         e.to_string(),
-                        executable_path,
+                        executable_path.to_string_lossy().to_string(),
                     ));
                 }
             }
@@ -1617,7 +1615,7 @@ impl Profiler {
 
         let Some((bucket_id, _)) = bucket else {
             return Err(AddUnwindInformationError::TooLarge(
-                executable_path,
+                executable_path.to_string_lossy().to_string(),
                 unwind_info.len(),
             ));
         };
@@ -1664,7 +1662,7 @@ impl Profiler {
                 Ok(AddUnwindInformationResult::Success)
             }
             None => Err(AddUnwindInformationError::TooLarge(
-                executable_path,
+                executable_path.to_string_lossy().to_string(),
                 unwind_info.len(),
             )),
         };
@@ -1910,7 +1908,7 @@ impl Profiler {
                         }
                     };
 
-                    let object_file = match ObjectFile::new(&exe_path.clone()) {
+                    let object_file = match ObjectFile::new(&file) {
                         Ok(f) => f,
                         Err(e) => {
                             debug!("object_file {} failed with {}", exe_path.display(), e);
@@ -1987,7 +1985,6 @@ impl Profiler {
                             Ok(elf_loads) => {
                                 entry.insert(ObjectFileInfo {
                                     path: exe_path,
-                                    file,
                                     elf_load_segments: elf_loads,
                                     is_dyn: object_file.is_dynamic(),
                                     references: 1,
@@ -2035,10 +2032,6 @@ impl Profiler {
                             debug!("vDSO object file id failed");
                             continue;
                         };
-                        let Ok(file) = File::open(&vdso_path) else {
-                            debug!("vDSO object file open failed");
-                            continue;
-                        };
                         let Ok(elf_load_segments) = object_file.elf_load_segments() else {
                             debug!("vDSO elf_load_segments failed");
                             continue;
@@ -2049,7 +2042,6 @@ impl Profiler {
                             executable_id,
                             ObjectFileInfo {
                                 path: vdso_path.clone(),
-                                file,
                                 elf_load_segments,
                                 is_dyn: object_file.is_dynamic(),
                                 references: 1,
