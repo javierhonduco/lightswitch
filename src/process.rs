@@ -1,9 +1,5 @@
 use std::collections::HashMap;
-use std::fs;
-use std::fs::File;
-use std::os::fd::AsRawFd;
 use std::path::PathBuf;
-use std::process;
 use std::time::Instant;
 
 use tracing::debug;
@@ -116,7 +112,6 @@ impl ExecutableMapping {
 }
 
 pub struct ObjectFileInfo {
-    pub file: fs::File,
     pub path: PathBuf,
     pub elf_load_segments: Vec<ElfLoad>,
     pub is_dyn: bool,
@@ -129,7 +124,6 @@ pub struct ObjectFileInfo {
 impl Clone for ObjectFileInfo {
     fn clone(&self) -> Self {
         ObjectFileInfo {
-            file: self.open_file_from_procfs_fd(),
             path: self.path.clone(),
             elf_load_segments: self.elf_load_segments.clone(),
             is_dyn: self.is_dyn,
@@ -142,29 +136,6 @@ impl Clone for ObjectFileInfo {
 }
 
 impl ObjectFileInfo {
-    /// Files might be removed at any time from the file system and they won't
-    /// be accessible anymore with their path. We work around this by doing the
-    /// following:
-    ///
-    /// - We open object files as soon as we learn about them, that way we increase
-    ///   the reference count of the file in the kernel. Files won't really be deleted
-    ///   until the reference count drops to zero.
-    /// - In order to re-open files even if they've been deleted, we can use the procfs
-    ///   interface, as long as their reference count hasn't reached zero and the kernel
-    ///   hasn't removed the file from the file system and the various caches.
-    fn open_file_from_procfs_fd(&self) -> File {
-        let raw_fd = self.file.as_raw_fd();
-        File::open(format!("/proc/{}/fd/{}", process::id(), raw_fd)).expect(
-            "re-opening the file from procfs will never fail as we have an already opened file",
-        )
-    }
-
-    /// Returns the procfs path for this file descriptor. See comment above.
-    pub fn open_file_path(&self) -> PathBuf {
-        let raw_fd = self.file.as_raw_fd();
-        PathBuf::from(format!("/proc/{}/fd/{}", process::id(), raw_fd))
-    }
-
     /// For a virtual address return the offset within the object file. This is
     /// necessary for off-host symbolization. In order to do this we must check every
     /// `PT_LOAD` segment.
@@ -194,43 +165,9 @@ impl ObjectFileInfo {
 mod tests {
     use super::*;
 
-    /// This tests ensures that cloning an `ObjectFileInfo` succeeds to
-    /// open the file even if it's been deleted. This works because we
-    /// always keep at least one open file descriptor to prevent the kernel
-    /// from freeing the resource, effectively removing the file from the
-    /// file system.
-    #[test]
-    fn test_object_file_clone() {
-        use std::fs::remove_file;
-        use std::io::Read;
-
-        let named_tmpfile = tempfile::NamedTempFile::new().unwrap();
-        let file_path = named_tmpfile.path();
-        let file = File::open(file_path).unwrap();
-
-        let object_file_info = ObjectFileInfo {
-            file,
-            path: file_path.to_path_buf(),
-            elf_load_segments: vec![],
-            is_dyn: false,
-            references: 1,
-            native_unwind_info_size: None,
-            is_vdso: false,
-            runtime: Runtime::CLike,
-        };
-
-        remove_file(file_path).unwrap();
-
-        let mut object_file_info_copy = object_file_info.clone();
-        let mut buf = String::new();
-        // This would fail without the procfs hack.
-        object_file_info_copy.file.read_to_string(&mut buf).unwrap();
-    }
-
     #[test]
     fn test_address_normalization() {
         let mut object_file_info = ObjectFileInfo {
-            file: File::open("/").unwrap(),
             path: "/".into(),
             elf_load_segments: vec![],
             is_dyn: false,

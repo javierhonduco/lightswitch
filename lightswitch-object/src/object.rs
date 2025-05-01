@@ -1,4 +1,5 @@
 use std::fs;
+use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
@@ -52,12 +53,11 @@ pub struct ObjectFile {
 }
 
 impl ObjectFile {
-    pub fn new(path: &Path) -> Result<Self> {
-        let file = fs::File::open(path)?;
+    pub fn new(file: &File) -> Result<Self> {
         // Rust offers no guarantees on whether a "move" is done virtually or by memcpying,
         // so to ensure that the memory value is valid we store it in the heap.
         // Safety: Memory mapping files can cause issues if the file is modified or unmapped.
-        let mmap = Box::new(unsafe { Mmap::map(&file) }?);
+        let mmap = Box::new(unsafe { Mmap::map(file) }?);
         let object = object::File::parse(&**mmap)?;
         // Safety: The lifetime of `object` will outlive `mmap`'s. We ensure `mmap` lives as long as
         // `object` by defining `object` before.
@@ -70,6 +70,11 @@ impl ObjectFile {
             mmap,
             build_id,
         })
+    }
+
+    pub fn from_path(path: &Path) -> Result<Self> {
+        let file = fs::File::open(path)?;
+        Self::new(&file)
     }
 
     /// Returns an identifier for the executable using the first 8 bytes of the build id.
