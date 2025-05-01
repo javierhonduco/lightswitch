@@ -797,7 +797,7 @@ impl Profiler {
                                 self.handle_munmap(pid, start_address);
                         },
                         Ok(TracerEvent::ProcessExit(pid)) => {
-                                self.handle_process_exit(pid);
+                                self.handle_process_exit(pid, false);
                         },
                         Err(_) => {}
                     }
@@ -827,7 +827,7 @@ impl Profiler {
         start.elapsed()
     }
 
-    pub fn handle_process_exit(&mut self, pid: Pid) {
+    pub fn handle_process_exit(&mut self, pid: Pid, partial_write: bool) {
         // TODO: remove ratelimits for this process.
         let mut procs = self.procs.write();
         match procs.get_mut(&pid) {
@@ -854,6 +854,7 @@ impl Profiler {
                                 mapping,
                                 entry,
                                 &mut self.native_unwind_state.unwind_info_bucket_usage,
+                                partial_write,
                             );
                         }
                     }
@@ -886,6 +887,7 @@ impl Profiler {
                                     mapping,
                                     entry,
                                     &mut self.native_unwind_state.unwind_info_bucket_usage,
+                                    false,
                                 );
                             }
                         }
@@ -1275,7 +1277,13 @@ impl Profiler {
         Ok(())
     }
 
-    fn delete_bpf_mappings(bpf: &ProfilerSkel, pid: Pid, mapping_begin: u64, mapping_end: u64) {
+    fn delete_bpf_mappings(
+        bpf: &ProfilerSkel,
+        pid: Pid,
+        mapping_begin: u64,
+        mapping_end: u64,
+        partial_write: bool,
+    ) {
         for address_range in summarize_address_range(mapping_begin, mapping_end - 1) {
             let key = exec_mappings_key::new(
                 pid as u32,
@@ -1289,7 +1297,12 @@ impl Profiler {
                 .exec_mappings
                 .delete(unsafe { plain::as_bytes(&key) });
             if let Err(e) = res {
-                error!("failed to delete bpf mappings with {:?}", e);
+                if !partial_write {
+                    error!(
+                        "failed to delete bpf mappings for process {} with {:?}",
+                        pid, e
+                    );
+                }
             }
         }
     }
@@ -1329,8 +1342,15 @@ impl Profiler {
         mapping: &ExecutableMapping,
         entry: OccupiedEntry<ExecutableId, KnownExecutableInfo>,
         unwind_info_bucket_usage: &mut [usize],
+        partial_write: bool,
     ) {
-        Self::delete_bpf_mappings(native_unwinder, pid, mapping.start_addr, mapping.end_addr);
+        Self::delete_bpf_mappings(
+            native_unwinder,
+            pid,
+            mapping.start_addr,
+            mapping.end_addr,
+            partial_write,
+        );
 
         Self::delete_bpf_pages(
             native_unwinder,
@@ -1517,18 +1537,28 @@ impl Profiler {
                     "error adding unwind information for executable 0x{} due to {:?}",
                     mapping.executable_id, e
                 );
-                // TODO: maybe cleanup written maps.
+                // TODO: cleanup unwind information map in case of a partial write.
                 return;
             }
         }
 
+        let mut errored = false;
         // Store all mappings in BPF maps.
         if let Err(e) = Self::add_bpf_mappings(&self.native_unwinder, pid, &bpf_mappings) {
-            warn!("failed to add BPF mappings due to {:?}", e);
+            errored = true;
+            debug!("failed to add BPF mappings due to {:?}", e);
         }
         // Add entry just with the pid to signal processes that we already know about.
         if let Err(e) = Self::add_bpf_process(&self.native_unwinder, pid) {
-            warn!("failed to add BPF process due to {:?}", e);
+            errored = true;
+            debug!("failed to add BPF process due to {:?}", e);
+        }
+
+        if errored {
+            // Remove partially written data.
+            self.handle_process_exit(pid, true);
+            // Evict a process to make room for more.
+            debug!("eviction result {}", self.maybe_evict_process(false));
         }
     }
 
@@ -1827,15 +1857,19 @@ impl Profiler {
         }
     }
 
-    /// Evict a process if there are more processes with [`ProcessStatus::Running`] status
-    /// than the maximum number of processes, [`MAX_PROCESSES`]. Returns false only if an
-    /// eviction is necessary but not enough time has elapsed since the last one.
-    fn maybe_evict_process(&mut self) -> bool {
+    /// Evicts a process. If *if_too_many_procs* is true, this will only be done if there are more
+    /// processes with  [`ProcessStatus::Running`] status than the maximum number of processes, [`MAX_PROCESSES`].
+    /// Returns false only if an eviction is necessary but not enough time has elapsed since the last one.
+    fn maybe_evict_process(&mut self, if_too_many_procs: bool) -> bool {
         let procs = self.procs.read();
         let running_procs = procs
             .iter()
             .filter(|e| e.1.status == ProcessStatus::Running);
-        let should_evict = running_procs.clone().count() >= MAX_PROCESSES as usize;
+        let should_evict = if if_too_many_procs {
+            running_procs.clone().count() >= MAX_PROCESSES as usize
+        } else {
+            true
+        };
 
         if should_evict && !self.native_unwind_state.can_evict_process() {
             return false;
@@ -1854,8 +1888,8 @@ impl Profiler {
         std::mem::drop(procs);
 
         if let Some(pid) = to_evict {
-            debug!("evicting pid{}", pid);
-            self.handle_process_exit(pid);
+            debug!("evicting pid {}", pid);
+            self.handle_process_exit(pid, false);
             self.native_unwind_state.last_process_eviction = Instant::now();
         }
 
@@ -1865,7 +1899,7 @@ impl Profiler {
     pub fn add_proc(&mut self, pid: Pid) -> Result<(), AddProcessError> {
         let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
         let maps = proc.maps().map_err(|_| AddProcessError::ProcfsRace)?;
-        if !self.maybe_evict_process() {
+        if !self.maybe_evict_process(true) {
             return Err(AddProcessError::Eviction);
         }
 
@@ -2189,7 +2223,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 20);
-        Profiler::delete_bpf_mappings(&native_unwinder, 0xBADFAD, 0, 0xFFFFF);
+        Profiler::delete_bpf_mappings(&native_unwinder, 0xBADFAD, 0, 0xFFFFF, false);
         assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
     }
 
@@ -2222,7 +2256,7 @@ mod tests {
                 .count()
                 > 2
         );
-        profiler.handle_process_exit(std::process::id() as i32);
+        profiler.handle_process_exit(std::process::id() as i32, false);
         assert_eq!(profiler.native_unwinder.maps.outer_map_0.keys().count(), 0);
         assert_eq!(profiler.native_unwinder.maps.outer_map_1.keys().count(), 0);
         assert_eq!(profiler.native_unwinder.maps.outer_map_2.keys().count(), 0);
