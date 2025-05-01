@@ -80,6 +80,16 @@ fn start_deadlock_detector() {
     });
 }
 
+/// Show version and build info.
+fn show_version_and_build_info() {
+    let name = env!("CARGO_PKG_NAME");
+    let version = env!("CARGO_PKG_VERSION");
+    let git_revision = env!("GIT_REV");
+    let git_date = env!("GIT_DATE");
+
+    println!("{name} {version} ({git_date} {git_revision})");
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     panic_thread_hook();
     let args = CliArgs::parse();
@@ -100,6 +110,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         .finish();
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+
+    if args.version {
+        show_version_and_build_info();
+        return Ok(());
+    }
 
     match args.command {
         None => {} // record profiles by default
