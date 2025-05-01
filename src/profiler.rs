@@ -942,12 +942,12 @@ impl Profiler {
     }
 
     /// Updates the last time processes and executables were seen. This is used during evictions.
-    pub fn bump_last_used(&mut self, raw_samples: &[RawAggregatedSample]) {
+    pub fn bump_last_used(&mut self, raw_aggregated_samples: &[RawAggregatedSample]) {
         let now = Instant::now();
 
-        for raw_sample in raw_samples {
-            let pid = raw_sample.pid;
-            let ustack = raw_sample.ustack;
+        for aggregated_sample in raw_aggregated_samples {
+            let pid = aggregated_sample.sample.pid;
+            let ustack = aggregated_sample.sample.ustack;
             let Some(ustack) = ustack else {
                 continue;
             };
@@ -1108,14 +1108,16 @@ impl Profiler {
                         }
                     }
 
-                    let raw_sample = RawAggregatedSample {
-                        pid: key.pid,
-                        tid: key.task_id,
-                        ustack: result_ustack,
-                        kstack: result_kstack,
+                    let raw_aggregated_sample = RawAggregatedSample {
+                        sample: RawSample {
+                            pid: key.pid,
+                            tid: key.task_id,
+                            ustack: result_ustack,
+                            kstack: result_kstack,
+                        },
                         count: *count,
                     };
-                    result.push(raw_sample);
+                    result.push(raw_aggregated_sample);
                 }
                 _ => continue,
             }
