@@ -17,6 +17,9 @@ jobs:
     - uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3 # v17
     - uses: DeterminateSystems/flakehub-cache-action@146f476c94460cb634f9ade79470fcbc3f7e5b36 # v1
 
+    - name: Show nix version
+      run: nix --version
+
     - name: Set up nix dev env
       run: nix develop --command echo 0
 
