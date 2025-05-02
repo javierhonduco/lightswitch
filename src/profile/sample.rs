@@ -12,7 +12,7 @@ use crate::process::Pid;
 use crate::process::ProcessInfo;
 use crate::profile::Frame;
 
-#[derive(Debug, Hash, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
 pub struct RawSample {
     pub pid: Pid,
     pub tid: Pid,
