@@ -720,18 +720,12 @@ impl Profiler {
     fn get_stacks_sampling_buffer_size(sample_freq: u32, session_duration: Duration) -> u32 {
         // In this case, we only want to calculate maximum sampling buffer size based on the
         // number of "online" CPUs, not "possible" CPUs, which they sometimes differ.
-        let num_cpus: u32 = get_online_cpus().expect("get online CPUs").len() as u32;
-        let max_entries: u32 = sample_freq * num_cpus * session_duration.as_secs() as u32;
-
-        info!(
-            "num_cpus={} sample_freq={} duration={} max_entries={}",
-            num_cpus,
-            sample_freq,
-            session_duration.as_secs(),
-            max_entries
-        );
+        // let num_cpus: u32 = get_online_cpus().expect("get online CPUs").len() as u32;
+        // let max_entries: u32 = sample_freq * num_cpus * session_duration.as_secs() as u32;
         // max_entries
-        4096
+        // TODO: Multiply by num online CPUs only for ringbuf 
+        // as perfbuff are allocated per cpu
+        4096 *10
     }
 
     pub fn run(mut self, collector: ThreadSafeCollector) -> Duration {
