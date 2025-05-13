@@ -179,10 +179,10 @@ typedef struct {
 typedef struct {
   native_stack_t    stack;
   stack_count_key_t stack_key;
-} raw_stack_t;
+} stack_sample_t;
 
 typedef struct {
-  raw_stack_t raw_stack;
+  stack_sample_t stack;
 
   unsigned long long ip;
   unsigned long long sp;
