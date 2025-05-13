@@ -14,7 +14,7 @@ impl Aggregator {
             return Vec::new();
         }
 
-        let mut sample_hash_to_aggregated: HashMap<u64, RawAggregatedSample> = HashMap::new();
+        let mut sample_hash_to_aggregated = HashMap::new();
         for sample in raw_samples {
             if sample.ustack.is_none() & sample.kstack.is_none() {
                 warn!(
