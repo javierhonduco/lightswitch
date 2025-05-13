@@ -14,7 +14,7 @@ impl Aggregator {
             return Vec::new();
         }
 
-        let mut sample_hash_to_aggregated = HashMap::new();
+        let mut sample_hash_to_aggregated: HashMap<u64, RawAggregatedSample> = HashMap::new();
         for sample in raw_samples {
             if sample.ustack.is_none() & sample.kstack.is_none() {
                 warn!(
@@ -30,9 +30,7 @@ impl Aggregator {
 
             sample_hash_to_aggregated
                 .entry(sample_hash)
-                .and_modify(|aggregated_sample: &mut RawAggregatedSample| {
-                    aggregated_sample.count += 1
-                })
+                .and_modify(|aggregated_sample| aggregated_sample.count += 1)
                 .or_insert(RawAggregatedSample { sample, count: 1 });
         }
         sample_hash_to_aggregated.into_values().collect()
