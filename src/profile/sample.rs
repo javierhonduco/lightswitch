@@ -12,7 +12,7 @@ use crate::process::Pid;
 use crate::process::ProcessInfo;
 use crate::profile::Frame;
 
-#[derive(Debug, Hash, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq, Copy, Clone)]
 pub struct RawSample {
     pub pid: Pid,
     pub tid: Pid,
@@ -47,7 +47,7 @@ impl fmt::Display for RawSample {
     }
 }
 
-#[derive(Debug, Hash, Eq, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct RawAggregatedSample {
     pub sample: RawSample,
     pub count: u64,
