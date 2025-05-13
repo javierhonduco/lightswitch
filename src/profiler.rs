@@ -30,6 +30,7 @@ use libbpf_rs::MapCore;
 use libbpf_rs::MapHandle;
 use libbpf_rs::MapType;
 use libbpf_rs::{Link, MapFlags, PerfBufferBuilder};
+use memmap2::MmapOptions;
 use procfs;
 use tracing::{debug, error, info, span, warn, Level};
 
@@ -52,6 +53,7 @@ use crate::profile::*;
 use crate::unwind_info::manager::UnwindInfoManager;
 use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::executable_path;
+use crate::util::roundup_page;
 use crate::util::Architecture;
 use crate::util::{architecture, get_online_cpus, summarize_address_range};
 use lightswitch_metadata::metadata_provider::{
@@ -169,6 +171,7 @@ pub struct ProfilerConfig {
     pub debug_info_manager: Box<dyn DebugInfoManager>,
     pub max_native_unwind_info_size_mb: i32,
     pub use_ring_buffers: bool,
+    pub use_task_pt_regs_helper: bool,
 }
 
 impl Default for ProfilerConfig {
@@ -193,6 +196,7 @@ impl Default for ProfilerConfig {
             debug_info_manager: Box::new(DebugInfoBackendNull {}),
             max_native_unwind_info_size_mb: i32::MAX,
             use_ring_buffers: true,
+            use_task_pt_regs_helper: true,
         }
     }
 }
@@ -247,7 +251,7 @@ fn fetch_vdso_info(
     fs::write(&dumped_vdso, &buf)?;
 
     // Pass that to the object parser
-    let object = ObjectFile::new(&dumped_vdso)?;
+    let object = ObjectFile::from_path(&dumped_vdso)?;
 
     Ok((dumped_vdso, object))
 }
@@ -271,6 +275,10 @@ enum AddUnwindInformationError {
     NoUnwindInfo(String, String),
     #[error("unwind information contains no entries")]
     Empty,
+    #[error("failed to write to BPF map that stores unwind information: {0}")]
+    BpfUnwindInfo(String),
+    #[error("failed to write to BPF map that stores pages: {0}")]
+    BpfPages(String),
 }
 
 impl Profiler {
@@ -286,6 +294,7 @@ impl Profiler {
         {
             let opts = libbpf_sys::bpf_map_create_opts {
                 sz: size_of::<libbpf_sys::bpf_map_create_opts>() as libbpf_sys::size_t,
+                map_flags: libbpf_sys::BPF_F_MMAPABLE,
                 ..Default::default()
             };
             let inner_map_shape = MapHandle::create(
@@ -676,7 +685,6 @@ impl Profiler {
                             .id()
                             .expect("should never happen"),
                         ObjectFileInfo {
-                            file: File::open("/").expect("should never fail"), // TODO: placeholder, but this will be removed soon
                             path: PathBuf::from(kernel_code_range.name),
                             elf_load_segments: vec![],
                             is_dyn: false,
@@ -798,7 +806,7 @@ impl Profiler {
                                 self.handle_munmap(pid, start_address);
                         },
                         Ok(TracerEvent::ProcessExit(pid)) => {
-                                self.handle_process_exit(pid);
+                                self.handle_process_exit(pid, false);
                         },
                         Err(_) => {}
                     }
@@ -828,7 +836,7 @@ impl Profiler {
         start.elapsed()
     }
 
-    pub fn handle_process_exit(&mut self, pid: Pid) {
+    pub fn handle_process_exit(&mut self, pid: Pid, partial_write: bool) {
         // TODO: remove ratelimits for this process.
         let mut procs = self.procs.write();
         match procs.get_mut(&pid) {
@@ -855,6 +863,7 @@ impl Profiler {
                                 mapping,
                                 entry,
                                 &mut self.native_unwind_state.unwind_info_bucket_usage,
+                                partial_write,
                             );
                         }
                     }
@@ -887,6 +896,7 @@ impl Profiler {
                                     mapping,
                                     entry,
                                     &mut self.native_unwind_state.unwind_info_bucket_usage,
+                                    false,
                                 );
                             }
                         }
@@ -941,12 +951,12 @@ impl Profiler {
     }
 
     /// Updates the last time processes and executables were seen. This is used during evictions.
-    pub fn bump_last_used(&mut self, raw_samples: &[RawAggregatedSample]) {
+    pub fn bump_last_used(&mut self, raw_aggregated_samples: &[RawAggregatedSample]) {
         let now = Instant::now();
 
-        for raw_sample in raw_samples {
-            let pid = raw_sample.pid;
-            let ustack = raw_sample.ustack;
+        for aggregated_sample in raw_aggregated_samples {
+            let pid = aggregated_sample.sample.pid;
+            let ustack = aggregated_sample.sample.ustack;
             let Some(ustack) = ustack else {
                 continue;
             };
@@ -1109,14 +1119,16 @@ impl Profiler {
                         }
                     }
 
-                    let raw_sample = RawAggregatedSample {
-                        pid: key.pid,
-                        tid: key.task_id,
-                        ustack: result_ustack,
-                        kstack: result_kstack,
+                    let raw_aggregated_sample = RawAggregatedSample {
+                        sample: RawSample {
+                            pid: key.pid,
+                            tid: key.task_id,
+                            ustack: result_ustack,
+                            kstack: result_kstack,
+                        },
                         count: *count,
                     };
-                    result.push(raw_sample);
+                    result.push(raw_aggregated_sample);
                 }
                 _ => continue,
             }
@@ -1135,42 +1147,25 @@ impl Profiler {
         self.procs.read().get(&pid).is_some()
     }
 
-    fn add_bpf_unwind_info(inner: &MapHandle, unwind_info: &[CompactUnwindRow]) {
-        let chunk_size = std::cmp::min(500_000, unwind_info.len()); // 500k entries fit in 8MB.
-        let mut keys: Vec<u8> = Vec::with_capacity(std::mem::size_of::<u32>() * chunk_size);
-        let mut values: Vec<u8> =
-            Vec::with_capacity(std::mem::size_of::<stack_unwind_row_t>() * chunk_size);
+    fn add_bpf_unwind_info(
+        inner: &MapHandle,
+        unwind_info: &[CompactUnwindRow],
+    ) -> Result<(), anyhow::Error> {
+        let size = inner.value_size() as usize * unwind_info.len();
+        let mut mmap = unsafe {
+            MmapOptions::new()
+                .len(roundup_page(size))
+                .map_mut(&inner.as_fd())
+        }?;
+        let (prefix, middle, suffix) = unsafe { mmap.align_to_mut::<stack_unwind_row_t>() };
+        assert_eq!(prefix.len(), 0);
+        assert_eq!(suffix.len(), 0);
 
-        for indices_and_rows in &unwind_info.iter().enumerate().chunks(chunk_size) {
-            keys.clear();
-            values.clear();
-
-            let mut chunk_len = 0;
-
-            for (i, row) in indices_and_rows {
-                let i = i as u32;
-                let row: stack_unwind_row_t = row.into();
-
-                for byte in i.to_le_bytes() {
-                    keys.push(byte);
-                }
-                for byte in unsafe { plain::as_bytes(&row) } {
-                    values.push(*byte);
-                }
-
-                chunk_len += 1;
-            }
-
-            inner
-                .update_batch(
-                    &keys[..],
-                    &values[..],
-                    chunk_len,
-                    MapFlags::ANY,
-                    MapFlags::ANY,
-                )
-                .unwrap();
+        for (row, write) in unwind_info.iter().zip(middle) {
+            *write = row.into();
         }
+
+        Ok(())
     }
 
     fn add_bpf_pages(
@@ -1178,7 +1173,7 @@ impl Profiler {
         unwind_info: &[CompactUnwindRow],
         executable_id: u64,
         bucket_id: u32,
-    ) {
+    ) -> Result<(), libbpf_rs::Error> {
         let pages = crate::unwind_info::pages::to_pages(unwind_info);
         for page in pages {
             let page_key = page_key_t {
@@ -1192,11 +1187,14 @@ impl Profiler {
             };
 
             let value = unsafe { plain::as_bytes(&page_value) };
-            bpf.maps
-                .executable_to_page
-                .update(unsafe { plain::as_bytes(&page_key) }, value, MapFlags::ANY)
-                .unwrap();
+            bpf.maps.executable_to_page.update(
+                unsafe { plain::as_bytes(&page_key) },
+                value,
+                MapFlags::ANY,
+            )?
         }
+
+        Ok(())
     }
 
     fn delete_bpf_pages(
@@ -1292,7 +1290,13 @@ impl Profiler {
         Ok(())
     }
 
-    fn delete_bpf_mappings(bpf: &ProfilerSkel, pid: Pid, mapping_begin: u64, mapping_end: u64) {
+    fn delete_bpf_mappings(
+        bpf: &ProfilerSkel,
+        pid: Pid,
+        mapping_begin: u64,
+        mapping_end: u64,
+        partial_write: bool,
+    ) {
         for address_range in summarize_address_range(mapping_begin, mapping_end - 1) {
             let key = exec_mappings_key::new(
                 pid as u32,
@@ -1306,7 +1310,12 @@ impl Profiler {
                 .exec_mappings
                 .delete(unsafe { plain::as_bytes(&key) });
             if let Err(e) = res {
-                error!("failed to delete bpf mappings with {:?}", e);
+                if !partial_write {
+                    error!(
+                        "failed to delete bpf mappings for process {} with {:?}",
+                        pid, e
+                    );
+                }
             }
         }
     }
@@ -1346,8 +1355,15 @@ impl Profiler {
         mapping: &ExecutableMapping,
         entry: OccupiedEntry<ExecutableId, KnownExecutableInfo>,
         unwind_info_bucket_usage: &mut [usize],
+        partial_write: bool,
     ) {
-        Self::delete_bpf_mappings(native_unwinder, pid, mapping.start_addr, mapping.end_addr);
+        Self::delete_bpf_mappings(
+            native_unwinder,
+            pid,
+            mapping.start_addr,
+            mapping.end_addr,
+            partial_write,
+        );
 
         Self::delete_bpf_pages(
             native_unwinder,
@@ -1417,6 +1433,7 @@ impl Profiler {
     ) -> Option<(MapHandle, u32)> {
         let opts = libbpf_sys::bpf_map_create_opts {
             sz: size_of::<libbpf_sys::bpf_map_create_opts>() as libbpf_sys::size_t,
+            map_flags: libbpf_sys::BPF_F_MMAPABLE,
             ..Default::default()
         };
 
@@ -1533,18 +1550,28 @@ impl Profiler {
                     "error adding unwind information for executable 0x{} due to {:?}",
                     mapping.executable_id, e
                 );
-                // TODO: maybe cleanup written maps.
+                // TODO: cleanup unwind information map in case of a partial write.
                 return;
             }
         }
 
+        let mut errored = false;
         // Store all mappings in BPF maps.
         if let Err(e) = Self::add_bpf_mappings(&self.native_unwinder, pid, &bpf_mappings) {
-            warn!("failed to add BPF mappings due to {:?}", e);
+            errored = true;
+            debug!("failed to add BPF mappings due to {:?}", e);
         }
         // Add entry just with the pid to signal processes that we already know about.
         if let Err(e) = Self::add_bpf_process(&self.native_unwinder, pid) {
-            warn!("failed to add BPF process due to {:?}", e);
+            errored = true;
+            debug!("failed to add BPF process due to {:?}", e);
+        }
+
+        if errored {
+            // Remove partially written data.
+            self.handle_process_exit(pid, true);
+            // Evict a process to make room for more.
+            debug!("eviction result {}", self.maybe_evict_process(false));
         }
     }
 
@@ -1566,8 +1593,7 @@ impl Profiler {
         }
         let object_files = self.object_files.read();
         let executable_info = object_files.get(&executable_id).unwrap();
-        let executable_path_open = executable_info.open_file_path();
-        let executable_path = executable_info.path.to_string_lossy().to_string();
+        let executable_path = executable_info.path.clone();
         let needs_synthesis = executable_info.is_vdso && architecture() == Architecture::Arm64;
         let runtime = executable_info.runtime.clone();
         std::mem::drop(object_files);
@@ -1603,11 +1629,11 @@ impl Profiler {
                         Level::DEBUG,
                         "calling in_memory_unwind_info",
                         "{}",
-                        executable_path
+                        executable_path.display()
                     )
                     .entered();
                     self.unwind_info_manager
-                        .fetch_unwind_info(&executable_path_open, executable_id)
+                        .fetch_unwind_info(&executable_path, executable_id)
                 }
             }
         };
@@ -1615,13 +1641,13 @@ impl Profiler {
         let unwind_info = match unwind_info {
             Ok(unwind_info) => unwind_info,
             Err(e) => {
-                let known_naughty = executable_path.contains("libicudata");
+                let known_naughty = executable_path.to_string_lossy().contains("libicudata.so");
                 if known_naughty {
                     return Err(AddUnwindInformationError::NoUnwindInfoKnownNaughty);
                 } else {
                     return Err(AddUnwindInformationError::NoUnwindInfo(
                         e.to_string(),
-                        executable_path,
+                        executable_path.to_string_lossy().to_string(),
                     ));
                 }
             }
@@ -1632,7 +1658,7 @@ impl Profiler {
 
         let Some((bucket_id, _)) = bucket else {
             return Err(AddUnwindInformationError::TooLarge(
-                executable_path,
+                executable_path.to_string_lossy().to_string(),
                 unwind_info.len(),
             ));
         };
@@ -1656,13 +1682,15 @@ impl Profiler {
         // Add all unwind information and its pages.
         let result = match inner_map_and_id {
             Some((inner, bucket_id)) => {
-                Self::add_bpf_unwind_info(&inner, &unwind_info);
+                Self::add_bpf_unwind_info(&inner, &unwind_info)
+                    .map_err(|e| AddUnwindInformationError::BpfUnwindInfo(e.to_string()))?;
                 Self::add_bpf_pages(
                     &self.native_unwinder,
                     &unwind_info,
                     executable_id.into(),
                     bucket_id,
-                );
+                )
+                .map_err(|e| AddUnwindInformationError::BpfPages(e.to_string()))?;
                 let unwind_info_start_address = unwind_info.first().unwrap().pc;
                 let unwind_info_end_address = unwind_info.last().unwrap().pc;
                 self.native_unwind_state.known_executables.insert(
@@ -1677,7 +1705,7 @@ impl Profiler {
                 Ok(AddUnwindInformationResult::Success)
             }
             None => Err(AddUnwindInformationError::TooLarge(
-                executable_path,
+                executable_path.to_string_lossy().to_string(),
                 unwind_info.len(),
             )),
         };
@@ -1842,15 +1870,19 @@ impl Profiler {
         }
     }
 
-    /// Evict a process if there are more processes with [`ProcessStatus::Running`] status
-    /// than the maximum number of processes, [`MAX_PROCESSES`]. Returns false only if an
-    /// eviction is necessary but not enough time has elapsed since the last one.
-    fn maybe_evict_process(&mut self) -> bool {
+    /// Evicts a process. If *if_too_many_procs* is true, this will only be done if there are more
+    /// processes with  [`ProcessStatus::Running`] status than the maximum number of processes, [`MAX_PROCESSES`].
+    /// Returns false only if an eviction is necessary but not enough time has elapsed since the last one.
+    fn maybe_evict_process(&mut self, if_too_many_procs: bool) -> bool {
         let procs = self.procs.read();
         let running_procs = procs
             .iter()
             .filter(|e| e.1.status == ProcessStatus::Running);
-        let should_evict = running_procs.clone().count() >= MAX_PROCESSES as usize;
+        let should_evict = if if_too_many_procs {
+            running_procs.clone().count() >= MAX_PROCESSES as usize
+        } else {
+            true
+        };
 
         if should_evict && !self.native_unwind_state.can_evict_process() {
             return false;
@@ -1869,8 +1901,8 @@ impl Profiler {
         std::mem::drop(procs);
 
         if let Some(pid) = to_evict {
-            debug!("evicting pid{}", pid);
-            self.handle_process_exit(pid);
+            debug!("evicting pid {}", pid);
+            self.handle_process_exit(pid, false);
             self.native_unwind_state.last_process_eviction = Instant::now();
         }
 
@@ -1880,7 +1912,7 @@ impl Profiler {
     pub fn add_proc(&mut self, pid: Pid) -> Result<(), AddProcessError> {
         let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
         let maps = proc.maps().map_err(|_| AddProcessError::ProcfsRace)?;
-        if !self.maybe_evict_process() {
+        if !self.maybe_evict_process(true) {
             return Err(AddProcessError::Eviction);
         }
 
@@ -1923,7 +1955,7 @@ impl Profiler {
                         }
                     };
 
-                    let object_file = match ObjectFile::new(&exe_path.clone()) {
+                    let object_file = match ObjectFile::new(&file) {
                         Ok(f) => f,
                         Err(e) => {
                             debug!("object_file {} failed with {}", exe_path.display(), e);
@@ -2000,7 +2032,6 @@ impl Profiler {
                             Ok(elf_loads) => {
                                 entry.insert(ObjectFileInfo {
                                     path: exe_path,
-                                    file,
                                     elf_load_segments: elf_loads,
                                     is_dyn: object_file.is_dynamic(),
                                     references: 1,
@@ -2048,10 +2079,6 @@ impl Profiler {
                             debug!("vDSO object file id failed");
                             continue;
                         };
-                        let Ok(file) = File::open(&vdso_path) else {
-                            debug!("vDSO object file open failed");
-                            continue;
-                        };
                         let Ok(elf_load_segments) = object_file.elf_load_segments() else {
                             debug!("vDSO elf_load_segments failed");
                             continue;
@@ -2062,7 +2089,6 @@ impl Profiler {
                             executable_id,
                             ObjectFileInfo {
                                 path: vdso_path.clone(),
-                                file,
                                 elf_load_segments,
                                 is_dyn: object_file.is_dynamic(),
                                 references: 1,
@@ -2221,7 +2247,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 20);
-        Profiler::delete_bpf_mappings(&native_unwinder, 0xBADFAD, 0, 0xFFFFF);
+        Profiler::delete_bpf_mappings(&native_unwinder, 0xBADFAD, 0, 0xFFFFF, false);
         assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
     }
 
@@ -2254,7 +2280,7 @@ mod tests {
                 .count()
                 > 2
         );
-        profiler.handle_process_exit(std::process::id() as i32);
+        profiler.handle_process_exit(std::process::id() as i32, false);
         assert_eq!(profiler.native_unwinder.maps.outer_map_0.keys().count(), 0);
         assert_eq!(profiler.native_unwinder.maps.outer_map_1.keys().count(), 0);
         assert_eq!(profiler.native_unwinder.maps.outer_map_2.keys().count(), 0);

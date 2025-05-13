@@ -1,6 +1,6 @@
 [package]
 name = "lightswitch"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 description = "CPU profiler as a library for Linux suitable for on-demand and continuous profiling"
 license = "MIT"
@@ -29,6 +29,7 @@ nix = { version = "0.29.0" }
 libbpf-cargo = { version = "0.25.0-beta.1" }
 glob = "0.3.2"
 ring = "0.17.14"
+libbpf-sys = "1.5.0"
 
 [dependencies]
 gimli = "0.31.1"
@@ -45,14 +46,14 @@ prost = "0.13" # Needed to encode protocol buffers to bytes.
 reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false }
 ctrlc = "3.4.5"
 crossbeam-channel = "0.5.14"
-libbpf-sys = "1.5.0"
 itertools = "0.14.0"
-lightswitch-metadata = { path = "lightswitch-metadata", version = "0.2.0" }
-lightswitch-proto = { path = "lightswitch-proto", version = "0.1.0" }
-lightswitch-capabilities = { path = "lightswitch-capabilities", version = "0.1.0" }
-lightswitch-object = { path = "lightswitch-object", version = "0.2.1" }
+lightswitch-metadata = { path = "lightswitch-metadata", version = "0.2.1" }
+lightswitch-proto = { path = "lightswitch-proto", version = "0.2.0" }
+lightswitch-capabilities = { path = "lightswitch-capabilities", version = "0.2.0" }
+lightswitch-object = { path = "lightswitch-object", version = "0.3.0" }
 memmap2 = { workspace = true }
 anyhow = { workspace = true }
+libbpf-sys = { workspace = true }
 object = { workspace = true }
 libbpf-rs = { workspace = true }
 tracing = { workspace = true }

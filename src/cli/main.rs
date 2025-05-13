@@ -112,7 +112,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             return Ok(());
         }
         Some(Commands::SystemInfo) => {
-            println!("- system info: {:?}", SystemInfo::new());
+            println!("- system info: {:#?}", SystemInfo::new());
             println!("- kernel build id: {:?}", kernel_build_id());
             if let Ok(aslr_offset) = kaslr_offset() {
                 println!("- kernel ASLR offset: 0x{:x}", aslr_offset);
@@ -199,6 +199,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         debug_info_manager,
         max_native_unwind_info_size_mb: args.max_native_unwind_info_size_mb,
         use_ring_buffers,
+        use_task_pt_regs_helper: system_info.available_bpf_features.has_task_pt_regs_helper,
         ..Default::default()
     };
 
@@ -319,7 +320,7 @@ fn show_unwind_info(path: &str) {
 }
 
 fn show_object_file_info(path: &str) {
-    let object_file = ObjectFile::new(&PathBuf::from(path)).unwrap();
+    let object_file = ObjectFile::from_path(&PathBuf::from(path)).unwrap();
     println!("- build id: {:?}", object_file.build_id());
     if let Ok(executable_id) = object_file.build_id().id() {
         println!("- executable id: 0x{}", executable_id);

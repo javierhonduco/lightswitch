@@ -308,14 +308,19 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u
     return false;
   }
 
-  err = bpf_probe_read_kernel(&stack, 8, &task->stack);
-  if (err) {
-    LOG("[warn] bpf_probe_read_kernel failed with %d", err);
-    return false;
-  }
+  struct pt_regs *regs;
 
-  void *ptr = stack + THREAD_SIZE - TOP_OF_KERNEL_STACK_PADDING;
-  struct pt_regs *regs = ((struct pt_regs *)ptr) - 1;
+  if (lightswitch_config.use_task_pt_regs_helper) {
+    regs = (struct pt_regs *) bpf_task_pt_regs(task);
+  } else {
+    err = bpf_probe_read_kernel(&stack, 8, &task->stack);
+    if (err) {
+      LOG("[warn] bpf_probe_read_kernel failed with %d", err);
+      return false;
+    }
+    void *ptr = stack + THREAD_SIZE - TOP_OF_KERNEL_STACK_PADDING;
+    regs = ((struct pt_regs *)ptr) - 1;
+  }
 
   *ip = PT_REGS_IP_CORE(regs);
   *sp = PT_REGS_SP_CORE(regs);
@@ -475,7 +480,11 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       Event event = {
           .type = EVENT_NEED_UNWIND_INFO,
           .pid = per_process_id,
-          .address = unwind_state->ip,
+          // Assume 4KB pages, hence the offset within the page does not offer any
+          // additional information to find the right memory mapping. This way the
+          // rate limiting logic will work better due to the reduced cardinality of
+          // the rate limiting key.
+          .address = unwind_state->ip & PAGE_MASK,
       };
       send_event(&event, ctx);
       return 1;
