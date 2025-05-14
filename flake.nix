@@ -44,6 +44,7 @@
           ];
           nativeBuildInputs = with pkgs; [
             pkg-config
+            git
           ];
           rust-toolchain = pkgs.rust-bin.nightly.latest.default;
           craneLib = (crane.mkLib nixpkgs.legacyPackages.${system}).overrideToolchain rust-toolchain;
