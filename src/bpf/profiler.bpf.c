@@ -327,16 +327,16 @@ unwind_state_t *unwind_state) {
   int per_process_id = pid_tgid >> 32;
   int per_thread_id = pid_tgid;
 
-  unwind_state->raw_stack.stack_key.pid = per_process_id;
-  unwind_state->raw_stack.stack_key.task_id = per_thread_id;
+  unwind_state->stack.stack_key.pid = per_process_id;
+  unwind_state->stack.stack_key.task_id = per_thread_id;
 
   u64 timestamp = bpf_ktime_get_boot_ns() + walltime_at_system_boot_ns;
-  unwind_state->raw_stack.stack_key.collected_at = timestamp;
+  unwind_state->stack.stack_key.collected_at = timestamp;
 
   if (lightswitch_config.use_ring_buffers) {
-    ret = bpf_ringbuf_output(&stacks_rb, &(unwind_state->raw_stack), sizeof(raw_stack_t), 0);
+    ret = bpf_ringbuf_output(&stacks_rb, &(unwind_state->stack), sizeof(stack_t), 0);
   } else {
-    ret = bpf_perf_event_output(ctx, &stacks, BPF_F_CURRENT_CPU, &(unwind_state->raw_stack), sizeof(raw_stack_t));
+    ret = bpf_perf_event_output(ctx, &stacks, BPF_F_CURRENT_CPU, &(unwind_state->stack), sizeof(stack_t));
   }
 
   if (ret < 0) {
@@ -569,7 +569,6 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 
 #ifdef __TARGET_ARCH_arm64
     // Special handling for leaf frame.
-    if (unwind_state->raw_stack.stack.len == 0) {
     if (unwind_state->stack.stack.len == 0) {
       previous_rip = unwind_state->lr;
     } else {
