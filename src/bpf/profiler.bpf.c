@@ -319,9 +319,9 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
 u64 pid_tgid,
 unwind_state_t *unwind_state) {
   // Get the kernel stack
-  int ret = bpf_get_stack(ctx, unwind_state->raw_stack.kernel_stack.addresses, MAX_STACK_DEPTH * sizeof(u64), 0);
+  int ret = bpf_get_stack(ctx, unwind_state->stack.kernel_stack.addresses, MAX_STACK_DEPTH * sizeof(u64), 0);
   if (ret >= 0) {
-    unwind_state->raw_stack.kernel_stack.len = ret / sizeof(u64);
+    unwind_state->stack.kernel_stack.len = ret / sizeof(u64);
   }
 
   int per_process_id = pid_tgid >> 32;
@@ -364,8 +364,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 
   for (int i = 0; i < MAX_STACK_DEPTH_PER_PROGRAM; i++) {
     // LOG("[debug] Within unwinding machinery loop");
-    LOG("## frame: %d",unwind_state->raw_stack.stack.len);
-
+    LOG("## frame: %d", unwind_state->stack.stack.len);
     LOG("\tcurrent pc: %llx", unwind_state->ip);
     LOG("\tcurrent sp: %llx", unwind_state->sp);
     LOG("\tcurrent bp: %llx", unwind_state->bp);
@@ -482,11 +481,11 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     }
 
     // Add address to stack.
-    u64 len =unwind_state->raw_stack.stack.len;
+    u64 len = unwind_state->stack.stack.len;
     // Appease the verifier.
     if (len >= 0 && len < MAX_STACK_DEPTH) {
-     unwind_state->raw_stack.stack.addresses[len] = unwind_state->ip;
-     unwind_state->raw_stack.stack.len++;
+      unwind_state->stack.stack.addresses[len] = unwind_state->ip;
+      unwind_state->stack.stack.len++;
     }
 
     if (found_rbp_type == RBP_TYPE_REGISTER ||
@@ -571,6 +570,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 #ifdef __TARGET_ARCH_arm64
     // Special handling for leaf frame.
     if (unwind_state->raw_stack.stack.len == 0) {
+    if (unwind_state->stack.stack.len == 0) {
       previous_rip = unwind_state->lr;
     } else {
       // This is guaranteed by the Aarch64 ABI.
@@ -631,7 +631,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     bump_unwind_success_dwarf();
     return 0;
 
-  } else if (unwind_state->raw_stack.stack.len < MAX_STACK_DEPTH &&
+  } else if (unwind_state->stack.stack.len < MAX_STACK_DEPTH &&
              unwind_state->tail_calls < MAX_TAIL_CALLS) {
     LOG("Continuing walking the stack in a tail call, current tail %d",
         unwind_state->tail_calls);
@@ -647,13 +647,13 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 
 // Set up the initial unwinding state.
 static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_user_pt_regs_t *regs) {
- unwind_state->raw_stack.stack.len = 0;
- unwind_state->raw_stack.kernel_stack.len = 0;
+ unwind_state->stack.stack.len = 0;
+ unwind_state->stack.kernel_stack.len = 0;
  unwind_state->tail_calls = 0;
 
- unwind_state->raw_stack.stack_key.pid = 0;
- unwind_state->raw_stack.stack_key.task_id = 0;
- unwind_state->raw_stack.stack_key.collected_at = 0;
+ unwind_state->stack.stack_key.pid = 0;
+ unwind_state->stack.stack_key.task_id = 0;
+ unwind_state->stack.stack_key.collected_at = 0;
 
   if (in_kernel(PT_REGS_IP(regs))) {
     if (!retrieve_task_registers(&unwind_state->ip, &unwind_state->sp, &unwind_state->bp, &unwind_state->lr)) {
