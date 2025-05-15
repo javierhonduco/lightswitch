@@ -2104,14 +2104,14 @@ impl Profiler {
     }
 
     fn handle_stack(raw_sample_send: &Arc<Sender<RawSample>>, data: &[u8]) {
-        let mut raw_stack = raw_stack_t::default();
-        plain::copy_from_bytes(&mut raw_stack, data).expect("handle stack serde");
+        let mut stack_sample = stack_sample_t::default();
+        plain::copy_from_bytes(&mut stack_sample, data).expect("handle stack serde");
 
         let raw_sample = RawSample {
-            pid: raw_stack.stack_key.pid,
-            tid: raw_stack.stack_key.task_id,
-            ustack: Some(raw_stack.stack),
-            kstack: Some(raw_stack.kernel_stack),
+            pid: stack_sample.stack_key.pid,
+            tid: stack_sample.stack_key.task_id,
+            ustack: Some(stack_sample.stack),
+            kstack: Some(stack_sample.kernel_stack),
         };
         raw_sample_send.send(raw_sample).expect("Send raw sample");
     }
