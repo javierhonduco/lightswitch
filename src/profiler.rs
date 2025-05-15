@@ -2113,7 +2113,9 @@ impl Profiler {
             ustack: Some(stack_sample.stack),
             kstack: Some(stack_sample.kernel_stack),
         };
-        raw_sample_send.send(raw_sample).expect("Send raw sample");
+        if let Err(e) = raw_sample_send.send(raw_sample) {
+            error!("failed to send raw sample, err={:?}", e);
+        }
     }
 
     fn handle_lost_stack(cpu: i32, count: u64) {
