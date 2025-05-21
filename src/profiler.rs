@@ -134,7 +134,7 @@ pub struct Profiler {
     profile_receive: Arc<Receiver<RawAggregatedProfile>>,
     // A vector of raw samples received from bpf in the current profiling session
     raw_samples: Vec<RawSample>,
-    // Raw sample channel. Used for receiving raw samples from the rinbuf/perfbuf poll thread
+    // Raw sample channel. Used for receiving raw samples from the ringbuf/perfbuf poll thread
     raw_sample_send: Arc<Sender<RawSample>>,
     raw_sample_receive: Arc<Receiver<RawSample>>,
     /// For how long to profile.
@@ -324,6 +324,19 @@ impl Profiler {
         map_shapes
     }
 
+    fn get_stacks_ringbuf_max_entries(sample_freq: u32, session_duration: Duration) -> u32 {
+        // In this case, we only want to calculate maximum sampling buffer size based on the
+        // number of "online" CPUs, not "possible" CPUs, which they sometimes differ.
+        let num_cpus: u32 = get_online_cpus().expect("get online CPUs").len() as u32;
+        let entry_size_bytes = std::mem::size_of::<stack_sample_t>() as u32;
+        let max_entries_bytes: u32 =
+            entry_size_bytes * sample_freq * num_cpus * session_duration.as_secs() as u32;
+
+        // max_entries for ringbuf is required to specified in bytes, be a multiple of
+        // the page size and a power of two
+        roundup_page(max_entries_bytes as usize) as u32
+    }
+
     pub fn setup_profiler_maps(open_skel: &mut OpenProfilerSkel, profiler_config: &ProfilerConfig) {
         open_skel
             .maps
@@ -347,16 +360,15 @@ impl Profiler {
         // as bpf currently only supports getting the offset since system boot.
         open_skel.maps.rodata_data.walltime_at_system_boot_ns = Self::walltime_at_system_boot();
 
-        let max_raw_sample_entries = Profiler::get_stacks_sampling_buffer_size(
-            profiler_config.sample_freq as u32,
-            profiler_config.session_duration,
-        );
-
         if profiler_config.use_ring_buffers {
+            let profile_sample_max_entries = Self::get_stacks_ringbuf_max_entries(
+                profiler_config.sample_freq as u32,
+                profiler_config.session_duration,
+            );
             open_skel
                 .maps
                 .stacks_rb
-                .set_max_entries(max_raw_sample_entries)
+                .set_max_entries(profile_sample_max_entries)
                 .expect("failed to set stacks_rb max entries");
 
             // Even set to zero it will create as many entries as CPUs.
@@ -366,6 +378,7 @@ impl Profiler {
                 .set_max_entries(0)
                 .expect("set perf buffer entries to zero as it's unused");
         } else {
+            let max_raw_sample_entries = 4096; // TODO: Fixme
             open_skel
                 .maps
                 .stacks
@@ -715,17 +728,6 @@ impl Profiler {
                 error!("Fetching kernel code ranges failed with: {:?}", e);
             }
         }
-    }
-
-    fn get_stacks_sampling_buffer_size(_sample_freq: u32, _session_duration: Duration) -> u32 {
-        // In this case, we only want to calculate maximum sampling buffer size based on the
-        // number of "online" CPUs, not "possible" CPUs, which they sometimes differ.
-        // let num_cpus: u32 = get_online_cpus().expect("get online CPUs").len() as u32;
-        // let max_entries: u32 = sample_freq * num_cpus * session_duration.as_secs() as u32;
-        // max_entries
-        // TODO: Multiply by num online CPUs only for ringbuf
-        // as perfbuff are allocated per cpu
-        4096 * 10
     }
 
     pub fn run(mut self, collector: ThreadSafeCollector) -> Duration {

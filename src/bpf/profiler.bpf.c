@@ -15,14 +15,13 @@
 
 struct {
   __uint(type, BPF_MAP_TYPE_RINGBUF);
-  __uint(max_entries, 256 * 1024 /* 256 KB */); // adjust max entries based on frequency on userspace -- todo
+  __uint(max_entries, 256 * 1024 /* 256 KB */);
 } stacks_rb SEC(".maps");
 
 struct {
   __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
   __uint(key_size, sizeof(u32));
   __uint(value_size, sizeof(u32));
-  // adjust max entries based on frequency on userspace - todo
 } stacks SEC(".maps");
 
 struct {
