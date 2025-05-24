@@ -330,7 +330,7 @@ impl Profiler {
         // 1. At any "single instance", we expect at most n samples to be written
         // to the ringbuf where n is the number of online cpus emitting events.
         // i.e if all the CPUs are busy at that instance. We also account for
-        // the case where the sample frequency is less than num online CPUs.
+        // the case where the sampling frequency is less than num online CPUs.
         // 2. The userspace consumer is pretty lightweight. It simply
         // reads the sample and dispatches it to another thread for processing.
 
@@ -619,11 +619,6 @@ impl Profiler {
         callback: Call,
         lost_callback: Lost,
     ) {
-        error!(
-            "************perbuf per cpu buf size bytes => {}",
-            self.perf_buffer_bytes
-        );
-
         if self.use_ring_buffers {
             let mut ring_buf = RingBufferBuilder::new();
             ring_buf
@@ -756,8 +751,6 @@ impl Profiler {
 
         let chan_send = self.new_proc_chan_send.clone();
         let raw_sample_send = self.raw_sample_send.clone();
-
-        // add stack -> poll thread --> send over channel to
 
         self.start_poll_thread(
             "raw_samples",
