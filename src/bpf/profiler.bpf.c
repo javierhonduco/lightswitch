@@ -344,7 +344,6 @@ unwind_state_t *unwind_state) {
   }
 }
 
-
 // The unwinding machinery lives here.
 SEC("perf_event")
 int dwarf_unwind(struct bpf_perf_event_data *ctx) {
