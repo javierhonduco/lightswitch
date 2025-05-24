@@ -324,13 +324,21 @@ impl Profiler {
         map_shapes
     }
 
-    fn get_stacks_ringbuf_max_entries(sample_freq: u32, session_duration: Duration) -> u32 {
-        // In this case, we only want to calculate maximum sampling buffer size based on the
-        // number of "online" CPUs, not "possible" CPUs, which they sometimes differ.
+    fn get_stacks_ringbuf_max_entries(sample_freq: u32) -> u32 {
+        // The assumption here is that although the ringbuf is shared
+        // by all CPUs, it's not expected to get filled up since
+        // 1. At any "single instance", we expect at most n samples to be written
+        // to the ringbuf where n is the number of online cpus emitting events.
+        // i.e if all the CPUs are busy at that instance. We also account for
+        // the case where the sample frequency is less than num online CPUs.
+        // 2. The userspace consumer is pretty lightweight. It simply
+        // reads the sample and dispatches it to another thread for processing.
+
         let num_cpus: u32 = get_online_cpus().expect("get online CPUs").len() as u32;
+        let num_expected_entries = std::cmp::max(num_cpus, sample_freq);
+
         let entry_size_bytes = std::mem::size_of::<stack_sample_t>() as u32;
-        let max_entries_bytes: u32 =
-            entry_size_bytes * sample_freq * num_cpus * session_duration.as_secs() as u32;
+        let max_entries_bytes: u32 = entry_size_bytes * num_expected_entries;
 
         // max_entries for ringbuf is required to specified in bytes, be a multiple of
         // the page size and a power of two
@@ -361,10 +369,9 @@ impl Profiler {
         open_skel.maps.rodata_data.walltime_at_system_boot_ns = Self::walltime_at_system_boot();
 
         if profiler_config.use_ring_buffers {
-            let profile_sample_max_entries = Self::get_stacks_ringbuf_max_entries(
-                profiler_config.sample_freq as u32,
-                profiler_config.session_duration,
-            );
+            // Set sample collecting ringbuf size based sampling frequency
+            let profile_sample_max_entries =
+                Self::get_stacks_ringbuf_max_entries(profiler_config.sample_freq as u32);
             open_skel
                 .maps
                 .stacks_rb
@@ -376,22 +383,27 @@ impl Profiler {
                 .maps
                 .events
                 .set_max_entries(0)
-                .expect("set perf buffer entries to zero as it's unused");
-        } else {
-            let max_raw_sample_entries = 4096; // TODO: Fixme
+                .expect("set events perf buffer entries to zero as it's unused");
+
             open_skel
                 .maps
                 .stacks
-                .set_max_entries(max_raw_sample_entries)
-                .expect("failed to set stacks max entries");
-
+                .set_max_entries(0)
+                .expect("set stacks perf buffer entries to zero as it's unused");
+        } else {
             // Seems like ring buffers need to have size of at least 1...
             // It will use at least a page.
             open_skel
                 .maps
                 .events_rb
                 .set_max_entries(1)
-                .expect("set ring buffer entries to one as it's unused");
+                .expect("set events ring buffer entries to one as it's unused");
+
+            open_skel
+                .maps
+                .stacks_rb
+                .set_max_entries(1)
+                .expect("set stacks ring buffer entries to one as it's unused");
         }
     }
 
@@ -607,6 +619,11 @@ impl Profiler {
         callback: Call,
         lost_callback: Lost,
     ) {
+        error!(
+            "************perbuf per cpu buf size bytes => {}",
+            self.perf_buffer_bytes
+        );
+
         if self.use_ring_buffers {
             let mut ring_buf = RingBufferBuilder::new();
             ring_buf
@@ -739,6 +756,8 @@ impl Profiler {
 
         let chan_send = self.new_proc_chan_send.clone();
         let raw_sample_send = self.raw_sample_send.clone();
+
+        // add stack -> poll thread --> send over channel to
 
         self.start_poll_thread(
             "raw_samples",
