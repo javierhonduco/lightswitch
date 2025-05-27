@@ -142,7 +142,7 @@ pub fn to_pprof(
 
                     let build_id = match mapping.build_id {
                         Some(build_id) => {
-                            format!("{}", build_id)
+                            format!("{build_id}")
                         }
                         None => "no-build-id".into(),
                     };
@@ -225,7 +225,7 @@ pub fn fold_profile(profile: AggregatedProfile) -> String {
             .clone()
             .into_iter()
             .rev()
-            .map(|e| format!("kernel: {}", e))
+            .map(|e| format!("kernel: {e}"))
             .collect::<Vec<String>>();
         let kstack = kstack.join(";");
         let count: String = sample.count.to_string();
@@ -240,12 +240,12 @@ pub fn fold_profile(profile: AggregatedProfile) -> String {
             if ustack.trim().is_empty() {
                 "".to_string()
             } else {
-                format!(";{}", ustack)
+                format!(";{ustack}")
             },
             if kstack.trim().is_empty() {
                 "".to_string()
             } else {
-                format!(";{}", kstack)
+                format!(";{kstack}")
             },
             count
         )
@@ -354,7 +354,7 @@ pub fn fetch_symbols_for_profile(
 
     // second pass, symbolize
     for (path, addr_to_symbol_mapping) in addresses_per_sample.iter_mut() {
-        let frame_addresses = addr_to_symbol_mapping.iter().map(|(a, _)| *a).collect();
+        let frame_addresses = addr_to_symbol_mapping.keys().copied().collect();
         let symbolized_frames = symbolize_native_stack_blaze(frame_addresses, path);
         for ((frame_address, _), symbolized_frame) in addr_to_symbol_mapping
             .clone()

@@ -247,7 +247,7 @@ fn fetch_vdso_info(
     cache_dir: &Path,
 ) -> Result<(PathBuf, ObjectFile)> {
     // Read raw memory
-    let file = File::open(format!("/proc/{}/mem", pid))?;
+    let file = File::open(format!("/proc/{pid}/mem"))?;
     let size = end_addr - start_addr;
     let mut buf: Vec<u8> = vec![0; size as usize];
     file.read_exact_at(&mut buf, start_addr + offset)?;
@@ -305,7 +305,7 @@ impl Profiler {
             };
             let inner_map_shape = MapHandle::create(
                 MapType::Array,
-                Some(format!("inner_shape_{}", i)),
+                Some(format!("inner_shape_{i}")),
                 4,
                 8,
                 *native_unwind_info_bucket_size,
@@ -316,7 +316,7 @@ impl Profiler {
             open_skel
                 .open_object_mut()
                 .maps_mut()
-                .find(|map| map.name().to_string_lossy() == format!("outer_map_{}", i))
+                .find(|map| map.name().to_string_lossy() == format!("outer_map_{i}"))
                 .unwrap()
                 .set_inner_map_fd(inner_map_shape.as_fd())
                 .expect("shoudl never fail");
@@ -627,7 +627,7 @@ impl Profiler {
                 })
                 .expect("add to ring buffer");
             let ring_buf = ring_buf.build().expect("build ring buffer");
-            let thread_name = format!("ring-poll-{}", name);
+            let thread_name = format!("ring-poll-{name}");
             let _poll_thread = thread::Builder::new()
                 .name(thread_name)
                 .spawn(move || loop {
@@ -652,7 +652,7 @@ impl Profiler {
                 .build()
                 .expect("set up perf buffer");
 
-            let thread_name = format!("perf-poll-{}", name);
+            let thread_name = format!("perf-poll-{name}");
             let _poll_thread = thread::Builder::new()
                 .name(thread_name)
                 .spawn(move || loop {
@@ -1311,7 +1311,7 @@ impl Profiler {
         let res = bpf
             .object_mut()
             .maps_mut()
-            .find(|maps| maps.name().to_string_lossy() == format!("outer_map_{}", bucket_id))
+            .find(|maps| maps.name().to_string_lossy() == format!("outer_map_{bucket_id}"))
             .unwrap()
             .delete(&executable_id.to_le_bytes());
         if res.is_ok() {
@@ -1414,7 +1414,7 @@ impl Profiler {
             Some((bucket_id, native_unwind_info_bucket_size)) => {
                 let inner_map = MapHandle::create(
                     MapType::Array,
-                    Some(format!("inner_{}", native_unwind_info_bucket_size)),
+                    Some(format!("inner_{native_unwind_info_bucket_size}")),
                     4,
                     8,
                     native_unwind_info_bucket_size,
@@ -1424,7 +1424,7 @@ impl Profiler {
 
                 bpf.object_mut()
                     .maps_mut()
-                    .find(|map| map.name().to_string_lossy() == format!("outer_map_{}", bucket_id))
+                    .find(|map| map.name().to_string_lossy() == format!("outer_map_{bucket_id}"))
                     .unwrap()
                     .update(
                         &executable_id.to_le_bytes(),

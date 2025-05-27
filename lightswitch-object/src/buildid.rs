@@ -114,7 +114,7 @@ impl BuildId {
                 self.data
                     .iter()
                     .fold(String::with_capacity(self.data.len() * 2), |mut res, el| {
-                        res.push_str(&format!("{:02x}", el));
+                        res.push_str(&format!("{el:02x}"));
                         res
                     })
             }
@@ -122,7 +122,7 @@ impl BuildId {
                 match str::from_utf8(&self.data) {
                     Ok(res) => res.to_string(),
                     // This should never happen in practice.
-                    Err(e) => format!("error converting go build id: {}", e),
+                    Err(e) => format!("error converting go build id: {e}"),
                 }
             }
             BuildIdFlavour::Sha256 => HEXLOWER.encode(self.data.as_ref()),
@@ -142,7 +142,7 @@ impl Display for BuildIdFlavour {
             BuildIdFlavour::Sha256 => "sha256",
         };
 
-        write!(f, "{}", name)
+        write!(f, "{name}")
     }
 }
 

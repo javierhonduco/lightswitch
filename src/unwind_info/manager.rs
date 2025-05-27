@@ -135,7 +135,7 @@ impl UnwindInfoManager {
     }
 
     fn path_for(&self, executable_id: ExecutableId) -> PathBuf {
-        self.cache_dir.join(format!("{}", executable_id))
+        self.cache_dir.join(format!("{executable_id}"))
     }
 
     pub fn bump_already_present(&mut self) -> anyhow::Result<()> {
@@ -258,7 +258,7 @@ mod tests {
 
         // Creaty dummy cache entries.
         for i in 0..20 {
-            File::create(path.join(format!("{:x}", i))).unwrap();
+            File::create(path.join(format!("{i:x}"))).unwrap();
         }
 
         assert_eq!(fs::read_dir(path).unwrap().collect::<Vec<_>>().len(), 20);

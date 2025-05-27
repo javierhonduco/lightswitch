@@ -115,7 +115,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("- system info: {:#?}", SystemInfo::new());
             println!("- kernel build id: {:?}", kernel_build_id());
             if let Ok(aslr_offset) = kaslr_offset() {
-                println!("- kernel ASLR offset: 0x{:x}", aslr_offset);
+                println!("- kernel ASLR offset: 0x{aslr_offset:x}");
             }
 
             return Ok(());
@@ -321,7 +321,7 @@ fn show_object_file_info(path: &str) {
     let object_file = ObjectFile::from_path(&PathBuf::from(path)).unwrap();
     println!("- build id: {:?}", object_file.build_id());
     if let Ok(executable_id) = object_file.build_id().id() {
-        println!("- executable id: 0x{}", executable_id);
+        println!("- executable id: 0x{executable_id}");
     }
     let unwind_info = CompactUnwindInfoBuilder::with_callback(path, |_| {});
     println!("- unwind info: {:?}", unwind_info.unwrap().process());

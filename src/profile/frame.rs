@@ -23,10 +23,10 @@ impl fmt::Display for Frame {
         match &self.symbolization_result {
             Some(Ok((name, inlined))) => {
                 let inline_str = if *inlined { "[inlined] " } else { "" };
-                write!(fmt, "{}{}", inline_str, name)
+                write!(fmt, "{inline_str}{name}")
             }
             Some(Err(e)) => {
-                write!(fmt, "error: {:?}", e)
+                write!(fmt, "error: {e:?}")
             }
             None => {
                 write!(fmt, "frame not symbolized")

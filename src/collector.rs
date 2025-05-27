@@ -91,7 +91,7 @@ impl StreamingCollector {
         Self {
             token,
             local_symbolizer,
-            pprof_ingest_url: format!("{}/pprof/new", pprof_ingest_url),
+            pprof_ingest_url: format!("{pprof_ingest_url}/pprof/new"),
             http_client_timeout: Duration::from_secs(30),
             profile_duration,
             profile_frequency_hz,

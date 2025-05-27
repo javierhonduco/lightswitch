@@ -78,7 +78,7 @@ fn get_trace_sched_event_id(trace_event: &str) -> Result<u32> {
         return Err(SystemInfoError::ErrorTracefsNotMounted.into());
     }
 
-    let event_id_path = format!("{}/events/sched/{}/id", TRACEFS_PATH, trace_event);
+    let event_id_path = format!("{TRACEFS_PATH}/events/sched/{trace_event}/id");
     let path = Path::new(&event_id_path);
     if !path.exists() {
         return Err(SystemInfoError::ErrorOpeningFile(event_id_path).into());

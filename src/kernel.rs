@@ -69,8 +69,7 @@ fn _list_modules() -> Result<Vec<KernelCodeRange>, anyhow::Error> {
 /// Read and parse the build id of a given kernel module.
 fn _get_module_build_id(module_name: &str) -> Result<BuildId, anyhow::Error> {
     let mut file = BufReader::new(File::open(format!(
-        "/sys/module/{}/notes/.note.gnu.build-id",
-        module_name
+        "/sys/module/{module_name}/notes/.note.gnu.build-id"
     ))?);
     let mut data = Vec::new();
     file.read_to_end(&mut data)?;
@@ -80,7 +79,7 @@ fn _get_module_build_id(module_name: &str) -> Result<BuildId, anyhow::Error> {
 
 /// Finds the virtual address at which a given kernel module is loaded.
 fn _module_start_address(module_name: &str) -> Result<u64, anyhow::Error> {
-    let mut file = File::open(format!("/sys/module/{}/sections/.text", module_name))?;
+    let mut file = File::open(format!("/sys/module/{module_name}/sections/.text"))?;
     let mut buffer = [0; 8];
     file.read_exact(&mut buffer)?;
 

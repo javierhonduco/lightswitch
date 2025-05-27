@@ -26,8 +26,7 @@ pub(crate) fn sample_freq_in_range(s: &str) -> Result<u64, String> {
         match ba_result {
             Ok((prime_before, prime_after)) => {
                 return Err(format!(
-                    "Sample frequency {} is not prime - use {} (before) or {} (after) instead",
-                    sample_freq, prime_before, prime_after
+                    "Sample frequency {sample_freq} is not prime - use {prime_before} (before) or {prime_after} (after) instead"
                 ));
             }
             Err(_) => println!("primes_before_after should not have failed"),
@@ -46,7 +45,7 @@ pub(crate) fn value_is_power_of_two(s: &str) -> Result<usize, String> {
     if value.is_power_of_two() {
         Ok(value)
     } else {
-        Err(format!("{} is not a power of 2", value))
+        Err(format!("{value} is not a power of 2"))
     }
 }
 
@@ -55,7 +54,7 @@ pub(crate) fn value_is_power_of_two(s: &str) -> Result<usize, String> {
 fn primes_before_after(non_prime: usize) -> Result<(usize, usize), String> {
     // Validate it's a prime
     if is_prime(non_prime.try_into().unwrap()) {
-        return Err(format!("{} is prime", non_prime));
+        return Err(format!("{non_prime} is prime"));
     }
     // What is the count (not value) of the prime just before our non_prime?
     let n_before = primal::StreamingSieve::prime_pi(non_prime);

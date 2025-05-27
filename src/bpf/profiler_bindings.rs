@@ -24,9 +24,7 @@ impl exec_mappings_key {
         let key_size_bits = std::mem::size_of::<Self>() * 8;
         assert!(
             prefix_len <= key_size_bits.try_into().unwrap(),
-            "prefix_len {} should be <= than the size of exec_mappings_key {}",
-            prefix_len,
-            key_size_bits
+            "prefix_len {prefix_len} should be <= than the size of exec_mappings_key {key_size_bits}"
         );
 
         Self {

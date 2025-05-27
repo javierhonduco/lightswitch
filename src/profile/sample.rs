@@ -43,7 +43,7 @@ impl fmt::Display for RawSample {
                         if native_stack.len <= i.try_into().unwrap() {
                             break;
                         }
-                        res.push(format!("{:3}: {:#018x}", i, addr));
+                        res.push(format!("{i:3}: {addr:#018x}"));
                     }
                 }
                 None => res.push("NONE".into()),
@@ -189,7 +189,7 @@ impl fmt::Display for AggregatedSample {
                 res.push("NONE".to_string());
             } else {
                 for (i, symbol) in symbolized_stack.iter().enumerate() {
-                    res.push(format!("{:3}: {}", i, symbol));
+                    res.push(format!("{i:3}: {symbol}"));
                 }
             }
             res.join("\n");
