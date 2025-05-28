@@ -334,7 +334,7 @@ impl Profiler {
         // 2. The userspace consumer is pretty lightweight. It simply
         // reads the sample and dispatches it to another thread for processing.
 
-        let num_cpus: u32 = get_online_cpus().expect("get online CPUs").len() as u32;
+        let num_cpus = get_online_cpus().expect("get online CPUs").len() as u32;
         let num_expected_entries = std::cmp::max(num_cpus, sample_freq);
 
         let entry_size_bytes = std::mem::size_of::<stack_sample_t>() as u32;
