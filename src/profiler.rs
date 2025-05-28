@@ -838,7 +838,7 @@ impl Profiler {
                         self.raw_samples.push(raw_sample);
                     }
                     else {
-                        warn!("Failed to receive raw sample, what={:?}", raw_sample.err());
+                        warn!("Failed to receive raw sample, err={:?}", raw_sample.err());
                     }
                 },
                 recv(self.tracers_chan_receive) -> read => {
