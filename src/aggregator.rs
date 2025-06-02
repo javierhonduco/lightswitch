@@ -68,6 +68,7 @@ mod tests {
         let raw_sample_1 = RawSample {
             pid: 1234,
             tid: 1235,
+            collected_at: 1748865070,
             ustack: ustack1,
             kstack: kstack1,
         };
@@ -85,6 +86,7 @@ mod tests {
         let raw_sample_2 = RawSample {
             pid: 1234,
             tid: 1235,
+            collected_at: 1748865070,
             ustack: ustack2,
             kstack: None,
         };
@@ -138,6 +140,7 @@ mod tests {
         let raw_sample_1 = RawSample {
             pid: 1234,
             tid: 1235,
+            collected_at: 1748865070,
             ustack,
             kstack: kstack1,
         };
@@ -145,6 +148,7 @@ mod tests {
         let raw_sample_2 = RawSample {
             pid: 1234,
             tid: 1235,
+            collected_at: 1748865070,
             ustack,
             kstack: None,
         };
@@ -191,6 +195,7 @@ mod tests {
         let raw_sample_1 = RawSample {
             pid: 1234,
             tid: 1235,
+            collected_at: 1748865070,
             ustack: ustack1,
             kstack: kstack1,
         };
@@ -208,6 +213,7 @@ mod tests {
         let raw_sample_2 = RawSample {
             pid: 1234,
             tid: 1235,
+            collected_at: 1748865070,
             ustack: ustack2,
             kstack: kstack1,
         };
@@ -258,6 +264,7 @@ mod tests {
         let raw_sample_1 = RawSample {
             pid: 1234,
             tid: 1235,
+            collected_at: 1748865070,
             ustack,
             kstack,
         };
@@ -265,6 +272,7 @@ mod tests {
         let raw_sample_2 = RawSample {
             pid: 1234,
             tid: 1236,
+            collected_at: 1748865070,
             ustack,
             kstack,
         };
@@ -272,6 +280,7 @@ mod tests {
         let raw_sample_3 = RawSample {
             pid: 123,
             tid: 124,
+            collected_at: 1748865070,
             ustack,
             kstack,
         };

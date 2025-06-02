@@ -328,9 +328,7 @@ unwind_state_t *unwind_state) {
 
   unwind_state->stack.stack_key.pid = per_process_id;
   unwind_state->stack.stack_key.task_id = per_thread_id;
-
-  u64 timestamp = bpf_ktime_get_boot_ns() + walltime_at_system_boot_ns;
-  unwind_state->stack.stack_key.collected_at = timestamp;
+  unwind_state->stack.stack_key.collected_at = bpf_ktime_get_boot_ns();
 
   if (lightswitch_config.use_ring_buffers) {
     ret = bpf_ringbuf_output(&stacks_rb, &(unwind_state->stack), sizeof(stack_sample_t), 0);
@@ -339,8 +337,12 @@ unwind_state_t *unwind_state) {
   }
 
   if (ret < 0) {
-    bpf_printk("add_stack failed ret=%d, use_ring_buffers=", ret);
-    bump_unwind_error_failure_adding_stack();
+    bpf_printk(
+      "add_stack failed ret=%d, use_ring_buffers=%d",
+      ret,
+      lightswitch_config.use_ring_buffers
+    );
+    bump_unwind_error_failure_sending_stack();
   }
 }
 

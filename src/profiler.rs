@@ -159,6 +159,9 @@ pub struct Profiler {
     use_ring_buffers: bool,
     aggregator: Aggregator,
     metadata_provider: ThreadSafeGlobalMetadataProvider,
+    // Baseline for calculating raw_sample collection wall clock time
+    // as bpf currently only supports getting the offset since system boot.
+    walltime_at_system_boot: u64,
 }
 
 pub struct ProfilerConfig {
@@ -336,12 +339,24 @@ impl Profiler {
 
         let num_cpus = get_online_cpus().expect("get online CPUs").len() as u32;
         let num_expected_entries = std::cmp::max(num_cpus, sample_freq);
+        let num_expected_entries_t = num_cpus * sample_freq;
 
         let entry_size_bytes = std::mem::size_of::<stack_sample_t>() as u32;
         let max_entries_bytes: u32 = entry_size_bytes * num_expected_entries;
+        let max_entries_bytes_t: u32 = entry_size_bytes * num_expected_entries_t;
+
+        error!(
+            "num_cpus={} sizeof(stack_sample_t)={}",
+            num_cpus, entry_size_bytes
+        );
 
         // max_entries for ringbuf is required to specified in bytes, be a multiple of
         // the page size and a power of two
+        error!(
+            "max_entries_bytes using max(num_cpus, sample_freq)={} max_entries_bytes using num_cpus * sample_freq = {}",
+            roundup_page(max_entries_bytes as usize) as u32, roundup_page(max_entries_bytes_t as usize) as u32
+        );
+
         roundup_page(max_entries_bytes as usize) as u32
     }
 
@@ -363,10 +378,6 @@ impl Profiler {
             .lightswitch_config
             .use_ring_buffers
             .write(profiler_config.use_ring_buffers);
-
-        // Set baseline for calculating raw_sample collection wall clock time
-        // as bpf currently only supports getting the offset since system boot.
-        open_skel.maps.rodata_data.walltime_at_system_boot_ns = Self::walltime_at_system_boot();
 
         if profiler_config.use_ring_buffers {
             // Set sample collecting ringbuf size based sampling frequency
@@ -435,10 +446,6 @@ impl Profiler {
             "rate_limits: {}",
             bpf.maps.rate_limits.info().unwrap().info.max_entries
         );
-    }
-
-    fn walltime_at_system_boot() -> u64 {
-        procfs::boot_time().unwrap().timestamp_nanos_opt().unwrap() as u64
     }
 
     pub fn new(
@@ -560,6 +567,9 @@ impl Profiler {
         let raw_sample_sender = Arc::new(sender);
         let raw_sample_receiver = Arc::new(receiver);
 
+        let walltime_at_system_boot =
+            procfs::boot_time().unwrap().timestamp_nanos_opt().unwrap() as u64;
+
         Profiler {
             cache_dir,
             _links: Vec::new(),
@@ -593,6 +603,7 @@ impl Profiler {
             use_ring_buffers: profiler_config.use_ring_buffers,
             aggregator: Aggregator::default(),
             metadata_provider,
+            walltime_at_system_boot,
         }
     }
 
@@ -756,7 +767,7 @@ impl Profiler {
             "raw_samples",
             &self.native_unwinder.maps.stacks_rb,
             &self.native_unwinder.maps.stacks,
-            move |data| Self::handle_stack(&raw_sample_send, data),
+            move |data| Self::handle_stack(&raw_sample_send, data, self.walltime_at_system_boot),
             Self::handle_lost_stack,
         );
 
@@ -2117,13 +2128,18 @@ impl Profiler {
         Ok(())
     }
 
-    fn handle_stack(raw_sample_send: &Arc<Sender<RawSample>>, data: &[u8]) {
+    fn handle_stack(
+        raw_sample_send: &Arc<Sender<RawSample>>,
+        data: &[u8],
+        walltime_at_system_boot: u64,
+    ) {
         let mut stack_sample = stack_sample_t::default();
         plain::copy_from_bytes(&mut stack_sample, data).expect("handle stack serde");
 
         let raw_sample = RawSample {
             pid: stack_sample.stack_key.pid,
             tid: stack_sample.stack_key.task_id,
+            collected_at: walltime_at_system_boot + stack_sample.stack_key.collected_at,
             ustack: Some(stack_sample.stack),
             kstack: Some(stack_sample.kernel_stack),
         };

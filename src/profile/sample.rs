@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::hash::Hash;
 
 use anyhow::anyhow;
 use lightswitch_object::ExecutableId;
@@ -12,12 +13,24 @@ use crate::process::Pid;
 use crate::process::ProcessInfo;
 use crate::profile::Frame;
 
-#[derive(Debug, Hash, Eq, PartialEq, Copy, Clone)]
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub struct RawSample {
     pub pid: Pid,
     pub tid: Pid,
+    pub collected_at: u64,
     pub ustack: Option<native_stack_t>,
     pub kstack: Option<native_stack_t>,
+}
+
+impl std::hash::Hash for RawSample {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.pid.hash(state);
+        self.kstack.hash(state);
+        // The collected_at field is excluded when hashing
+        // the samples for aggregation.
+        self.tid.hash(state);
+        self.ustack.hash(state);
+    }
 }
 
 impl fmt::Display for RawSample {
@@ -220,6 +233,7 @@ mod tests {
             sample: RawSample {
                 pid: 1234,
                 tid: 1235,
+                collected_at: 1748865070,
                 ustack: ustack_data,
                 kstack: None,
             },
@@ -232,6 +246,7 @@ mod tests {
             sample: RawSample {
                 pid: 1234,
                 tid: 1235,
+                collected_at: 1748865170,
                 ustack: None,
                 kstack: None,
             },
@@ -283,6 +298,7 @@ mod tests {
             sample: RawSample {
                 pid: 128821,
                 tid: 128822,
+                collected_at: 1748865070,
                 ustack: ustack_data,
                 kstack: kstack_data,
             },

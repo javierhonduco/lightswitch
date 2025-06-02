@@ -108,7 +108,7 @@ struct unwinder_stats_t {
   u64 error_sending_new_process_event;
   u64 error_cfa_offset_did_not_fit;
   u64 error_rbp_offset_did_not_fit;
-  u64 error_failure_adding_stack;
+  u64 error_failure_sending_stack;
   u64 bp_non_zero_for_bottom_frame;
   u64 vdso_encountered;
   u64 jit_encountered;
@@ -119,8 +119,6 @@ const volatile struct lightswitch_config_t lightswitch_config = {
     .use_ring_buffers = false,
     .use_task_pt_regs_helper = false,
 };
-
-const volatile u64 walltime_at_system_boot_ns = 0;
 
 #define LOG(fmt, ...)                                                          \
   ({                                                                           \
@@ -169,6 +167,7 @@ typedef struct {
 typedef struct {
   int task_id;
   int pid;
+  // offset since system boot
   u64 collected_at;
 } stack_key_t;
 
