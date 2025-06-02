@@ -339,24 +339,12 @@ impl Profiler {
 
         let num_cpus = get_online_cpus().expect("get online CPUs").len() as u32;
         let num_expected_entries = std::cmp::max(num_cpus, sample_freq);
-        let num_expected_entries_t = num_cpus * sample_freq;
 
         let entry_size_bytes = std::mem::size_of::<stack_sample_t>() as u32;
         let max_entries_bytes: u32 = entry_size_bytes * num_expected_entries;
-        let max_entries_bytes_t: u32 = entry_size_bytes * num_expected_entries_t;
-
-        error!(
-            "num_cpus={} sizeof(stack_sample_t)={}",
-            num_cpus, entry_size_bytes
-        );
 
         // max_entries for ringbuf is required to specified in bytes, be a multiple of
         // the page size and a power of two
-        error!(
-            "max_entries_bytes using max(num_cpus, sample_freq)={} max_entries_bytes using num_cpus * sample_freq = {}",
-            roundup_page(max_entries_bytes as usize) as u32, roundup_page(max_entries_bytes_t as usize) as u32
-        );
-
         roundup_page(max_entries_bytes as usize) as u32
     }
 
