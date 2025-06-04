@@ -164,12 +164,12 @@ typedef struct {
   int pid;
   // offset since system boot
   u64 collected_at;
-} stack_key_t;
+} stack_sample_header_t;
 
 typedef struct {
-  stack_key_t    stack_key;
-  native_stack_t stack;
-  native_stack_t kernel_stack;
+  stack_sample_header_t header;
+  native_stack_t        stack;
+  native_stack_t        kernel_stack;
 } stack_sample_t;
 
 typedef struct {

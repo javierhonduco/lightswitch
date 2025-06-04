@@ -2125,9 +2125,9 @@ impl Profiler {
         plain::copy_from_bytes(&mut stack_sample, data).expect("handle stack serde");
 
         let raw_sample = RawSample {
-            pid: stack_sample.stack_key.pid,
-            tid: stack_sample.stack_key.task_id,
-            collected_at: walltime_at_system_boot + stack_sample.stack_key.collected_at,
+            pid: stack_sample.header.pid,
+            tid: stack_sample.header.task_id,
+            collected_at: walltime_at_system_boot + stack_sample.header.collected_at,
             ustack: Some(stack_sample.stack),
             kstack: Some(stack_sample.kernel_stack),
         };
