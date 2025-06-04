@@ -34,6 +34,7 @@ use memmap2::MmapOptions;
 use procfs;
 use tracing::{debug, error, info, span, warn, Level};
 
+use crate::aggregator::Aggregator;
 use crate::bpf::profiler_bindings::*;
 use crate::bpf::profiler_skel::{OpenProfilerSkel, ProfilerSkel, ProfilerSkelBuilder};
 use crate::bpf::tracers_bindings::*;
@@ -131,6 +132,11 @@ pub struct Profiler {
     // Profile channel
     profile_send: Arc<Sender<RawAggregatedProfile>>,
     profile_receive: Arc<Receiver<RawAggregatedProfile>>,
+    // A vector of raw samples received from bpf in the current profiling session
+    raw_samples: Vec<RawSample>,
+    // Raw sample channel. Used for receiving raw samples from the ringbuf/perfbuf poll thread
+    raw_sample_send: Arc<Sender<RawSample>>,
+    raw_sample_receive: Arc<Receiver<RawSample>>,
     /// For how long to profile.
     duration: Duration,
     /// Per-CPU sampling frequency in Hz.
@@ -151,7 +157,11 @@ pub struct Profiler {
     max_native_unwind_info_size_mb: i32,
     unwind_info_manager: UnwindInfoManager,
     use_ring_buffers: bool,
+    aggregator: Aggregator,
     metadata_provider: ThreadSafeGlobalMetadataProvider,
+    // Baseline for calculating raw_sample collection wall clock time
+    // as bpf currently only supports getting the offset since system boot.
+    walltime_at_system_boot: u64,
 }
 
 pub struct ProfilerConfig {
@@ -163,8 +173,6 @@ pub struct ProfilerConfig {
     pub perf_buffer_bytes: usize,
     pub session_duration: Duration,
     pub mapsize_info: bool,
-    pub mapsize_stacks: u32,
-    pub mapsize_aggregated_stacks: u32,
     pub mapsize_rate_limits: u32,
     pub exclude_self: bool,
     pub native_unwind_info_bucket_sizes: Vec<u32>,
@@ -185,8 +193,6 @@ impl Default for ProfilerConfig {
             perf_buffer_bytes: 512 * 1024,
             session_duration: Duration::from_secs(5),
             mapsize_info: false,
-            mapsize_stacks: 100000,
-            mapsize_aggregated_stacks: 10000,
             mapsize_rate_limits: 5000,
             exclude_self: false,
             native_unwind_info_bucket_sizes: vec![
@@ -321,20 +327,28 @@ impl Profiler {
         map_shapes
     }
 
-    pub fn set_profiler_map_sizes(
-        open_skel: &mut OpenProfilerSkel,
-        profiler_config: &ProfilerConfig,
-    ) {
-        open_skel
-            .maps
-            .stacks
-            .set_max_entries(profiler_config.mapsize_stacks)
-            .expect("Unable to set stacks map max_entries");
-        open_skel
-            .maps
-            .aggregated_stacks
-            .set_max_entries(profiler_config.mapsize_aggregated_stacks)
-            .expect("Unable to set aggregated_stacks map max_entries");
+    fn get_stacks_ringbuf_max_entries(sample_freq: u32) -> u32 {
+        // The assumption here is that although the ringbuf is shared
+        // by all CPUs, it's not expected to get filled up since
+        // 1. At any "single instance", we expect at most n samples to be written
+        // to the ringbuf where n is the number of online cpus emitting events.
+        // i.e if all the CPUs are busy at that instance. We also account for
+        // the case where the sampling frequency is less than num online CPUs.
+        // 2. The userspace consumer is pretty lightweight. It simply
+        // reads the sample and dispatches it to another thread for processing.
+
+        let num_cpus = get_online_cpus().expect("get online CPUs").len() as u32;
+        let num_expected_entries = std::cmp::max(num_cpus, sample_freq);
+
+        let entry_size_bytes = std::mem::size_of::<stack_sample_t>() as u32;
+        let max_entries_bytes: u32 = entry_size_bytes * num_expected_entries;
+
+        // max_entries for ringbuf is required to specified in bytes, be a multiple of
+        // the page size and a power of two
+        roundup_page(max_entries_bytes as usize) as u32
+    }
+
+    pub fn setup_profiler_maps(open_skel: &mut OpenProfilerSkel, profiler_config: &ProfilerConfig) {
         open_skel
             .maps
             .rate_limits
@@ -354,12 +368,27 @@ impl Profiler {
             .write(profiler_config.use_ring_buffers);
 
         if profiler_config.use_ring_buffers {
+            // Set sample collecting ringbuf size based sampling frequency
+            let profile_sample_max_entries =
+                Self::get_stacks_ringbuf_max_entries(profiler_config.sample_freq as u32);
+            open_skel
+                .maps
+                .stacks_rb
+                .set_max_entries(profile_sample_max_entries)
+                .expect("failed to set stacks_rb max entries");
+
             // Even set to zero it will create as many entries as CPUs.
             open_skel
                 .maps
                 .events
                 .set_max_entries(0)
-                .expect("set perf buffer entries to zero as it's unused");
+                .expect("set events perf buffer entries to zero as it's unused");
+
+            open_skel
+                .maps
+                .stacks
+                .set_max_entries(0)
+                .expect("set stacks perf buffer entries to zero as it's unused");
         } else {
             // Seems like ring buffers need to have size of at least 1...
             // It will use at least a page.
@@ -367,7 +396,13 @@ impl Profiler {
                 .maps
                 .events_rb
                 .set_max_entries(1)
-                .expect("set ring buffer entries to one as it's unused");
+                .expect("set events ring buffer entries to one as it's unused");
+
+            open_skel
+                .maps
+                .stacks_rb
+                .set_max_entries(1)
+                .expect("set stacks ring buffer entries to one as it's unused");
         }
     }
 
@@ -395,14 +430,6 @@ impl Profiler {
 
     pub fn show_actual_profiler_map_sizes(bpf: &ProfilerSkel) {
         info!("BPF map sizes:");
-        info!(
-            "stacks: {}",
-            bpf.maps.stacks.info().unwrap().info.max_entries
-        );
-        info!(
-            "aggregated_stacks: {}",
-            bpf.maps.aggregated_stacks.info().unwrap().info.max_entries
-        );
         info!(
             "rate_limits: {}",
             bpf.maps.rate_limits.info().unwrap().info.max_entries
@@ -452,7 +479,7 @@ impl Profiler {
             &mut open_skel,
             &profiler_config.native_unwind_info_bucket_sizes,
         );
-        Self::set_profiler_map_sizes(&mut open_skel, &profiler_config);
+        Self::setup_profiler_maps(&mut open_skel, &profiler_config);
 
         let native_unwinder = ManuallyDrop::new(open_skel.load().expect("load skel"));
 
@@ -524,6 +551,13 @@ impl Profiler {
         let profile_send = Arc::new(sender);
         let profile_receive = Arc::new(receiver);
 
+        let (sender, receiver) = unbounded();
+        let raw_sample_sender = Arc::new(sender);
+        let raw_sample_receiver = Arc::new(receiver);
+
+        let walltime_at_system_boot =
+            procfs::boot_time().unwrap().timestamp_nanos_opt().unwrap() as u64;
+
         Profiler {
             cache_dir,
             _links: Vec::new(),
@@ -542,6 +576,9 @@ impl Profiler {
             filter_pids: HashMap::new(),
             profile_send,
             profile_receive,
+            raw_samples: Vec::new(),
+            raw_sample_send: raw_sample_sender,
+            raw_sample_receive: raw_sample_receiver,
             duration: profiler_config.duration,
             sample_freq: profiler_config.sample_freq,
             perf_buffer_bytes: profiler_config.perf_buffer_bytes,
@@ -552,7 +589,9 @@ impl Profiler {
             max_native_unwind_info_size_mb: profiler_config.max_native_unwind_info_size_mb,
             unwind_info_manager: UnwindInfoManager::new(&unwind_cache_dir, None),
             use_ring_buffers: profiler_config.use_ring_buffers,
+            aggregator: Aggregator::default(),
             metadata_provider,
+            walltime_at_system_boot,
         }
     }
 
@@ -703,14 +742,6 @@ impl Profiler {
     }
 
     pub fn run(mut self, collector: ThreadSafeCollector) -> Duration {
-        // In this case, we only want to calculate maximum sampling buffer sizes based on the
-        // number of "online" CPUs, not "possible" CPUs, which they sometimes differ.
-        let num_cpus = get_online_cpus().expect("get online CPUs").len() as u64;
-        let max_samples_per_session = self.sample_freq * num_cpus * self.session_duration.as_secs();
-        if max_samples_per_session >= MAX_AGGREGATED_STACKS_ENTRIES.into() {
-            warn!("samples might be lost due to too many samples in a profile session");
-        }
-
         self.setup_perf_events();
         self.set_bpf_map_info();
         self.add_kernel_modules();
@@ -718,6 +749,16 @@ impl Profiler {
         self.tracers.attach().expect("attach tracers");
 
         let chan_send = self.new_proc_chan_send.clone();
+        let raw_sample_send = self.raw_sample_send.clone();
+
+        self.start_poll_thread(
+            "raw_samples",
+            &self.native_unwinder.maps.stacks_rb,
+            &self.native_unwinder.maps.stacks,
+            move |data| Self::handle_stack(&raw_sample_send, data, self.walltime_at_system_boot),
+            Self::handle_lost_stack,
+        );
+
         self.start_poll_thread(
             "unwinder_events",
             &self.native_unwinder.maps.events_rb,
@@ -790,7 +831,15 @@ impl Profiler {
                     debug!("collecting profiles on schedule");
                     let profile = self.collect_profile();
                     self.send_profile(profile);
-                }
+                },
+                recv(self.raw_sample_receive) -> raw_sample => {
+                    if let Ok(raw_sample) = raw_sample {
+                        self.raw_samples.push(raw_sample);
+                    }
+                    else {
+                        warn!("Failed to receive raw sample, err={:?}", raw_sample.err());
+                    }
+                },
                 recv(self.tracers_chan_receive) -> read => {
                     match read {
                         Ok(TracerEvent::Munmap(pid, start_address)) => {
@@ -942,12 +991,12 @@ impl Profiler {
     }
 
     /// Updates the last time processes and executables were seen. This is used during evictions.
-    pub fn bump_last_used(&mut self, raw_samples: &[RawAggregatedSample]) {
+    pub fn bump_last_used(&mut self, raw_aggregated_samples: &[RawAggregatedSample]) {
         let now = Instant::now();
 
-        for raw_sample in raw_samples {
-            let pid = raw_sample.pid;
-            let ustack = raw_sample.ustack;
+        for aggregated_sample in raw_aggregated_samples {
+            let pid = aggregated_sample.sample.pid;
+            let ustack = aggregated_sample.sample.ustack;
             let Some(ustack) = ustack else {
                 continue;
             };
@@ -1049,84 +1098,21 @@ impl Profiler {
             .expect("zero percpu_stats");
     }
 
-    /// Clear the `percpu_stats`, `stacks`, and `aggregated_stacks` maps one entry at a time.
+    /// Clear the `percpu_stats` maps one entry at a time.
     pub fn clear_maps(&mut self) {
         let _span = span!(Level::DEBUG, "clear_maps").entered();
 
-        self.clear_map("stacks");
-        self.clear_map("aggregated_stacks");
         self.clear_map("rate_limits");
     }
 
     pub fn collect_profile(&mut self) -> RawAggregatedProfile {
         debug!("collecting profile");
-
-        self.teardown_perf_events();
-
-        let mut result = Vec::new();
-        let maps = &self.native_unwinder.maps;
-        let aggregated_stacks = &maps.aggregated_stacks;
-        let stacks = &maps.stacks;
-
-        let mut all_stacks_bytes = Vec::new();
-        for aggregated_stack_key_bytes in aggregated_stacks.keys() {
-            match aggregated_stacks.lookup(&aggregated_stack_key_bytes, MapFlags::ANY) {
-                Ok(Some(aggregated_value_bytes)) => {
-                    let mut result_ustack: Option<native_stack_t> = None;
-                    let mut result_kstack: Option<native_stack_t> = None;
-
-                    let key: &stack_count_key_t =
-                        plain::from_bytes(&aggregated_stack_key_bytes).unwrap();
-                    let count: &u64 = plain::from_bytes(&aggregated_value_bytes).unwrap();
-
-                    all_stacks_bytes.push(aggregated_stack_key_bytes.clone());
-
-                    // Maybe check if procinfo is up to date
-                    // Fetch actual stacks
-                    // Handle errors later
-                    if key.user_stack_id > 0 {
-                        match stacks.lookup(&key.user_stack_id.to_ne_bytes(), MapFlags::ANY) {
-                            Ok(Some(stack_bytes)) => {
-                                result_ustack = Some(*plain::from_bytes(&stack_bytes).unwrap());
-                            }
-                            Ok(None) => {
-                                warn!("NO USER STACK FOUND");
-                            }
-                            Err(e) => {
-                                error!("\tfailed getting user stack {}", e);
-                            }
-                        }
-                    }
-                    if key.kernel_stack_id > 0 {
-                        match stacks.lookup(&key.kernel_stack_id.to_ne_bytes(), MapFlags::ANY) {
-                            Ok(Some(stack_bytes)) => {
-                                result_kstack = Some(*plain::from_bytes(&stack_bytes).unwrap());
-                            }
-                            _ => {
-                                error!("\tfailed getting kernel stack");
-                            }
-                        }
-                    }
-
-                    let raw_sample = RawAggregatedSample {
-                        pid: key.pid,
-                        tid: key.task_id,
-                        ustack: result_ustack,
-                        kstack: result_kstack,
-                        count: *count,
-                    };
-                    result.push(raw_sample);
-                }
-                _ => continue,
-            }
-        }
-
-        debug!("===== got {} unique stacks", all_stacks_bytes.len());
+        let result = self.aggregator.aggregate(self.raw_samples.clone());
+        self.raw_samples.clear();
 
         self.bump_last_used(&result);
         self.collect_unwinder_stats();
         self.clear_maps();
-        self.setup_perf_events();
         result
     }
 
@@ -2130,6 +2116,30 @@ impl Profiler {
         Ok(())
     }
 
+    fn handle_stack(
+        raw_sample_send: &Arc<Sender<RawSample>>,
+        data: &[u8],
+        walltime_at_system_boot: u64,
+    ) {
+        let mut stack_sample = stack_sample_t::default();
+        plain::copy_from_bytes(&mut stack_sample, data).expect("handle stack serde");
+
+        let raw_sample = RawSample {
+            pid: stack_sample.stack_key.pid,
+            tid: stack_sample.stack_key.task_id,
+            collected_at: walltime_at_system_boot + stack_sample.stack_key.collected_at,
+            ustack: Some(stack_sample.stack),
+            kstack: Some(stack_sample.kernel_stack),
+        };
+        if let Err(e) = raw_sample_send.send(raw_sample) {
+            error!("failed to send raw sample, err={:?}", e);
+        }
+    }
+
+    fn handle_lost_stack(cpu: i32, count: u64) {
+        error!("lost {count} stacks on cpu {cpu}");
+    }
+
     fn handle_event(sender: &Arc<Sender<Event>>, data: &[u8]) {
         let mut event = Event::default();
         plain::copy_from_bytes(&mut event, data).expect("handle event serde");
@@ -2197,8 +2207,7 @@ mod tests {
             &mut open_skel,
             &profiler_config.native_unwind_info_bucket_sizes,
         );
-        Profiler::set_profiler_map_sizes(&mut open_skel, &profiler_config);
-
+        Profiler::setup_profiler_maps(&mut open_skel, &profiler_config);
         let native_unwinder = open_skel.load().expect("load skel");
 
         // add and delete bpf process works

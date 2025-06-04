@@ -1,3 +1,4 @@
+pub mod aggregator;
 pub mod bpf;
 pub mod collector;
 pub mod debug_info;

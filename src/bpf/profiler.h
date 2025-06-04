@@ -50,7 +50,6 @@ typedef struct {
   u32 high_index;
 } page_value_t;
 
-#define MAX_AGGREGATED_STACKS_ENTRIES 10000
 
 // Values for dwarf expressions.
 #define DWARF_EXPRESSION_UNKNOWN 0
@@ -109,6 +108,7 @@ struct unwinder_stats_t {
   u64 error_sending_new_process_event;
   u64 error_cfa_offset_did_not_fit;
   u64 error_rbp_offset_did_not_fit;
+  u64 error_failure_sending_stack;
   u64 bp_non_zero_for_bottom_frame;
   u64 vdso_encountered;
   u64 jit_encountered;
@@ -119,11 +119,6 @@ const volatile struct lightswitch_config_t lightswitch_config = {
     .use_ring_buffers = false,
     .use_task_pt_regs_helper = false,
 };
-
-// A different stack produced the same hash.
-#define STACK_COLLISION(err) (err == -EEXIST)
-// Tried to read a kernel stack from a non-kernel context.
-#define IN_USERSPACE(err) (err == -EFAULT)
 
 #define LOG(fmt, ...)                                                          \
   ({                                                                           \
@@ -172,12 +167,18 @@ typedef struct {
 typedef struct {
   int task_id;
   int pid;
-  unsigned long long user_stack_id;
-  unsigned long long kernel_stack_id;
-} stack_count_key_t;
+  // offset since system boot
+  u64 collected_at;
+} stack_key_t;
 
 typedef struct {
+  stack_key_t    stack_key;
   native_stack_t stack;
+  native_stack_t kernel_stack;
+} stack_sample_t;
+
+typedef struct {
+  stack_sample_t stack;
 
   unsigned long long ip;
   unsigned long long sp;
@@ -185,7 +186,6 @@ typedef struct {
   unsigned long long lr;
   int tail_calls;
 
-  stack_count_key_t stack_key;
 } unwind_state_t;
 
 enum event_type {
@@ -202,32 +202,3 @@ typedef struct {
 enum program {
   PROGRAM_NATIVE_UNWINDER = 0,
 };
-
-#define BIG_CONSTANT(x) (x##LLU)
-unsigned long long hash_stack(native_stack_t *stack) {
-  const unsigned long long m = BIG_CONSTANT(0xc6a4a7935bd1e995);
-  const int r = 47;
-  const int seed = 123;
-
-  unsigned long long hash = seed ^ (stack->len * m);
-
-  for (unsigned long long i = 0; i < MAX_STACK_DEPTH; i++) {
-    // The stack is not zeroed when we initialise it, we simply
-    // set the length to zero. This is a workaround to produce
-    // the same hash for two stacks that might have garbage values
-    // after their length.
-    unsigned long long k = 0;
-    if (i < stack->len) {
-      k = stack->addresses[i];
-    }
-
-    k *= m;
-    k ^= k >> r;
-    k *= m;
-
-    hash ^= k;
-    hash *= m;
-  }
-
-  return hash;
-}

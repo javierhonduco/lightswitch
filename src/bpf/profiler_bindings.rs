@@ -9,7 +9,8 @@ use crate::unwind_info::types::CompactUnwindRow;
 
 include!(concat!(env!("OUT_DIR"), "/profiler_bindings.rs"));
 
-unsafe impl Plain for stack_count_key_t {}
+unsafe impl Plain for stack_sample_t {}
+unsafe impl Plain for stack_key_t {}
 unsafe impl Plain for native_stack_t {}
 unsafe impl Plain for Event {}
 unsafe impl Plain for unwinder_stats_t {}
@@ -67,6 +68,8 @@ impl Add for unwinder_stats_t {
                 + other.error_cfa_offset_did_not_fit,
             error_rbp_offset_did_not_fit: self.error_rbp_offset_did_not_fit
                 + other.error_rbp_offset_did_not_fit,
+            error_failure_sending_stack: self.error_failure_sending_stack
+                + other.error_failure_sending_stack,
             bp_non_zero_for_bottom_frame: self.bp_non_zero_for_bottom_frame
                 + other.bp_non_zero_for_bottom_frame,
             vdso_encountered: self.vdso_encountered + other.vdso_encountered,
