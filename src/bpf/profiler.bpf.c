@@ -14,18 +14,15 @@
 #include <bpf/bpf_tracing.h>
 
 struct {
-  __uint(type, BPF_MAP_TYPE_HASH);
-  __uint(max_entries, 100000);
-  __type(key, u64);
-  __type(value, native_stack_t);
-} stacks SEC(".maps");
+  __uint(type, BPF_MAP_TYPE_RINGBUF);
+  __uint(max_entries, 256 * 1024 /* 256 KB */);
+} stacks_rb SEC(".maps");
 
 struct {
-  __uint(type, BPF_MAP_TYPE_HASH);
-  __uint(max_entries, MAX_AGGREGATED_STACKS_ENTRIES);
-  __type(key, stack_count_key_t);
-  __type(value, u64);
-} aggregated_stacks SEC(".maps");
+  __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+  __uint(key_size, sizeof(u32));
+  __uint(value_size, sizeof(u32));
+} stacks SEC(".maps");
 
 struct {
   __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -317,72 +314,35 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u
   return true;
 }
 
-static __always_inline void *
-bpf_map_lookup_or_try_init(void *map, const void *key, const void *init) {
-  void *val;
-  long err;
-
-  val = bpf_map_lookup_elem(map, key);
-  if (val) {
-    return val;
-  }
-
-  err = bpf_map_update_elem(map, key, init, BPF_NOEXIST);
-  if (err && !STACK_COLLISION(err)) {
-    LOG("[error] bpf_map_lookup_or_try_init with ret: %d", err);
-    return 0;
-  }
-
-  return bpf_map_lookup_elem(map, key);
-}
-
-// Aggregate the given stacktrace.
 static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
-                                      u64 pid_tgid,
-                                      unwind_state_t *unwind_state) {
-  stack_count_key_t *stack_key = &unwind_state->stack.stack_key;
+u64 pid_tgid,
+unwind_state_t *unwind_state) {
+  // Get the kernel stack
+  int ret = bpf_get_stack(ctx, unwind_state->stack.kernel_stack.addresses, MAX_STACK_DEPTH * sizeof(u64), 0);
+  if (ret >= 0) {
+    unwind_state->stack.kernel_stack.len = ret / sizeof(u64);
+  }
 
   int per_process_id = pid_tgid >> 32;
   int per_thread_id = pid_tgid;
 
-  stack_key->pid = per_process_id;
-  stack_key->task_id = per_thread_id;
+  unwind_state->stack.stack_key.pid = per_process_id;
+  unwind_state->stack.stack_key.task_id = per_thread_id;
+  unwind_state->stack.stack_key.collected_at = bpf_ktime_get_boot_ns();
 
-  // Hash and add user stack.
-  if (unwind_state->stack.stack.len >= 1) {
-    u64 user_stack_id = hash_stack(&unwind_state->stack.stack);
-    int err = bpf_map_update_elem(&stacks, &user_stack_id, &unwind_state->stack.stack,
-                                  BPF_ANY);
-    if (err == 0) {
-      stack_key->user_stack_id = user_stack_id;
-    } else {
-      LOG("[error] failed to insert user stack: %d", err);
-    }
+  if (lightswitch_config.use_ring_buffers) {
+    ret = bpf_ringbuf_output(&stacks_rb, &(unwind_state->stack), sizeof(stack_sample_t), 0);
+  } else {
+    ret = bpf_perf_event_output(ctx, &stacks, BPF_F_CURRENT_CPU, &(unwind_state->stack), sizeof(stack_sample_t));
   }
 
-  // Walk, hash and add kernel stack.
-  int ret = bpf_get_stack(ctx, unwind_state->stack.stack.addresses, MAX_STACK_DEPTH * sizeof(u64), 0);
-  if (ret >= 0) {
-    unwind_state->stack.stack.len = ret / sizeof(u64);
-  }
-
-  if (unwind_state->stack.stack.len >= 1) {
-    u64 kernel_stack_id = hash_stack(&unwind_state->stack.stack);
-    int err = bpf_map_update_elem(&stacks, &kernel_stack_id, &unwind_state->stack.stack,
-                                  BPF_ANY);
-    if (err == 0) {
-      stack_key->kernel_stack_id = kernel_stack_id;
-    } else {
-      LOG("[error] failed to insert kernel stack: %d", err);
-    }
-  }
-
-  // Insert aggregated stack.
-  u64 zero = 0;
-  u64 *count = bpf_map_lookup_or_try_init(&aggregated_stacks,
-                                           &unwind_state->stack.stack_key, &zero);
-  if (count) {
-    __sync_fetch_and_add(count, 1);
+  if (ret < 0) {
+    bpf_printk(
+      "add_stack failed ret=%d, use_ring_buffers=%d",
+      ret,
+      lightswitch_config.use_ring_buffers
+    );
+    bump_unwind_error_failure_sending_stack();
   }
 }
 
@@ -405,7 +365,6 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
   for (int i = 0; i < MAX_STACK_DEPTH_PER_PROGRAM; i++) {
     // LOG("[debug] Within unwinding machinery loop");
     LOG("## frame: %d", unwind_state->stack.stack.len);
-
     LOG("\tcurrent pc: %llx", unwind_state->ip);
     LOG("\tcurrent sp: %llx", unwind_state->sp);
     LOG("\tcurrent bp: %llx", unwind_state->bp);
@@ -687,13 +646,13 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 
 // Set up the initial unwinding state.
 static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_user_pt_regs_t *regs) {
-  unwind_state->stack.stack.len = 0;
-  unwind_state->tail_calls = 0;
+ unwind_state->stack.stack.len = 0;
+ unwind_state->stack.kernel_stack.len = 0;
+ unwind_state->tail_calls = 0;
 
-  unwind_state->stack.stack_key.pid = 0;
-  unwind_state->stack.stack_key.task_id = 0;
-  unwind_state->stack.stack_key.user_stack_id = 0;
-  unwind_state->stack.stack_key.kernel_stack_id = 0;
+ unwind_state->stack.stack_key.pid = 0;
+ unwind_state->stack.stack_key.task_id = 0;
+ unwind_state->stack.stack_key.collected_at = 0;
 
   if (in_kernel(PT_REGS_IP(regs))) {
     if (!retrieve_task_registers(&unwind_state->ip, &unwind_state->sp, &unwind_state->bp, &unwind_state->lr)) {

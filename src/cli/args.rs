@@ -109,18 +109,6 @@ pub(crate) struct CliArgs {
     pub(crate) mapsize_info: bool,
     #[arg(
         long,
-        default_value_t = ProfilerConfig::default().mapsize_stacks,
-        help = "max number of individual stacks to capture before aggregation"
-    )]
-    pub(crate) mapsize_stacks: u32,
-    #[arg(
-        long,
-        default_value_t = ProfilerConfig::default().mapsize_aggregated_stacks,
-        help = "max number of unique stacks after aggregation"
-    )]
-    pub(crate) mapsize_aggregated_stacks: u32,
-    #[arg(
-        long,
         default_value_t = ProfilerConfig::default().mapsize_rate_limits,
         help = "max number of rate limit entries"
     )]
