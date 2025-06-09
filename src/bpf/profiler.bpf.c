@@ -326,9 +326,9 @@ unwind_state_t *unwind_state) {
   int per_process_id = pid_tgid >> 32;
   int per_thread_id = pid_tgid;
 
-  unwind_state->stack.stack_key.pid = per_process_id;
-  unwind_state->stack.stack_key.task_id = per_thread_id;
-  unwind_state->stack.stack_key.collected_at = bpf_ktime_get_boot_ns();
+  unwind_state->stack.header.pid = per_process_id;
+  unwind_state->stack.header.task_id = per_thread_id;
+  unwind_state->stack.header.collected_at = bpf_ktime_get_boot_ns();
 
   if (lightswitch_config.use_ring_buffers) {
     ret = bpf_ringbuf_output(&stacks_rb, &(unwind_state->stack), sizeof(stack_sample_t), 0);
@@ -650,9 +650,9 @@ static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_
  unwind_state->stack.kernel_stack.len = 0;
  unwind_state->tail_calls = 0;
 
- unwind_state->stack.stack_key.pid = 0;
- unwind_state->stack.stack_key.task_id = 0;
- unwind_state->stack.stack_key.collected_at = 0;
+ unwind_state->stack.header.pid = 0;
+ unwind_state->stack.header.task_id = 0;
+ unwind_state->stack.header.collected_at = 0;
 
   if (in_kernel(PT_REGS_IP(regs))) {
     if (!retrieve_task_registers(&unwind_state->ip, &unwind_state->sp, &unwind_state->bp, &unwind_state->lr)) {
