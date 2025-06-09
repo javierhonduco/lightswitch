@@ -160,6 +160,7 @@
             cpp-progs = test-cpp-progs;
             go-progs = test-go-progs;
             cgo-progs = test-cgo-progs;
+            musl = test-static-musl-cpp-progs;
           };
         }
       );

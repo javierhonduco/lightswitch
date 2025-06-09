@@ -32,6 +32,11 @@ pub struct ElfLoad {
 pub enum Runtime {
     /// C, C++, Rust, Fortran.
     CLike,
+    /// Zig
+    Zig {
+        start_low_address: u64,
+        start_high_address: u64,
+    },
     /// Golang.
     Go(Vec<StopUnwindingFrames>),
 }
@@ -125,6 +130,28 @@ impl ObjectFile {
         if self.is_go() {
             Runtime::Go(self.go_stop_unwinding_frames())
         } else {
+            let mut zig_base_addr = (false, None);
+            for symbol in self.object.symbols() {
+                let Ok(name) = symbol.name() else { continue };
+                if name.starts_with("__zig") {
+                    //println!("{}", name);
+                    zig_base_addr.0 = true;
+                }
+                if name == "_start" {
+                    zig_base_addr.1 = Some((symbol.address(), symbol.address() + symbol.size()));
+                }
+            }
+
+            if zig_base_addr.0 {
+                let (start_low_address, start_high_address) = zig_base_addr.1.unwrap();
+                println!("zig {:x}", start_low_address);
+
+                return Runtime::Zig {
+                    start_low_address,
+                    start_high_address,
+                };
+            }
+
             Runtime::CLike
         }
     }

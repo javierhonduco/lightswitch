@@ -199,6 +199,7 @@ mod tests {
             p_offset: 0x1,
             p_vaddr: 0x0,
             p_filesz: 0x20,
+            executable: true,
         }];
         assert_eq!(
             object_file_info.normalized_address(0x110, &mapping),
@@ -209,6 +210,7 @@ mod tests {
             p_offset: 0x0,
             p_vaddr: 0x0,
             p_filesz: 0x5,
+            executable: true,
         }];
         assert!(object_file_info
             .normalized_address(0x110, &mapping)

@@ -93,12 +93,12 @@ pub fn to_pprof(
                     let mut lines = Vec::new();
 
                     match kframe.symbolization_result {
-                        Some(Ok((name, _))) => {
-                            let (line, _) = pprof.add_line(&name);
+                        Some(Ok((name, _, _todo1, _todo2))) => {
+                            let (line, _) = pprof.add_line(&name, None, None);
                             lines.push(line);
                         }
                         Some(Err(e)) => {
-                            let (line, _) = pprof.add_line(&e.to_string());
+                            let (line, _) = pprof.add_line(&e.to_string(), None, None);
                             lines.push(line);
                         }
                         None => {}
@@ -162,12 +162,12 @@ pub fn to_pprof(
                     let mut lines = vec![];
 
                     match uframe.symbolization_result {
-                        Some(Ok((name, _))) => {
-                            let (line, _) = pprof.add_line(&name);
+                        Some(Ok((name, boolean, filename, line))) => {
+                            let (line, _) = pprof.add_line(&name, filename, line);
                             lines.push(line);
                         }
                         Some(Err(e)) => {
-                            let (line, _) = pprof.add_line(&e.to_string());
+                            let (line, _) = pprof.add_line(&e.to_string(), None, None);
                             lines.push(line);
                         }
                         None => {}
@@ -390,7 +390,7 @@ fn symbolize_kernel_stack(kernel_stack: &[Frame], ksyms: &[Ksym]) -> Vec<Frame> 
         symbolized_stack.push(Frame {
             virtual_address: frame.virtual_address,
             file_offset: None,
-            symbolization_result: Some(Ok((symbol.symbol_name.to_string(), false))),
+            symbolization_result: Some(Ok((symbol.symbol_name.to_string(), false, None, None))),
         });
     }
     symbolized_stack

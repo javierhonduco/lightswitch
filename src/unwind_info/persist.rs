@@ -74,6 +74,7 @@ impl Writer {
         Ok(unwind_info)
     }
 
+    // bad name!
     fn read_unwind_info(&self) -> Result<Vec<CompactUnwindRow>, WriterError> {
         compact_unwind_info(&self.executable_path.to_string_lossy())
             .map_err(|e| WriterError::UnwindInfoGeneric(e.to_string()))

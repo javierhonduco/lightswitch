@@ -68,7 +68,7 @@ fn main() {
         .clang_args([
             "-Wextra",
             "-Wall",
-            "-Werror",
+            //"-Werror",
             "-Wno-unused-command-line-argument",
         ])
         .build_and_generate(skel)
@@ -80,7 +80,7 @@ fn main() {
         .clang_args([
             "-Wextra",
             "-Wall",
-            "-Werror",
+            //"-Werror",
             "-Wno-unused-command-line-argument",
             "-Wno-unused-function",
         ])

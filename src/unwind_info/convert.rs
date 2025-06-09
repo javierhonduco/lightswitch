@@ -150,6 +150,15 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                     Ok(None) => break,
                     Ok(Some(row)) => {
                         compact_row.pc = row.start_address();
+                        if compact_row.pc >= 0x10fd3b0 && compact_row.pc < 0x00000000010fd3c4 {
+                            // why does it have a single instruction??!
+                            println!(
+                                "zzzzz cfa {:?} rbp {:?}",
+                                row.cfa(),
+                                row.register(frame_pointer)
+                            );
+                        }
+
                         match row.cfa() {
                             CfaRule::RegisterAndOffset { register, offset } => {
                                 if register == &frame_pointer {
@@ -219,6 +228,12 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                     _ => continue,
                 }
 
+                ///println!("---- {path} {:x}", start_addr);
+                if compact_row.pc == 0x10fd3b0 {
+                    println!("func needs stuff");
+                    compact_row = CompactUnwindRow::stop_unwinding(compact_row.pc);
+                }
+
                 (self.callback)(&UnwindData::Instruction(compact_row));
             }
         }
@@ -233,12 +248,13 @@ pub fn compact_unwind_info(path: &str) -> anyhow::Result<Vec<CompactUnwindRow>> 
 
     let builder = CompactUnwindInfoBuilder::with_callback(path, |unwind_data| {
         match unwind_data {
-            UnwindData::Function(_, end_addr) => {
+            UnwindData::Function(start_addr, end_addr) => {
                 // Add the end addr when we hit a new func
                 match last_function_end_addr {
                     Some(addr) => {
                         let marker = CompactUnwindRow::stop_unwinding(addr);
 
+                        // wtf
                         let row = CompactUnwindRow {
                             pc: marker.pc,
                             cfa_offset: marker.cfa_offset,

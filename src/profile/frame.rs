@@ -15,15 +15,16 @@ pub struct Frame {
     pub file_offset: Option<u64>,
     /// If symbolized, the result will be present here with the function name and whether the function
     /// was inlined.
-    pub symbolization_result: Option<Result<(String, bool), SymbolizationError>>,
+    pub symbolization_result:
+        Option<Result<(String, bool, Option<String>, Option<u32>), SymbolizationError>>,
 }
 
 impl fmt::Display for Frame {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match &self.symbolization_result {
-            Some(Ok((name, inlined))) => {
+            Some(Ok((name, inlined, path, line))) => {
                 let inline_str = if *inlined { "[inlined] " } else { "" };
-                write!(fmt, "{inline_str}{name}")
+                write!(fmt, "{}{} path: {:?}:{:?}", inline_str, name, path, line)
             }
             Some(Err(e)) => {
                 write!(fmt, "error: {e:?}")

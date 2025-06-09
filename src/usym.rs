@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use blazesym::symbolize::source::Elf;
 use blazesym::symbolize::source::Source;
+use blazesym::symbolize::CodeInfo;
 use blazesym::symbolize::Input;
 use blazesym::symbolize::Sym;
 use blazesym::symbolize::Symbolized;
@@ -52,21 +53,40 @@ pub fn symbolize_native_stack_blaze(
                 name,
                 addr,
                 offset: _,
-                code_info: _,
+                code_info,
                 inlined,
                 ..
             }) => {
+                let filename = |code_info: &Option<CodeInfo>| match code_info.clone() {
+                    Some(a) => Some(a.file.to_string_lossy().to_string()),
+                    None => None,
+                };
+                let line = |code_info: &Option<CodeInfo>| match code_info.clone() {
+                    Some(a) => a.line,
+                    None => None,
+                };
+
                 for frame in inlined.iter().rev() {
                     symbols.push(Frame {
                         virtual_address,
                         file_offset: Some(*addr),
-                        symbolization_result: Some(Ok((frame.name.to_string(), true))),
+                        symbolization_result: Some(Ok((
+                            frame.name.to_string(),
+                            true,
+                            filename(&frame.code_info),
+                            line(&frame.code_info),
+                        ))),
                     });
                 }
                 symbols.push(Frame {
                     virtual_address,
                     file_offset: Some(*addr),
-                    symbolization_result: Some(Ok((name.to_string(), false))),
+                    symbolization_result: Some(Ok((
+                        name.to_string(),
+                        false,
+                        filename(code_info),
+                        line(code_info),
+                    ))),
                 });
             }
             Symbolized::Unknown(r) => {
