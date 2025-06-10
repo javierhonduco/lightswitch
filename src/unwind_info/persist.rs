@@ -150,7 +150,7 @@ impl<'a> Reader<'a> {
         let mut header = Header::default();
         let header_data = data.get(0..header_size).ok_or(ReaderError::OutOfRange)?;
         plain::copy_from_bytes(&mut header, header_data)
-            .map_err(|e| ReaderError::Generic(format!("{:?}", e)))?;
+            .map_err(|e| ReaderError::Generic(format!("{e:?}")))?;
 
         if header.magic != MAGIC_NUMBER {
             return Err(ReaderError::MagicNumber);
@@ -184,7 +184,7 @@ impl<'a> Reader<'a> {
                 .ok_or(ReaderError::OutOfRange)?;
             context.update(unwind_row_data);
             plain::copy_from_bytes(&mut unwind_row, unwind_row_data)
-                .map_err(|e| ReaderError::Generic(format!("{:?}", e)))?;
+                .map_err(|e| ReaderError::Generic(format!("{e:?}")))?;
             unwind_info.push(unwind_row);
         }
 

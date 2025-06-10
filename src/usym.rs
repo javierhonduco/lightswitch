@@ -33,7 +33,7 @@ pub fn symbolize_native_stack_blaze(
                 offsets.len(),
                 vec![Frame::with_error(
                     0xBAD,
-                    format!("<blazesym: failed to symbolize due to {}", e),
+                    format!("<blazesym: failed to symbolize due to {e}"),
                 )],
             );
             return res;
@@ -74,8 +74,7 @@ pub fn symbolize_native_stack_blaze(
                     virtual_address,
                     file_offset: None,
                     symbolization_result: Some(Err(SymbolizationError::Generic(format!(
-                        "<blazesym: unknown symbol due to {}>",
-                        r
+                        "<blazesym: unknown symbol due to {r}>"
                     )))),
                 });
             }
