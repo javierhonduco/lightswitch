@@ -1,7 +1,7 @@
 use std::fs::File;
 
 use anyhow::Result;
-use gimli::{CfaRule, CieOrFde, EhFrame, UnwindContext, UnwindSection};
+use gimli::{CfaRule, CieOrFde, EhFrame, Register, UnwindContext, UnwindSection};
 use memmap2::Mmap;
 use object::Architecture;
 use object::{Object, ObjectSection};
@@ -182,15 +182,51 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                                 if let Ok(expression) = exp.get(&eh_frame) {
                                     let expression_data = expression.0.slice();
                                     if expression_data == *PLT1 {
+                                        compact_row.cfa_type = CfaType::Plt;
                                         compact_row.cfa_offset = PltType::Plt1 as u16;
                                     } else if expression_data == *PLT2 {
+                                        compact_row.cfa_type = CfaType::Plt;
                                         compact_row.cfa_offset = PltType::Plt2 as u16;
-                                    }
-                                } else {
-                                    compact_row.cfa_offset = PltType::Unknown as u16;
-                                }
+                                    } else {
+                                        use gimli::Encoding;
+                                        use gimli::Format;
+                                        use gimli::Operation::Deref;
+                                        use gimli::Operation::PlusConstant;
+                                        use gimli::Operation::RegisterOffset;
+                                        let mut ops = expression.operations(Encoding {
+                                            format: Format::Dwarf64,
+                                            version: 4,
+                                            address_size: 8,
+                                        });
 
-                                compact_row.cfa_type = CfaType::Expression;
+                                        match (ops.next(), ops.next(), ops.next(), ops.next()) {
+                                            (
+                                                Ok(Some(RegisterOffset {
+                                                    register: stack_pointer,
+                                                    offset,
+                                                    ..
+                                                })),
+                                                Ok(Some(Deref { .. })),
+                                                Ok(Some(PlusConstant { value: addition })),
+                                                Ok(None),
+                                            ) => {
+                                                println!("*(rsp+{offset})+{addition}");
+                                                compact_row.cfa_type = CfaType::DerefAndAdd;
+                                                compact_row.cfa_offset =
+                                                    ((offset as u16) << 8) | (addition as u16);
+                                            }
+                                            _ => {
+                                                compact_row.cfa_type =
+                                                    CfaType::UnsupportedExpression;
+                                            }
+                                        }
+
+                                        //println!("\t{:x} {:#?}", row.start_address(), expression.0.slice().iter().map(
+                                        //    |el|
+                                        //    format!("{:x}", el)
+                                        //).collect::<Vec<String>>());
+                                    }
+                                }
                             }
                         };
 
@@ -228,7 +264,7 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                     _ => continue,
                 }
 
-                ///println!("---- {path} {:x}", start_addr);
+
                 if compact_row.pc == 0x10fd3b0 {
                     println!("func needs stuff");
                     compact_row = CompactUnwindRow::stop_unwinding(compact_row.pc);

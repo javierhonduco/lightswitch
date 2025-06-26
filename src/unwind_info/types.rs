@@ -10,10 +10,12 @@ pub enum CfaType {
     Unknown = 0,
     FramePointerOffset = 1,
     StackPointerOffset = 2,
-    Expression = 3,
+    Plt = 3,
     EndFdeMarker = 4,
     UnsupportedRegisterOffset = 5,
     OffsetDidNotFit = 6,
+    DerefAndAdd = 7,
+    UnsupportedExpression = 8,
 }
 
 #[repr(u8)]

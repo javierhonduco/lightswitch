@@ -1429,7 +1429,7 @@ impl Profiler {
                 if e == AddUnwindInformationError::NoUnwindInfoKnownNaughty {
                     return;
                 }
-                warn!(
+                println!(
                     "error adding unwind information for executable 0x{} due to {:?}",
                     mapping.executable_id, e
                 );
@@ -1500,6 +1500,10 @@ impl Profiler {
                 unwind_info.sort_by_key(|e| e.pc);
                 Ok(unwind_info)
             }
+            Runtime::Node => Ok(vec![
+                CompactUnwindRow::frame_setup(start_address),
+                CompactUnwindRow::stop_unwinding(end_address),
+            ]),
             Runtime::CLike | Runtime::Zig { .. } => {
                 if needs_synthesis {
                     debug!("synthetising arm64 unwind information using frame pointers for vDSO");

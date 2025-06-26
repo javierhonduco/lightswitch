@@ -310,10 +310,10 @@ fn show_unwind_info(path: &str) {
         let rbp_type = compact_row.rbp_type;
         let cfa_offset = compact_row.cfa_offset;
         let rbp_offset = compact_row.rbp_offset;
-        println!(
-            "pc: {:x} cfa_type: {:<2} rbp_type: {:<2} cfa_offset: {:<4} rbp_offset: {:<4}",
-            pc, cfa_type as u8, rbp_type as u8, cfa_offset, rbp_offset
-        );
+        //println!(
+        //    "pc: {:x} cfa_type: {:<2} rbp_type: {:<2} cfa_offset: {:<4} rbp_offset: {:<4}",
+        //    pc, cfa_type as u8, rbp_type as u8, cfa_offset, rbp_offset
+        //);
     }
 }
 

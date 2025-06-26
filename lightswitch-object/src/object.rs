@@ -32,11 +32,15 @@ pub struct ElfLoad {
 pub enum Runtime {
     /// C, C++, Rust, Fortran.
     CLike,
-    /// Zig
+    /// Zig. Needs special handling because before XXX the top level
+    /// frame didn't have the right unwind information.
     Zig {
         start_low_address: u64,
         start_high_address: u64,
     },
+    // Node.js is always compiled with frame pointers, and some of the
+    // AoT doens't have unwind information.
+    Node,
     /// Golang.
     Go(Vec<StopUnwindingFrames>),
 }
@@ -131,6 +135,7 @@ impl ObjectFile {
             Runtime::Go(self.go_stop_unwinding_frames())
         } else {
             let mut zig_base_addr = (false, None);
+            let mut node = false;
             for symbol in self.object.symbols() {
                 let Ok(name) = symbol.name() else { continue };
                 if name.starts_with("__zig") {
@@ -139,6 +144,14 @@ impl ObjectFile {
                 }
                 if name == "_start" {
                     zig_base_addr.1 = Some((symbol.address(), symbol.address() + symbol.size()));
+                    /*                     // Once we've found both, stop checking all the symbols
+                    if zig_base_addr.0 {
+                        break;
+                    } */
+                }
+
+                if name.starts_with("v8::internal::") {
+                    node = true;
                 }
             }
 
@@ -150,6 +163,10 @@ impl ObjectFile {
                     start_low_address,
                     start_high_address,
                 };
+            }
+
+            if node {
+                return Runtime::Node;
             }
 
             Runtime::CLike

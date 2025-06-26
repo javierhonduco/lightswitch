@@ -451,9 +451,19 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       previous_rsp = unwind_state->bp + found_cfa_offset;
     } else if (found_cfa_type == CFA_TYPE_RSP) {
       previous_rsp = unwind_state->sp + found_cfa_offset;
-    } else if (found_cfa_type == CFA_TYPE_EXPRESSION) {
+    } else if (found_cfa_type == CFA_TYPE_DEREF) {
+      u8 offset = found_cfa_offset >> 8;
+      u8 addition = found_cfa_offset;
+      bpf_printk("deref! offset %d addition %d", offset, addition);
+      int ret =
+          bpf_probe_read_user(&previous_rsp, 8, (void *)(unwind_state->sp + offset));
+      if (ret < 0) {
+        bpf_printk("ayyyy offset %d ret %d", offset, ret);
+      }
+      previous_rsp += addition;
+    } else if (found_cfa_type == CFA_TYPE_PLT) {
       if (found_cfa_offset == DWARF_EXPRESSION_UNKNOWN) {
-        LOG("[unsup] CFA is an unsupported expression, bailing out");
+        LOG("[unsup] CFA is an unsupported expression, bailing out at pc: %llx", object_relative_pc);
         bump_unwind_error_unsupported_expression();
         return 1;
       }
@@ -473,8 +483,8 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       previous_rsp = unwind_state->sp + 8 +
                      ((((unwind_state->ip & 15) >= threshold)) << 3);
     } else {
-      LOG("\t[unsup] register %d not valid (expected $rbp or $rsp)",
-          found_cfa_type);
+      LOG("\t[unsup] register %d not valid (expected $rbp or $rsp) ip: %llx",
+          found_cfa_type, object_relative_pc);
       bump_unwind_error_unsupported_cfa_register();
       return 1;
     }
@@ -573,7 +583,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 
     bool main_thread = per_process_id == per_thread_id;
     if (main_thread && unwind_state->bp != 0) {
-      LOG("[error] Expected rbp to be 0 but found %llx, pc: %llx (Node.js is not well supported yet)", unwind_state->bp, unwind_state->ip);
+      LOG("[error] Expected rbp to be 0 on main thread but found %llx, pc: %llx", unwind_state->bp, unwind_state->ip);
       bump_unwind_bp_non_zero_for_bottom_frame();
     }
 

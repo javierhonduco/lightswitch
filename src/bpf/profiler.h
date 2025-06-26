@@ -58,7 +58,9 @@ typedef struct {
 // Values for the unwind table's CFA type.
 #define CFA_TYPE_RBP 1
 #define CFA_TYPE_RSP 2
-#define CFA_TYPE_EXPRESSION 3
+#define CFA_TYPE_PLT 3
+#define CFA_TYPE_DEREF 7
+
 // Special values.
 #define CFA_TYPE_END_OF_FDE_MARKER 4
 #define CFA_TYPE_OFFSET_DID_NOT_FIT 5
