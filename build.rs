@@ -2,6 +2,7 @@ extern crate bindgen;
 
 use std::env;
 use std::path::PathBuf;
+use std::process::Command;
 
 use bindgen::callbacks::{DeriveInfo, ParseCallbacks};
 use glob::glob;
@@ -30,6 +31,27 @@ impl ParseCallbacks for CustomParseCallbacks {
 }
 
 fn main() {
+    // Add build information.
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    let mut git_rev = String::from_utf8(output.stdout).unwrap();
+    let output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .unwrap();
+    if !String::from_utf8(output.stdout).unwrap().is_empty() {
+        git_rev += "-dirty";
+    }
+    println!("cargo:rustc-env=GIT_REV={}", git_rev);
+    let output = Command::new("git")
+        .args(["log", "--pretty=format:%ad", "-n1", "--date=short"])
+        .output()
+        .unwrap();
+    let git_date = String::from_utf8(output.stdout).unwrap();
+    println!("cargo:rustc-env=GIT_DATE={}", git_date);
+
     // Inform cargo of when to re build
     for path in glob("src/bpf/*[hc]").unwrap().flatten() {
         println!("cargo:rerun-if-changed={}", path.display());

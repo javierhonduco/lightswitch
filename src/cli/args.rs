@@ -144,4 +144,6 @@ pub(crate) struct CliArgs {
     pub(crate) force_perf_buffer: bool,
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
+    #[arg(long)]
+    pub(crate) version: bool,
 }
