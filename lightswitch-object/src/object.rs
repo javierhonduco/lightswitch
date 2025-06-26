@@ -7,7 +7,7 @@ use anyhow::{anyhow, Result};
 use memmap2::Mmap;
 use ring::digest::{Context, Digest, SHA256};
 
-use object::elf::{FileHeader32, FileHeader64, PT_LOAD};
+use object::elf::{FileHeader32, FileHeader64, PF_X, PT_LOAD};
 use object::read::elf::FileHeader;
 use object::read::elf::ProgramHeader;
 use object::Endianness;
@@ -168,6 +168,9 @@ impl ObjectFile {
         r
     }
 
+    /// Retrieves the executable load segments. These are used to convert
+    /// virtual addresses to offsets in an executable during unwinding
+    /// and symbolization.
     pub fn elf_load_segments(&self) -> Result<Vec<ElfLoad>> {
         let mmap = &**self.mmap;
 
@@ -179,13 +182,14 @@ impl ObjectFile {
 
                 let mut elf_loads = Vec::new();
                 for segment in segments {
-                    if segment.p_type(endian) == PT_LOAD {
-                        elf_loads.push(ElfLoad {
-                            p_offset: segment.p_offset(endian) as u64,
-                            p_vaddr: segment.p_vaddr(endian) as u64,
-                            p_filesz: segment.p_filesz(endian) as u64,
-                        });
+                    if segment.p_type(endian) != PT_LOAD || segment.p_flags(endian) & PF_X == 0 {
+                        continue;
                     }
+                    elf_loads.push(ElfLoad {
+                        p_offset: segment.p_offset(endian) as u64,
+                        p_vaddr: segment.p_vaddr(endian) as u64,
+                        p_filesz: segment.p_filesz(endian) as u64,
+                    });
                 }
                 Ok(elf_loads)
             }
@@ -196,13 +200,14 @@ impl ObjectFile {
 
                 let mut elf_loads = Vec::new();
                 for segment in segments {
-                    if segment.p_type(endian) == PT_LOAD {
-                        elf_loads.push(ElfLoad {
-                            p_offset: segment.p_offset(endian),
-                            p_vaddr: segment.p_vaddr(endian),
-                            p_filesz: segment.p_filesz(endian),
-                        });
+                    if segment.p_type(endian) != PT_LOAD || segment.p_flags(endian) & PF_X == 0 {
+                        continue;
                     }
+                    elf_loads.push(ElfLoad {
+                        p_offset: segment.p_offset(endian),
+                        p_vaddr: segment.p_vaddr(endian),
+                        p_filesz: segment.p_filesz(endian),
+                    });
                 }
                 Ok(elf_loads)
             }
