@@ -81,6 +81,7 @@ impl UnwindInfoManager {
         &mut self,
         executable_path: &Path,
         executable_id: ExecutableId,
+        first_frame_override: Option<(u64, u64)>,
     ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
         match self.read_from_cache(executable_id) {
             Ok(unwind_info) => Ok(unwind_info),
@@ -89,7 +90,8 @@ impl UnwindInfoManager {
                     debug!("error fetch_unwind_info: {:?}, regenerating...", e);
                 }
                 // No matter the error, regenerate the unwind information.
-                let unwind_info = self.write_to_cache(executable_path, executable_id);
+                let unwind_info =
+                    self.write_to_cache(executable_path, executable_id, first_frame_override);
                 if unwind_info.is_ok() {
                     self.bump(executable_id, None);
                 }
@@ -123,9 +125,10 @@ impl UnwindInfoManager {
         &self,
         executable_path: &Path,
         executable_id: ExecutableId,
+        first_frame_override: Option<(u64, u64)>,
     ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
-        let unwind_info_writer = Writer::new(executable_path);
+        let unwind_info_writer = Writer::new(executable_path, first_frame_override);
         // [`File::create`] will truncate an existing file to the size it needs.
         let mut file =
             BufWriter::new(File::create(unwind_info_path).map_err(FetchUnwindInfoError::Io)?);
@@ -209,15 +212,18 @@ mod tests {
 
     #[test]
     fn test_unwind_info_manager_unwind_info() {
-        let unwind_info = compact_unwind_info("/proc/self/exe").unwrap();
+        let unwind_info = compact_unwind_info("/proc/self/exe", None).unwrap();
         let tmpdir = tempfile::TempDir::new().unwrap();
         let mut manager = UnwindInfoManager::new(tmpdir.path(), None);
 
         // The unwind info fetched with the manager should be correct
         // both when it's a cache miss and a cache hit.
         for _ in 0..2 {
-            let manager_unwind_info =
-                manager.fetch_unwind_info(&PathBuf::from("/proc/self/exe"), ExecutableId(0xFABADA));
+            let manager_unwind_info = manager.fetch_unwind_info(
+                &PathBuf::from("/proc/self/exe"),
+                ExecutableId(0xFABADA),
+                None,
+            );
             let manager_unwind_info = manager_unwind_info.unwrap();
             assert_eq!(unwind_info, manager_unwind_info);
         }
@@ -225,13 +231,16 @@ mod tests {
 
     #[test]
     fn test_unwind_info_manager_corrupt() {
-        let unwind_info = compact_unwind_info("/proc/self/exe").unwrap();
+        let unwind_info = compact_unwind_info("/proc/self/exe", None).unwrap();
         let tmpdir = tempfile::TempDir::new().unwrap();
         let mut manager = UnwindInfoManager::new(tmpdir.path(), None);
 
         // Cache unwind info.
-        let manager_unwind_info =
-            manager.fetch_unwind_info(&PathBuf::from("/proc/self/exe"), ExecutableId(0xFABADA));
+        let manager_unwind_info = manager.fetch_unwind_info(
+            &PathBuf::from("/proc/self/exe"),
+            ExecutableId(0xFABADA),
+            None,
+        );
         assert!(manager_unwind_info.is_ok());
         let manager_unwind_info = manager_unwind_info.unwrap();
         assert_eq!(unwind_info, manager_unwind_info);
@@ -245,8 +254,11 @@ mod tests {
         file.write_all(&[0; 20]).unwrap();
 
         // Make sure the corrupted one gets replaced and things work.
-        let manager_unwind_info =
-            manager.fetch_unwind_info(&PathBuf::from("/proc/self/exe"), ExecutableId(0xFABADA));
+        let manager_unwind_info = manager.fetch_unwind_info(
+            &PathBuf::from("/proc/self/exe"),
+            ExecutableId(0xFABADA),
+            None,
+        );
         let manager_unwind_info = manager_unwind_info.unwrap();
         assert_eq!(unwind_info, manager_unwind_info);
     }

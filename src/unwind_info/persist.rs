@@ -51,12 +51,14 @@ unsafe impl Plain for CompactUnwindRow {}
 /// Writes compact information to a given writer.
 pub struct Writer {
     executable_path: PathBuf,
+    first_frame_override: Option<(u64, u64)>,
 }
 
 impl Writer {
-    pub fn new(executable_path: &Path) -> Self {
+    pub fn new(executable_path: &Path, first_frame_override: Option<(u64, u64)>) -> Self {
         Writer {
             executable_path: executable_path.to_path_buf(),
+            first_frame_override,
         }
     }
 
@@ -64,7 +66,7 @@ impl Writer {
         self,
         writer: &mut W,
     ) -> Result<Vec<CompactUnwindRow>, WriterError> {
-        let unwind_info = self.read_unwind_info()?;
+        let unwind_info = self.read_unwind_info(self.first_frame_override)?;
         // Write dummy header.
         self.write_header(writer, 0, None)?;
         let digest = self.write_unwind_info(writer, &unwind_info)?;
@@ -74,9 +76,15 @@ impl Writer {
         Ok(unwind_info)
     }
 
-    fn read_unwind_info(&self) -> Result<Vec<CompactUnwindRow>, WriterError> {
-        compact_unwind_info(&self.executable_path.to_string_lossy())
-            .map_err(|e| WriterError::UnwindInfoGeneric(e.to_string()))
+    fn read_unwind_info(
+        &self,
+        first_frame_override: Option<(u64, u64)>,
+    ) -> Result<Vec<CompactUnwindRow>, WriterError> {
+        compact_unwind_info(
+            &self.executable_path.to_string_lossy(),
+            first_frame_override,
+        )
+        .map_err(|e| WriterError::UnwindInfoGeneric(e.to_string()))
     }
 
     fn write_header(
@@ -215,14 +223,17 @@ mod tests {
     fn test_write_and_read_unwind_info() {
         let mut buffer = Cursor::new(Vec::new());
         let path = PathBuf::from("/proc/self/exe");
-        let writer = Writer::new(&path);
+        let writer = Writer::new(&path, None);
         assert!(writer.write(&mut buffer).is_ok());
 
         let reader = Reader::new(&buffer.get_ref()[..]);
         let unwind_info = reader.unwrap().unwind_info();
         assert!(unwind_info.is_ok());
         let unwind_info = unwind_info.unwrap();
-        assert_eq!(unwind_info, compact_unwind_info("/proc/self/exe").unwrap());
+        assert_eq!(
+            unwind_info,
+            compact_unwind_info("/proc/self/exe", None).unwrap()
+        );
     }
 
     #[test]
@@ -259,7 +270,7 @@ mod tests {
     fn test_corrupt_unwind_info() {
         let mut buffer: Cursor<Vec<u8>> = Cursor::new(Vec::new());
         let path = PathBuf::from("/proc/self/exe");
-        let writer = Writer::new(&path);
+        let writer = Writer::new(&path, None);
         assert!(writer.write(&mut buffer).is_ok());
 
         // Corrupt unwind info.

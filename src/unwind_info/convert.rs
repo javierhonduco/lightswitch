@@ -35,11 +35,13 @@ pub enum UnwindData {
 pub struct CompactUnwindInfoBuilder<'a> {
     mmap: Mmap,
     callback: Box<dyn FnMut(&UnwindData) + 'a>,
+    first_frame_override: Option<(u64, u64)>,
 }
 
 impl<'a> CompactUnwindInfoBuilder<'a> {
     pub fn with_callback(
         path: &'a str,
+        first_frame_override: Option<(u64, u64)>,
         callback: impl FnMut(&UnwindData) + 'a,
     ) -> anyhow::Result<Self> {
         let in_file = File::open(path)?;
@@ -48,6 +50,7 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
         Ok(Self {
             mmap,
             callback: Box::new(callback),
+            first_frame_override,
         })
     }
 
@@ -219,6 +222,12 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                     _ => continue,
                 }
 
+                if let Some(first_frame_override) = self.first_frame_override {
+                    if compact_row.pc == first_frame_override.0 {
+                        compact_row = CompactUnwindRow::stop_unwinding(compact_row.pc);
+                    }
+                }
+
                 (self.callback)(&UnwindData::Instruction(compact_row));
             }
         }
@@ -226,47 +235,43 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
     }
 }
 
-pub fn compact_unwind_info(path: &str) -> anyhow::Result<Vec<CompactUnwindRow>> {
+pub fn compact_unwind_info(
+    path: &str,
+    first_frame_override: Option<(u64, u64)>,
+) -> anyhow::Result<Vec<CompactUnwindRow>> {
     let mut unwind_info: Vec<CompactUnwindRow> = Vec::new();
     let mut last_function_end_addr: Option<u64> = None;
     let mut last_row = None;
 
-    let builder = CompactUnwindInfoBuilder::with_callback(path, |unwind_data| {
-        match unwind_data {
-            UnwindData::Function(_, end_addr) => {
-                // Add the end addr when we hit a new func
-                match last_function_end_addr {
-                    Some(addr) => {
-                        let marker = CompactUnwindRow::stop_unwinding(addr);
-
-                        let row = CompactUnwindRow {
-                            pc: marker.pc,
-                            cfa_offset: marker.cfa_offset,
-                            cfa_type: marker.cfa_type,
-                            rbp_type: marker.rbp_type,
-                            rbp_offset: marker.rbp_offset,
-                        };
-                        unwind_info.push(row)
+    let builder =
+        CompactUnwindInfoBuilder::with_callback(path, first_frame_override, |unwind_data| {
+            match unwind_data {
+                UnwindData::Function(_start_addr, end_addr) => {
+                    // Add the end addr when we hit a new func
+                    match last_function_end_addr {
+                        Some(addr) => {
+                            let row = CompactUnwindRow::stop_unwinding(addr);
+                            unwind_info.push(row)
+                        }
+                        None => {
+                            // todo: cleanup
+                        }
                     }
-                    None => {
-                        // todo: cleanup
-                    }
+                    last_function_end_addr = Some(*end_addr);
                 }
-                last_function_end_addr = Some(*end_addr);
+                UnwindData::Instruction(compact_row) => {
+                    let row = CompactUnwindRow {
+                        pc: compact_row.pc,
+                        cfa_offset: compact_row.cfa_offset,
+                        cfa_type: compact_row.cfa_type,
+                        rbp_type: compact_row.rbp_type,
+                        rbp_offset: compact_row.rbp_offset,
+                    };
+                    unwind_info.push(row);
+                    last_row = Some(*compact_row)
+                }
             }
-            UnwindData::Instruction(compact_row) => {
-                let row = CompactUnwindRow {
-                    pc: compact_row.pc,
-                    cfa_offset: compact_row.cfa_offset,
-                    cfa_type: compact_row.cfa_type,
-                    rbp_type: compact_row.rbp_type,
-                    rbp_offset: compact_row.rbp_offset,
-                };
-                unwind_info.push(row);
-                last_row = Some(*compact_row)
-            }
-        }
-    });
+        });
 
     builder?.process()?;
 
