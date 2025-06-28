@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use blazesym::symbolize::source::Elf;
 use blazesym::symbolize::source::Source;
+use blazesym::symbolize::CodeInfo;
 use blazesym::symbolize::Input;
 use blazesym::symbolize::Sym;
 use blazesym::symbolize::Symbolized;
@@ -11,6 +12,7 @@ use tracing::error;
 use crate::profile::Frame;
 use crate::profile::FrameAddress;
 use crate::profile::SymbolizationError;
+use crate::profile::SymbolizedFrame;
 
 pub fn symbolize_native_stack_blaze(
     address_pairs: Vec<FrameAddress>,
@@ -52,21 +54,40 @@ pub fn symbolize_native_stack_blaze(
                 name,
                 addr,
                 offset: _,
-                code_info: _,
+                code_info,
                 inlined,
                 ..
             }) => {
+                let filename = |code_info: &Option<CodeInfo>| match code_info.clone() {
+                    Some(a) => Some(a.file.to_string_lossy().to_string()),
+                    None => None,
+                };
+                let line = |code_info: &Option<CodeInfo>| match code_info.clone() {
+                    Some(a) => a.line,
+                    None => None,
+                };
+
                 for frame in inlined.iter().rev() {
                     symbols.push(Frame {
                         virtual_address,
                         file_offset: Some(*addr),
-                        symbolization_result: Some(Ok((frame.name.to_string(), true))),
+                        symbolization_result: Some(Ok(SymbolizedFrame::new(
+                            frame.name.to_string(),
+                            true,
+                            filename(&frame.code_info),
+                            line(&frame.code_info),
+                        ))),
                     });
                 }
                 symbols.push(Frame {
                     virtual_address,
                     file_offset: Some(*addr),
-                    symbolization_result: Some(Ok((name.to_string(), false))),
+                    symbolization_result: Some(Ok(SymbolizedFrame::new(
+                        name.to_string(),
+                        false,
+                        filename(code_info),
+                        line(code_info),
+                    ))),
                 });
             }
             Symbolized::Unknown(r) => {
@@ -111,33 +132,63 @@ mod tests {
                     Frame {
                         virtual_address: 0,
                         file_offset: Some(0x4012b0),
-                        symbolization_result: Some(Ok(("top3()".to_string(), true)))
+                        symbolization_result: Some(Ok(SymbolizedFrame::new(
+                            "top3()".to_string(),
+                            true,
+                            Some("src/main.cpp".to_string()),
+                            Some(22)
+                        )))
                     },
                     Frame {
                         virtual_address: 0,
                         file_offset: Some(0x4012b0),
-                        symbolization_result: Some(Ok(("c3()".to_string(), true)))
+                        symbolization_result: Some(Ok(SymbolizedFrame::new(
+                            "c3()".to_string(),
+                            true,
+                            Some("src/main.cpp".to_string()),
+                            Some(36)
+                        )))
                     },
                     Frame {
                         virtual_address: 0,
                         file_offset: Some(0x4012b0),
-                        symbolization_result: Some(Ok(("b3()".to_string(), true)))
+                        symbolization_result: Some(Ok(SymbolizedFrame::new(
+                            "b3()".to_string(),
+                            true,
+                            Some("src/main.cpp".to_string()),
+                            Some(37)
+                        )))
                     },
                     Frame {
                         virtual_address: 0,
                         file_offset: Some(0x4012b0),
-                        symbolization_result: Some(Ok(("a3()".to_string(), true)))
+                        symbolization_result: Some(Ok(SymbolizedFrame::new(
+                            "a3()".to_string(),
+                            true,
+                            Some("src/main.cpp".to_string()),
+                            Some(38)
+                        )))
                     },
                     Frame {
                         virtual_address: 0,
                         file_offset: Some(0x4012b0),
-                        symbolization_result: Some(Ok(("main".to_string(), false)))
+                        symbolization_result: Some(Ok(SymbolizedFrame::new(
+                            "main".to_string(),
+                            false,
+                            Some("src/main.cpp".to_string()),
+                            Some(44)
+                        )))
                     },
                 ],
                 vec![Frame {
                     virtual_address: 0x0,
                     file_offset: Some(0x401040), // TODO investigate why this doesn't match the input value
-                    symbolization_result: Some(Ok(("_start".to_string(), false)))
+                    symbolization_result: Some(Ok(SymbolizedFrame::new(
+                        "_start".to_string(),
+                        false,
+                        None,
+                        None
+                    )))
                 }]
             ]
         );

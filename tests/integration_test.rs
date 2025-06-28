@@ -78,7 +78,7 @@ fn assert_any_stack_contains(
         let stack_string = sample
             .ustack
             .iter()
-            .map(|e| e.symbolization_result.clone().unwrap().unwrap().0)
+            .map(|e| e.symbolization_result.clone().unwrap().unwrap().name)
             .collect::<Vec<_>>()
             .join("::");
 

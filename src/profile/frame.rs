@@ -15,13 +15,34 @@ pub struct Frame {
     pub file_offset: Option<u64>,
     /// If symbolized, the result will be present here with the function name and whether the function
     /// was inlined.
-    pub symbolization_result: Option<Result<(String, bool), SymbolizationError>>,
+    pub symbolization_result: Option<Result<SymbolizedFrame, SymbolizationError>>,
+}
+
+/// A symbolized frame, which might or might not the filename or line number, depending on the
+/// symbolization data source.
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Default)]
+pub struct SymbolizedFrame {
+    pub name: String,
+    pub inlined: bool,
+    pub filename: Option<String>,
+    pub line: Option<u32>,
+}
+
+impl SymbolizedFrame {
+    pub fn new(name: String, inlined: bool, filename: Option<String>, line: Option<u32>) -> Self {
+        SymbolizedFrame {
+            name,
+            inlined,
+            filename,
+            line,
+        }
+    }
 }
 
 impl fmt::Display for Frame {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match &self.symbolization_result {
-            Some(Ok((name, inlined))) => {
+            Some(Ok(SymbolizedFrame { name, inlined, .. })) => {
                 let inline_str = if *inlined { "[inlined] " } else { "" };
                 write!(fmt, "{inline_str}{name}")
             }

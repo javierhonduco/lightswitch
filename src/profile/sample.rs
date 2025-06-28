@@ -213,6 +213,8 @@ pub type AggregatedProfile = Vec<AggregatedSample>;
 
 #[cfg(test)]
 mod tests {
+    use crate::profile::SymbolizedFrame;
+
     use super::*;
 
     #[test]
@@ -314,7 +316,12 @@ mod tests {
             .map(|s| Frame {
                 virtual_address: 0x0,
                 file_offset: None,
-                symbolization_result: Some(Ok((s.to_string(), false))),
+                symbolization_result: Some(Ok(SymbolizedFrame::new(
+                    s.to_string(),
+                    false,
+                    None,
+                    None,
+                ))),
             })
             .collect();
         let kstack_data: Vec<_> = ["kfunc2", "kfunc1"]
@@ -322,7 +329,12 @@ mod tests {
             .map(|s| Frame {
                 virtual_address: 0x0,
                 file_offset: None,
-                symbolization_result: Some(Ok((s.to_string(), false))),
+                symbolization_result: Some(Ok(SymbolizedFrame::new(
+                    s.to_string(),
+                    false,
+                    None,
+                    None,
+                ))),
             })
             .collect();
 
