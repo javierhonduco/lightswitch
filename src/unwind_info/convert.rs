@@ -35,11 +35,13 @@ pub enum UnwindData {
 pub struct CompactUnwindInfoBuilder<'a> {
     mmap: Mmap,
     callback: Box<dyn FnMut(&UnwindData) + 'a>,
+    aaa: Vec<(u64, u64)>,
 }
 
 impl<'a> CompactUnwindInfoBuilder<'a> {
     pub fn with_callback(
         path: &'a str,
+        aaa: Vec<(u64, u64)>,
         callback: impl FnMut(&UnwindData) + 'a,
     ) -> anyhow::Result<Self> {
         let in_file = File::open(path)?;
@@ -48,6 +50,7 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
         Ok(Self {
             mmap,
             callback: Box::new(callback),
+            aaa: aaa,
         })
     }
 
@@ -264,10 +267,11 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                     _ => continue,
                 }
 
-
-                if compact_row.pc == 0x10fd3b0 {
-                    println!("func needs stuff");
-                    compact_row = CompactUnwindRow::stop_unwinding(compact_row.pc);
+                if let Some(hehe) = self.aaa.iter().next() {
+                    if compact_row.pc == hehe.0 {
+                        println!("func needs stuff");
+                        compact_row = CompactUnwindRow::stop_unwinding(compact_row.pc);
+                    }
                 }
 
                 (self.callback)(&UnwindData::Instruction(compact_row));
@@ -277,12 +281,12 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
     }
 }
 
-pub fn compact_unwind_info(path: &str) -> anyhow::Result<Vec<CompactUnwindRow>> {
+pub fn compact_unwind_info(path: &str, aaaa: Vec<(u64, u64)>) -> anyhow::Result<Vec<CompactUnwindRow>> {
     let mut unwind_info: Vec<CompactUnwindRow> = Vec::new();
     let mut last_function_end_addr: Option<u64> = None;
     let mut last_row = None;
 
-    let builder = CompactUnwindInfoBuilder::with_callback(path, |unwind_data| {
+    let builder = CompactUnwindInfoBuilder::with_callback(path, aaaa, |unwind_data| {
         match unwind_data {
             UnwindData::Function(start_addr, end_addr) => {
                 // Add the end addr when we hit a new func

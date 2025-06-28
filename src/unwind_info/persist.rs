@@ -63,8 +63,9 @@ impl Writer {
     pub fn write<W: Write + Seek>(
         self,
         writer: &mut W,
+        aaaa: Vec<(u64, u64)>,
     ) -> Result<Vec<CompactUnwindRow>, WriterError> {
-        let unwind_info = self.read_unwind_info()?;
+        let unwind_info = self.read_unwind_info(aaaa)?;
         // Write dummy header.
         self.write_header(writer, 0, None)?;
         let digest = self.write_unwind_info(writer, &unwind_info)?;
@@ -75,8 +76,8 @@ impl Writer {
     }
 
     // bad name!
-    fn read_unwind_info(&self) -> Result<Vec<CompactUnwindRow>, WriterError> {
-        compact_unwind_info(&self.executable_path.to_string_lossy())
+    fn read_unwind_info(&self, aaaa: Vec<(u64, u64)>,) -> Result<Vec<CompactUnwindRow>, WriterError> {
+        compact_unwind_info(&self.executable_path.to_string_lossy(), aaaa)
             .map_err(|e| WriterError::UnwindInfoGeneric(e.to_string()))
     }
 

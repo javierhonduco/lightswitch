@@ -40,7 +40,7 @@ pub enum Runtime {
     },
     // Node.js is always compiled with frame pointers, and some of the
     // AoT doens't have unwind information.
-    Node,
+    V8,
     /// Golang.
     Go(Vec<StopUnwindingFrames>),
 }
@@ -139,35 +139,32 @@ impl ObjectFile {
             for symbol in self.object.symbols() {
                 let Ok(name) = symbol.name() else { continue };
                 if name.starts_with("__zig") {
-                    //println!("{}", name);
                     zig_base_addr.0 = true;
                 }
                 if name == "_start" {
                     zig_base_addr.1 = Some((symbol.address(), symbol.address() + symbol.size()));
-                    /*                     // Once we've found both, stop checking all the symbols
-                    if zig_base_addr.0 {
-                        break;
-                    } */
+                }
+
+                // Once we've found both Zig markers, stop checking all the symbols
+                if zig_base_addr.0 && zig_base_addr.1.is_some() {
+                    let (start_low_address, start_high_address) = zig_base_addr.1.unwrap();
+                    println!("zig {:x}", start_low_address);
+
+                    return Runtime::Zig {
+                        start_low_address,
+                        start_high_address,
+                    };
                 }
 
                 if name.starts_with("v8::internal::") {
-                    node = true;
+                    return return Runtime::V8;
                 }
             }
 
             if zig_base_addr.0 {
-                let (start_low_address, start_high_address) = zig_base_addr.1.unwrap();
-                println!("zig {:x}", start_low_address);
 
-                return Runtime::Zig {
-                    start_low_address,
-                    start_high_address,
-                };
             }
 
-            if node {
-                return Runtime::Node;
-            }
 
             Runtime::CLike
         }
@@ -244,14 +241,13 @@ impl ObjectFile {
 
                 let mut elf_loads = Vec::new();
                 for segment in segments {
-                    if segment.p_type(endian) != PT_LOAD || segment.p_flags(endian) & PF_X == 0 {
-                        continue;
+                    if segment.p_type(endian) == PT_LOAD && segment.p_flags(endian) & PF_X != 0 {
+                        elf_loads.push(ElfLoad {
+                            p_offset: segment.p_offset(endian),
+                            p_vaddr: segment.p_vaddr(endian),
+                            p_filesz: segment.p_filesz(endian),
+                        });
                     }
-                    elf_loads.push(ElfLoad {
-                        p_offset: segment.p_offset(endian),
-                        p_vaddr: segment.p_vaddr(endian),
-                        p_filesz: segment.p_filesz(endian),
-                    });
                 }
                 Ok(elf_loads)
             }

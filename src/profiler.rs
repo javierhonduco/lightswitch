@@ -1,6 +1,7 @@
 use libbpf_rs::MapImpl;
 use libbpf_rs::OpenObject;
 use libbpf_rs::RingBufferBuilder;
+use lightswitch_object::ElfLoad;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
 use std::collections::hash_map::OccupiedEntry;
@@ -1393,23 +1394,11 @@ impl Profiler {
                 continue;
             }
             let object_file_info = object_file_info.unwrap();
-
-            // TODO: rework this logic as it's quite kludgy at the moment and this is broken with
-            // some loaders. Particularly, Rust statically linked with musl does not work. We must
-            // ensure everything works with ASLR enabled loading as well.
-            let mut load_address = 0;
-            if mapping.main_exec {
-                if object_file_info.is_dyn {
-                    load_address = mapping.load_address;
-                }
-            } else {
-                load_address = mapping.load_address;
-            }
             std::mem::drop(object_file);
 
             // Add mapping.
             bpf_mappings.push(mapping_t {
-                load_address,
+                load_address: mapping.load_address,
                 begin: mapping.start_addr,
                 end: mapping.end_addr,
                 executable_id: mapping.executable_id.into(),
@@ -1500,11 +1489,22 @@ impl Profiler {
                 unwind_info.sort_by_key(|e| e.pc);
                 Ok(unwind_info)
             }
-            Runtime::Node => Ok(vec![
+            Runtime::V8 => Ok(vec![
                 CompactUnwindRow::frame_setup(start_address),
                 CompactUnwindRow::stop_unwinding(end_address),
             ]),
-            Runtime::CLike | Runtime::Zig { .. } => {
+            Runtime::Zig { start_low_address, start_high_address } => {
+                let _span = span!(
+                    Level::DEBUG,
+                    "calling in_memory_unwind_info",
+                    "{}",
+                    executable_path.display()
+                )
+                .entered();
+                self.unwind_info_manager
+                    .fetch_unwind_info(&executable_path, executable_id, vec![(start_low_address, start_high_address)])
+            },
+            Runtime::CLike => {
                 if needs_synthesis {
                     debug!("synthetising arm64 unwind information using frame pointers for vDSO");
                     Ok(vec![
@@ -1520,7 +1520,7 @@ impl Profiler {
                     )
                     .entered();
                     self.unwind_info_manager
-                        .fetch_unwind_info(&executable_path, executable_id)
+                        .fetch_unwind_info(&executable_path, executable_id, vec![])
                 }
             }
         };
@@ -1826,17 +1826,36 @@ impl Profiler {
 
                     debug!("Path {:?} executable_id 0x{}", path, executable_id);
 
-                    // Find the first address for a file backed mapping. Some loaders split
-                    // the .rodata section in their own non-executable section, which we need
-                    // to account for here.
-                    let load_address = || {
-                        for map2 in maps.iter() {
-                            if map2.pathname == map.pathname {
-                                return map2.address.0;
-                            }
-                        }
-                        map.address.0
+                    let Ok(elf_loads) = object_file.elf_load_segments() else {
+                        warn!("no elf loads");
+                        continue;
                     };
+
+                    let load_address =
+                        |map_start_address: u64, elf_loads: &Vec<ElfLoad>, offset| {
+                            let load = elf_loads.first().unwrap();
+                            // unsigned long pagesize_alignment_mask = ~(unw_page_size - 1UL);
+                            // offset = segbase - phdr[i].p_vaddr + (phdr[i].p_offset & (~pagesize_alignment_mask));
+                            let mask = !(page_size::get() - 1) as u64;
+/*                             println!(
+                                "load.p_vaddr & !mask: {} load.p_offset: {}",
+                                load.p_vaddr & !mask,
+                                load.p_offset
+                            ); */
+                            if offset != load.p_offset {
+                                println!(
+                                    "path {} mmap offset {:b} offset {:b}",
+                                    path.display(),
+                                    offset,
+                                    load.p_offset
+                                );
+                            }
+                            if let Some(load_address) = map_start_address.checked_sub(load.p_vaddr & mask) {
+                                load_address
+                            } else {
+                                0
+                            }
+                        };
 
                     let main_exec = mappings.is_empty();
                     let mut object_files = object_files_clone.write();
@@ -1848,7 +1867,7 @@ impl Profiler {
                         start_addr: map.address.0,
                         end_addr: map.address.1,
                         offset: map.offset,
-                        load_address: load_address(),
+                        load_address: load_address(map.address.0, &elf_loads, map.offset),
                         main_exec,
                         soft_delete: false,
                     });
@@ -1881,22 +1900,17 @@ impl Profiler {
                     }
 
                     match object_files.entry(executable_id) {
-                        Entry::Vacant(entry) => match object_file.elf_load_segments() {
-                            Ok(elf_loads) => {
-                                entry.insert(ObjectFileInfo {
-                                    path: exe_path,
-                                    elf_load_segments: elf_loads,
-                                    is_dyn: object_file.is_dynamic(),
-                                    references: 1,
-                                    native_unwind_info_size: None,
-                                    is_vdso: false,
-                                    runtime: object_file.runtime(),
-                                });
-                            }
-                            Err(e) => {
-                                warn!("elf_load() failed with {:?}", e);
-                            }
-                        },
+                        Entry::Vacant(entry) => {
+                            entry.insert(ObjectFileInfo {
+                                path: exe_path,
+                                elf_load_segments: elf_loads,
+                                is_dyn: object_file.is_dynamic(),
+                                references: 1,
+                                native_unwind_info_size: None,
+                                is_vdso: false,
+                                runtime: object_file.runtime(),
+                            });
+                        }
                         Entry::Occupied(mut entry) => {
                             entry.get_mut().references += 1;
                         }

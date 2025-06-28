@@ -81,6 +81,7 @@ impl UnwindInfoManager {
         &mut self,
         executable_path: &Path,
         executable_id: ExecutableId,
+        aaaa: Vec<(u64, u64)>,
     ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
         match self.read_from_cache(executable_id) {
             Ok(unwind_info) => Ok(unwind_info),
@@ -89,7 +90,7 @@ impl UnwindInfoManager {
                     debug!("error fetch_unwind_info: {:?}, regenerating...", e);
                 }
                 // No matter the error, regenerate the unwind information.
-                let unwind_info = self.write_to_cache(executable_path, executable_id);
+                let unwind_info = self.write_to_cache(executable_path, executable_id, aaaa);
                 if unwind_info.is_ok() {
                     self.bump(executable_id, None);
                 }
@@ -123,6 +124,7 @@ impl UnwindInfoManager {
         &self,
         executable_path: &Path,
         executable_id: ExecutableId,
+        aaaa: Vec<(u64, u64)>,
     ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
         let unwind_info_writer = Writer::new(executable_path);
@@ -130,7 +132,7 @@ impl UnwindInfoManager {
         let mut file =
             BufWriter::new(File::create(unwind_info_path).map_err(FetchUnwindInfoError::Io)?);
         unwind_info_writer
-            .write(&mut file)
+            .write(&mut file, aaaa)
             .map_err(FetchUnwindInfoError::Write)
     }
 
