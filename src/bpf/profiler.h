@@ -20,8 +20,8 @@ _Static_assert(MAX_TAIL_CALLS *MAX_STACK_DEPTH_PER_PROGRAM >= MAX_STACK_DEPTH,
 #define MAX_MAPPINGS MAX_PROCESSES * 200
 // Binary search iterations to find unwind information.
 #define MAX_BINARY_SEARCH_DEPTH 17
-// Number of entries in the outer unwind map.
-#define MAX_OUTER_UNWIND_MAP_ENTRIES 500
+// Number of entries in the 'outer' unwind map.
+#define MAX_OUTER_UNWIND_MAP_ENTRIES 3000
 
 #define UNWIND_INFO_PAGE_BIT_LEN 16
 #define UNWIND_INFO_PAGE_SIZE (1 << UNWIND_INFO_PAGE_BIT_LEN)
@@ -45,7 +45,6 @@ typedef struct {
 } page_key_t;
 
 typedef struct {
-  u32 bucket_id;
   u32 low_index;
   u32 high_index;
 } page_value_t;
