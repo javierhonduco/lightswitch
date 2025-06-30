@@ -180,7 +180,7 @@ impl PprofBuilder {
         }
     }
 
-    pub fn add_function(&mut self, func_name: &str) -> u64 {
+    pub fn add_function(&mut self, func_name: &str, filename: Option<String>) -> u64 {
         let id = self.functions.len() as u64 + 1;
         let name_idx = self.get_or_insert_string(func_name);
 
@@ -188,7 +188,7 @@ impl PprofBuilder {
             id,
             name: name_idx,
             system_name: name_idx,
-            filename: self.get_or_insert_string("no-filename"),
+            filename: self.get_or_insert_string(&filename.unwrap_or("".to_string())),
             ..Default::default()
         };
 
@@ -203,12 +203,18 @@ impl PprofBuilder {
         }
     }
 
-    pub fn add_line(&mut self, func_name: &str) -> (pprof::Line, u64) {
-        let function_id = self.add_function(func_name);
+    pub fn add_line(
+        &mut self,
+        func_name: &str,
+        file_name: Option<String>,
+        line: Option<u32>,
+    ) -> (pprof::Line, u64) {
+        let function_id = self.add_function(func_name, file_name);
         (
             pprof::Line {
                 function_id,
-                ..Default::default()
+                line: line.unwrap_or(0) as i64,
+                column: 0,
             },
             function_id,
         )
@@ -379,8 +385,8 @@ mod tests {
     #[test]
     fn test_locations() {
         let mut pprof = PprofBuilder::new(SystemTime::now(), Duration::from_secs(5), 27);
-        let _ = pprof.add_line("hahahaha-first-line");
-        let (line, function_id) = pprof.add_line("test-line");
+        let _ = pprof.add_line("hahahaha-first-line", None, None);
+        let (line, function_id) = pprof.add_line("test-line", Some("test-file".into()), Some(42));
 
         assert_eq!(pprof.add_location(0x123, 0x1111, vec![line]), 1);
         assert_eq!(pprof.add_location(0x123, 0x1111, vec![line]), 1);
@@ -396,10 +402,17 @@ mod tests {
                 address: 0x123,
                 line: vec![pprof::Line {
                     function_id,
-                    ..Default::default()
+                    line: 42,
+                    column: 0,
                 }],
                 is_folded: false
             }
+        );
+
+        assert_eq!(pprof.functions.len(), 2);
+        assert_eq!(
+            pprof.functions[1].filename,
+            pprof.string_id("test-file").unwrap()
         );
     }
 
