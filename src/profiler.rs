@@ -1,6 +1,7 @@
 use libbpf_rs::MapImpl;
 use libbpf_rs::OpenObject;
 use libbpf_rs::RingBufferBuilder;
+use lightswitch_object::ElfLoad;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
 use std::collections::hash_map::OccupiedEntry;
@@ -707,7 +708,6 @@ impl Profiler {
                                         end_addr: e.end,
                                         offset: kaslr_offset,
                                         load_address: 0,
-                                        main_exec: false,
                                         soft_delete: false,
                                     }
                                 })
@@ -1482,24 +1482,11 @@ impl Profiler {
                 warn!("mapping not found");
                 continue;
             }
-            let object_file_info = object_file_info.unwrap();
-
-            // TODO: rework this logic as it's quite kludgy at the moment and this is broken with
-            // some loaders. Particularly, Rust statically linked with musl does not work. We must
-            // ensure everything works with ASLR enabled loading as well.
-            let mut load_address = 0;
-            if mapping.main_exec {
-                if object_file_info.is_dyn {
-                    load_address = mapping.load_address;
-                }
-            } else {
-                load_address = mapping.load_address;
-            }
             std::mem::drop(object_file);
 
             // Add mapping.
             bpf_mappings.push(mapping_t {
-                load_address,
+                load_address: mapping.load_address,
                 begin: mapping.start_addr,
                 end: mapping.end_addr,
                 executable_id: mapping.executable_id.into(),
@@ -1946,20 +1933,27 @@ impl Profiler {
 
                     debug!("Path {:?} executable_id 0x{}", path, executable_id);
 
-                    // Find the first address for a file backed mapping. Some loaders split
-                    // the .rodata section in their own non-executable section, which we need
-                    // to account for here.
-                    let load_address = || {
-                        for map2 in maps.iter() {
-                            if map2.pathname == map.pathname {
-                                return map2.address.0;
-                            }
-                        }
-                        map.address.0
+                    // mmap'ed data is always page aligned but the load segment information might not be.
+                    // As we need to account for any randomisation added by ASLR, by substracting the virtual
+                    // address from the first load segment once it's been page aligned we'll get the offset
+                    // at which the executable has been loaded.
+                    //
+                    // Note: this doesn't take into consideration the mmap'ed or load offsets.
+                    let load_address = |map_start: u64, first_elf_load: &ElfLoad| {
+                        let page_mask = !(page_size::get() - 1) as u64;
+                        map_start.saturating_sub(first_elf_load.p_vaddr & page_mask)
                     };
 
-                    let main_exec = mappings.is_empty();
                     let mut object_files = object_files_clone.write();
+                    let Ok(elf_loads) = object_file.elf_load_segments() else {
+                        warn!("no elf load segments");
+                        continue;
+                    };
+
+                    let Some(first_elf_load) = elf_loads.first() else {
+                        warn!("empty elf load segments");
+                        continue;
+                    };
 
                     mappings.push(ExecutableMapping {
                         executable_id,
@@ -1968,8 +1962,7 @@ impl Profiler {
                         start_addr: map.address.0,
                         end_addr: map.address.1,
                         offset: map.offset,
-                        load_address: load_address(),
-                        main_exec,
+                        load_address: load_address(map.address.0, first_elf_load),
                         soft_delete: false,
                     });
 
@@ -2001,22 +1994,17 @@ impl Profiler {
                     }
 
                     match object_files.entry(executable_id) {
-                        Entry::Vacant(entry) => match object_file.elf_load_segments() {
-                            Ok(elf_loads) => {
-                                entry.insert(ObjectFileInfo {
-                                    path: exe_path,
-                                    elf_load_segments: elf_loads,
-                                    is_dyn: object_file.is_dynamic(),
-                                    references: 1,
-                                    native_unwind_info_size: None,
-                                    is_vdso: false,
-                                    runtime: object_file.runtime(),
-                                });
-                            }
-                            Err(e) => {
-                                warn!("elf_load() failed with {:?}", e);
-                            }
-                        },
+                        Entry::Vacant(entry) => {
+                            entry.insert(ObjectFileInfo {
+                                path: exe_path,
+                                elf_load_segments: elf_loads,
+                                is_dyn: object_file.is_dynamic(),
+                                references: 1,
+                                native_unwind_info_size: None,
+                                is_vdso: false,
+                                runtime: object_file.runtime(),
+                            });
+                        }
                         Entry::Occupied(mut entry) => {
                             entry.get_mut().references += 1;
                         }
@@ -2031,7 +2019,6 @@ impl Profiler {
                         end_addr: map.address.1,
                         offset: map.offset,
                         load_address: 0,
-                        main_exec: false,
                         soft_delete: false,
                     });
                 }
@@ -2078,7 +2065,6 @@ impl Profiler {
                             end_addr: map.address.1,
                             offset: map.offset,
                             load_address: map.address.0,
-                            main_exec: false,
                             soft_delete: false,
                         });
                     }

@@ -49,7 +49,6 @@ pub struct ExecutableMapping {
     // kaslr info etc etc
     pub offset: u64,
     pub load_address: u64,
-    pub main_exec: bool,
     pub soft_delete: bool,
 }
 
@@ -185,7 +184,6 @@ mod tests {
             end_addr: 0x100 + 100,
             offset: 0x0,
             load_address: 0x0,
-            main_exec: false,
             soft_delete: false,
         };
 
