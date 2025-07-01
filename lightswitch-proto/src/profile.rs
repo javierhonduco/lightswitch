@@ -464,8 +464,12 @@ mod tests {
                     (i * 100) as u64,
                     (i * 100 + 100) as u64,
                     0,
-                    if addr % 2 == 0 { "fake.so" } else { "test.so" },
-                    if addr % 2 == 0 {
+                    if addr.is_multiple_of(2) {
+                        "fake.so"
+                    } else {
+                        "test.so"
+                    },
+                    if addr.is_multiple_of(2) {
                         "sha256-fake"
                     } else {
                         "golang-fake"
