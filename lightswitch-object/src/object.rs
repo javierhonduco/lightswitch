@@ -32,6 +32,14 @@ pub struct ElfLoad {
 pub enum Runtime {
     /// C, C++, Rust, Fortran.
     CLike,
+    /// Zig. Needs special handling because before [0] the top level frame (`start`) didn't have the
+    /// right unwind information
+    ///
+    /// [0]: https://github.com/ziglang/zig/commit/130f7c2ed8e3358e24bb2fc7cca57f7a6f1f85c3
+    Zig {
+        start_low_address: u64,
+        start_high_address: u64,
+    },
     /// Golang.
     Go(Vec<StopUnwindingFrames>),
 }
@@ -125,6 +133,29 @@ impl ObjectFile {
         if self.is_go() {
             Runtime::Go(self.go_stop_unwinding_frames())
         } else {
+            let mut is_zig = false;
+            let mut zig_first_frame = None;
+
+            for symbol in self.object.symbols() {
+                let Ok(name) = symbol.name() else { continue };
+                if name.starts_with("__zig") {
+                    is_zig = true;
+                }
+                if name == "_start" {
+                    zig_first_frame = Some((symbol.address(), symbol.address() + symbol.size()));
+                }
+
+                // Once we've found both Zig markers we are done. Not that this is a heuristic and it's
+                // possible that a Zig library is linked against code written in a C-like language. In this
+                // case we might be rewriting unwind information that's correct. This won't have a negative
+                // effect as `_start` is always the first function.
+                if is_zig && let Some((low_address, high_address)) = zig_first_frame {
+                    return Runtime::Zig {
+                        start_low_address: low_address,
+                        start_high_address: high_address,
+                    };
+                }
+            }
             Runtime::CLike
         }
     }

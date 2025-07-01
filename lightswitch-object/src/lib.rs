@@ -1,3 +1,4 @@
+#![feature(let_chains)]
 mod buildid;
 pub mod kernel;
 mod object;

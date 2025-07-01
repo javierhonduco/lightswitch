@@ -303,7 +303,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn show_unwind_info(path: &str) {
-    let unwind_info = compact_unwind_info(path).unwrap();
+    let unwind_info = compact_unwind_info(path, None).unwrap();
     for compact_row in unwind_info {
         let pc = compact_row.pc;
         let cfa_type = compact_row.cfa_type;
@@ -323,7 +323,7 @@ fn show_object_file_info(path: &str) {
     if let Ok(executable_id) = object_file.build_id().id() {
         println!("- executable id: 0x{executable_id}");
     }
-    let unwind_info = CompactUnwindInfoBuilder::with_callback(path, |_| {});
+    let unwind_info = CompactUnwindInfoBuilder::with_callback(path, None, |_| {});
     println!("- unwind info: {:?}", unwind_info.unwrap().process());
     println!("- go: {:?}", object_file.is_go());
     println!("- dynamic: {:?}", object_file.is_dynamic());

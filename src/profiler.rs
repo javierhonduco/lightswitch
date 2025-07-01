@@ -1577,6 +1577,23 @@ impl Profiler {
                 unwind_info.sort_by_key(|e| e.pc);
                 Ok(unwind_info)
             }
+            Runtime::Zig {
+                start_low_address,
+                start_high_address,
+            } => {
+                let _span = span!(
+                    Level::DEBUG,
+                    "calling in_memory_unwind_info",
+                    "{}",
+                    executable_path.display()
+                )
+                .entered();
+                self.unwind_info_manager.fetch_unwind_info(
+                    &executable_path,
+                    executable_id,
+                    Some((start_low_address, start_high_address)),
+                )
+            }
             Runtime::CLike => {
                 if needs_synthesis {
                     debug!("synthetising arm64 unwind information using frame pointers for vDSO");
@@ -1592,8 +1609,11 @@ impl Profiler {
                         executable_path.display()
                     )
                     .entered();
-                    self.unwind_info_manager
-                        .fetch_unwind_info(&executable_path, executable_id)
+                    self.unwind_info_manager.fetch_unwind_info(
+                        &executable_path,
+                        executable_id,
+                        None,
+                    )
                 }
             }
         };
