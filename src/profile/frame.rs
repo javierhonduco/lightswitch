@@ -39,20 +39,47 @@ impl SymbolizedFrame {
     }
 }
 
-impl fmt::Display for Frame {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+impl Frame {
+    /// Returns the formatted frame showing only the function names if [`only_show_function_name`]
+    /// is true otherwise it will show the file and line number if available.
+    pub fn format_all_info(&self, only_show_function_name: bool) -> String {
         match &self.symbolization_result {
-            Some(Ok(SymbolizedFrame { name, inlined, .. })) => {
+            Some(Ok(SymbolizedFrame {
+                name,
+                inlined,
+                filename,
+                line,
+            })) => {
+                let mut res = String::new();
+
                 let inline_str = if *inlined { "[inlined] " } else { "" };
-                write!(fmt, "{inline_str}{name}")
+                res.push_str(&format!("{inline_str}{name}"));
+
+                if !only_show_function_name {
+                    res.push(' ');
+                    let filename = filename.clone().unwrap_or("<no file>".to_string());
+                    let line = if let Some(num) = line {
+                        num.to_string()
+                    } else {
+                        "<no line>".to_string()
+                    };
+                    res.push_str(&format!("({filename}:{line})"))
+                }
+
+                res
             }
             Some(Err(e)) => {
-                write!(fmt, "error: {e:?}")
+                format!("error: {e:?}")
             }
-            None => {
-                write!(fmt, "frame not symbolized")
-            }
+            None => "frame not symbolized".to_string(),
         }
+    }
+}
+
+impl fmt::Display for Frame {
+    /// Only writes the function name.
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "{}", self.format_all_info(true))
     }
 }
 
