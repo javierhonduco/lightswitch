@@ -10,10 +10,13 @@ pub enum CfaType {
     Unknown = 0,
     FramePointerOffset = 1,
     StackPointerOffset = 2,
-    Expression = 3,
-    EndFdeMarker = 4,
-    UnsupportedRegisterOffset = 5,
-    OffsetDidNotFit = 6,
+    UnsupportedExpression = 3,
+    Plt1 = 4,
+    Plt2 = 5,
+    DerefAndAdd = 6,
+    EndFdeMarker = 7,
+    UnsupportedRegisterOffset = 8,
+    OffsetDidNotFit = 9,
 }
 
 #[repr(u8)]
@@ -26,13 +29,6 @@ pub enum RbpType {
     Expression = 3,
     UndefinedReturnAddress = 4,
     OffsetDidNotFit = 5,
-}
-
-#[repr(u16)]
-pub enum PltType {
-    Unknown = 0,
-    Plt1 = 1,
-    Plt2 = 2,
 }
 
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
