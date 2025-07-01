@@ -27,6 +27,13 @@ pub(crate) enum ProfileFormat {
     Pprof,
 }
 
+#[derive(clap::ValueEnum, Debug, Clone, Default, PartialEq)]
+pub(crate) enum FlamegraphAggregation {
+    #[default]
+    Function,
+    All,
+}
+
 #[derive(PartialEq, clap::ValueEnum, Debug, Clone, Default)]
 pub(crate) enum ProfileSender {
     /// Discard the profile. Used for kernel tests.
@@ -86,6 +93,9 @@ pub(crate) struct CliArgs {
     /// Output file for Flame Graph in SVG format
     #[arg(long, default_value_t, value_enum)]
     pub(crate) profile_format: ProfileFormat,
+    /// What information to show in the flamegraph. Won't do anything for other profile formats.
+    #[arg(long, default_value_t, value_enum)]
+    pub(crate) flamegraph_aggregation: FlamegraphAggregation,
     /// Path for the generated profile.
     #[arg(long)]
     pub(crate) profile_path: Option<PathBuf>,

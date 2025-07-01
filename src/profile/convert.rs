@@ -215,7 +215,7 @@ pub fn to_pprof(
 ///
 /// The frame names are separated by semicolons and the count is at the end separated with a space. We insert some synthetic
 /// frames to quickly identify the thread and process names and other pieces of metadata.
-pub fn fold_profile(profile: AggregatedProfile) -> String {
+pub fn fold_profile(profile: AggregatedProfile, only_show_function_names: bool) -> String {
     let mut folded = String::new();
 
     for sample in profile {
@@ -224,7 +224,7 @@ pub fn fold_profile(profile: AggregatedProfile) -> String {
             .clone()
             .into_iter()
             .rev()
-            .map(|e| e.to_string())
+            .map(|e| e.format_all_info(only_show_function_names))
             .collect::<Vec<String>>();
         let ustack = ustack.join(";");
         let kstack = sample
