@@ -50,28 +50,24 @@ typedef struct {
   u32 high_index;
 } page_value_t;
 
-
-// Values for dwarf expressions.
-#define DWARF_EXPRESSION_UNKNOWN 0
-#define DWARF_EXPRESSION_PLT1 1
-#define DWARF_EXPRESSION_PLT2 2
-
 // Values for the unwind table's CFA type.
-#define CFA_TYPE_RBP 1
-#define CFA_TYPE_RSP 2
-#define CFA_TYPE_EXPRESSION 3
-// Special values.
-#define CFA_TYPE_END_OF_FDE_MARKER 4
-#define CFA_TYPE_OFFSET_DID_NOT_FIT 5
+#define CFA_TYPE_RBP                    1
+#define CFA_TYPE_RSP                    2
+#define CFA_TYPE_CFA_TYPE_UNSUP_EXP     3
+#define CFA_TYPE_PLT1                   4
+#define CFA_TYPE_PLT2                   5
+#define CFA_TYPE_DEREF_AND_ADD          6
+#define CFA_TYPE_END_OF_FDE_MARKER      7
+#define CFA_TYPE_UNSUP_REGISTER_OFFSET  8   // not used in the unwinder yet.
+#define CFA_TYPE_OFFSET_DID_NOT_FIT     9
 
 // Values for the unwind table's frame pointer type.
-#define RBP_TYPE_UNCHANGED 0
-#define RBP_TYPE_OFFSET 1
-#define RBP_TYPE_REGISTER 2
-#define RBP_TYPE_EXPRESSION 3
-// Special values.
+#define RBP_TYPE_UNCHANGED                0
+#define RBP_TYPE_OFFSET                   1
+#define RBP_TYPE_REGISTER                 2
+#define RBP_TYPE_EXPRESSION               3
 #define RBP_TYPE_UNDEFINED_RETURN_ADDRESS 4
-#define RBP_TYPE_OFFSET_DID_NOT_FIT 5
+#define RBP_TYPE_OFFSET_DID_NOT_FIT       5
 
 // Binary search error codes.
 #define BINARY_SEARCH_DEFAULT 0xFABADAFABADAULL
@@ -92,9 +88,10 @@ struct unwinder_stats_t {
   u64 error_unsupported_expression;
   u64 error_unsupported_frame_pointer_action;
   u64 error_unsupported_cfa_register;
+  u64 error_previous_rsp_read;
   u64 error_previous_rsp_zero;
   u64 error_previous_rip_zero;
-  u64 error_previous_rbp_zero;
+  u64 error_previous_rbp_read;
   u64 error_should_never_happen;
   u64 error_mapping_not_found;
   u64 error_mapping_does_not_contain_pc;

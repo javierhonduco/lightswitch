@@ -49,9 +49,10 @@ impl Add for unwinder_stats_t {
                 + other.error_unsupported_frame_pointer_action,
             error_unsupported_cfa_register: self.error_unsupported_cfa_register
                 + other.error_unsupported_cfa_register,
+            error_previous_rsp_read: self.error_previous_rsp_read + other.error_previous_rsp_read,
             error_previous_rsp_zero: self.error_previous_rsp_zero + other.error_previous_rsp_zero,
             error_previous_rip_zero: self.error_previous_rip_zero + other.error_previous_rip_zero,
-            error_previous_rbp_zero: self.error_previous_rbp_zero + other.error_previous_rbp_zero,
+            error_previous_rbp_read: self.error_previous_rbp_read + other.error_previous_rbp_read,
             error_should_never_happen: self.error_should_never_happen
                 + other.error_should_never_happen,
             error_binary_search_exhausted_iterations: self.error_binary_search_exhausted_iterations

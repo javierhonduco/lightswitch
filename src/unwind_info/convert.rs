@@ -1,7 +1,11 @@
 use std::fs::File;
 
 use anyhow::Result;
-use gimli::{CfaRule, CieOrFde, EhFrame, UnwindContext, UnwindSection};
+use gimli::{
+    CfaRule, CieOrFde, EhFrame, Encoding, Format,
+    Operation::{Deref, PlusConstant, RegisterOffset},
+    UnwindContext, UnwindSection,
+};
 use memmap2::Mmap;
 use object::Architecture;
 use object::{Object, ObjectSection};
@@ -173,18 +177,42 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                                 }
                             }
                             CfaRule::Expression(exp) => {
+                                compact_row.cfa_type = CfaType::UnsupportedExpression;
+
                                 if let Ok(expression) = exp.get(&eh_frame) {
                                     let expression_data = expression.0.slice();
                                     if expression_data == *PLT1 {
-                                        compact_row.cfa_offset = PltType::Plt1 as u16;
+                                        compact_row.cfa_type = CfaType::Plt1;
                                     } else if expression_data == *PLT2 {
-                                        compact_row.cfa_offset = PltType::Plt2 as u16;
-                                    }
-                                } else {
-                                    compact_row.cfa_offset = PltType::Unknown as u16;
-                                }
+                                        compact_row.cfa_type = CfaType::Plt2;
+                                    } else {
+                                        let mut ops = expression.operations(Encoding {
+                                            format: Format::Dwarf64,
+                                            version: 4,
+                                            address_size: 8,
+                                        });
 
-                                compact_row.cfa_type = CfaType::Expression;
+                                        match (ops.next(), ops.next(), ops.next(), ops.next()) {
+                                            (
+                                                Ok(Some(RegisterOffset {
+                                                    register, offset, ..
+                                                })),
+                                                Ok(Some(Deref { .. })),
+                                                Ok(Some(PlusConstant { value: addition })),
+                                                Ok(None),
+                                            ) if register == stack_pointer => {
+                                                debug!("*(rsp+{offset})+{addition}");
+                                                compact_row.cfa_type = CfaType::DerefAndAdd;
+                                                // Assumes that both the offset and addition will fit in 2 bytes,
+                                                // which seems to be the case for many binaries I've tried but
+                                                // would be good to test against larger ones.
+                                                compact_row.cfa_offset =
+                                                    ((offset as u16) << 8) | (addition as u16);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
                             }
                         };
 

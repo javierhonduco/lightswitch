@@ -501,20 +501,23 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       previous_rsp = unwind_state->bp + found_cfa_offset;
     } else if (found_cfa_type == CFA_TYPE_RSP) {
       previous_rsp = unwind_state->sp + found_cfa_offset;
-    } else if (found_cfa_type == CFA_TYPE_EXPRESSION) {
-      if (found_cfa_offset == DWARF_EXPRESSION_UNKNOWN) {
-        LOG("[unsup] CFA is an unsupported expression, bailing out");
+    } else if (found_cfa_type == CFA_TYPE_DEREF_AND_ADD) {
+      u8 offset = found_cfa_offset >> 8;
+      u8 addition = found_cfa_offset;
+      LOG("dwarf exp: *($rsp + %d) + %d", offset, addition);
+      int ret =
+          bpf_probe_read_user(&previous_rsp, 8, (void *)(unwind_state->sp + offset));
+      if (ret < 0) {
+        LOG("[error] reading previous rsp failed with %d", ret);
+        bump_unwind_error_previous_rsp_read();
+      }
+      previous_rsp += addition;
+    } else if (found_cfa_type == CFA_TYPE_CFA_TYPE_UNSUP_EXP) {
         bump_unwind_error_unsupported_expression();
         return 1;
-      }
-
+    } else if (found_cfa_type == CFA_TYPE_PLT1 || found_cfa_type == CFA_TYPE_PLT2) {
       LOG("CFA expression found with id %d", found_cfa_offset);
-      u64 threshold = 0;
-      if (found_cfa_offset == DWARF_EXPRESSION_PLT1) {
-        threshold = 11;
-      } else if (found_cfa_offset == DWARF_EXPRESSION_PLT2) {
-        threshold = 10;
-      }
+      u64 threshold = 11 ? found_cfa_type == CFA_TYPE_PLT1 : 10;
 
       if (threshold == 0) {
         bump_unwind_error_should_never_happen();
@@ -523,8 +526,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
       previous_rsp = unwind_state->sp + 8 +
                      ((((unwind_state->ip & 15) >= threshold)) << 3);
     } else {
-      LOG("\t[unsup] register %d not valid (expected $rbp or $rsp)",
-          found_cfa_type);
+      LOG("\t[unsup] cfa type %d not valid at ip: %llx", found_cfa_type, object_relative_pc);
       bump_unwind_error_unsupported_cfa_register();
       return 1;
     }
@@ -549,11 +551,9 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
           previous_rbp_addr);
       int ret =
           bpf_probe_read_user(&previous_rbp, 8, (void *)(previous_rbp_addr));
-      if (ret != 0) {
-        LOG("[error] previous_rbp should not be zero. This can mean "
-            "that the read has failed %d.",
-            ret);
-        bump_unwind_error_previous_rbp_zero();
+      if (ret < 0) {
+        LOG("[error] previous_rbp read failed with %d", ret);
+        bump_unwind_error_previous_rbp_read();
         return 1;
       }
     }
@@ -585,7 +585,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
         LOG("[warn] previous_rip=0, maybe this is a JIT segment?");
       } else {
         LOG("[error] previous_rip should not be zero. This can mean that the "
-            "read failed, ret=%d while reading @ %llx.",
+           "read failed, ret=%d while reading @ %llx.",
             err, previous_rip_addr);
         bump_unwind_error_previous_rip_zero();
       }
@@ -621,7 +621,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 
     bool main_thread = per_process_id == per_thread_id;
     if (main_thread && unwind_state->bp != 0) {
-      LOG("[error] Expected rbp to be 0 but found %llx, pc: %llx (Node.js is not well supported yet)", unwind_state->bp, unwind_state->ip);
+      LOG("[error] Expected rbp to be 0 on main thread but found %llx, pc: %llx", unwind_state->bp, unwind_state->ip);
       bump_unwind_bp_non_zero_for_bottom_frame();
     }
 
