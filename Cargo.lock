@@ -1249,7 +1249,7 @@ dependencies = [
 
 [[package]]
 name = "lightswitch"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1293,7 +1293,7 @@ dependencies = [
 
 [[package]]
 name = "lightswitch-capabilities"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "glob",
@@ -1321,7 +1321,7 @@ dependencies = [
 
 [[package]]
 name = "lightswitch-object"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "data-encoding",
@@ -1333,7 +1333,7 @@ dependencies = [
 
 [[package]]
 name = "lightswitch-proto"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "prost",
  "prost-build",
