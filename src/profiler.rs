@@ -1073,7 +1073,20 @@ impl Profiler {
                 })
                 .fold(unwinder_stats_t::default(), |a, b| a + b);
 
-            info!("unwinder stats: {:?}", total_value);
+            let mut raise_log_level = false;
+            if total_value.total != 0 {
+                let success_pct =
+                    100.0 * total_value.success_dwarf as f64 / total_value.total as f64;
+                info!("stacks successfully unwound: {:.2}%", success_pct);
+                if success_pct < 75.0 {
+                    raise_log_level = true;
+                }
+            }
+            if raise_log_level {
+                warn!("unwinder stats: {:?}", total_value);
+            } else {
+                debug!("unwinder stats: {:?}", total_value);
+            }
         }
     }
 
