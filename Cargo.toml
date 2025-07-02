@@ -35,7 +35,6 @@ libbpf-sys = "1.5.0"
 gimli = "0.31.1"
 lazy_static = "1.5.0"
 plain = "0.2.3"
-page_size = "0.6.0"
 clap = { version = "4.5.32", features = ["derive", "string"] }
 # See https://github.com/libbpf/blazesym/issues/1105.
 blazesym = { git = "https://github.com/libbpf/blazesym", rev = "94821e3", features = ["zlib"] }

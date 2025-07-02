@@ -4,17 +4,20 @@ use nix::unistd::{sysconf, SysconfVar};
 
 static PAGE_SIZE: OnceLock<usize> = OnceLock::new();
 
+pub fn page_size() -> usize {
+    *PAGE_SIZE.get_or_init(|| {
+        sysconf(SysconfVar::PAGE_SIZE)
+            .expect("error reading page size")
+            .expect("page size is none") as usize
+    })
+}
+
 fn roundup(n: usize, round_to: usize) -> usize {
     n.div_ceil(round_to) * round_to
 }
 
 pub fn roundup_page(n: usize) -> usize {
-    let round_to = PAGE_SIZE.get_or_init(|| {
-        sysconf(SysconfVar::PAGE_SIZE)
-            .expect("error reading page size")
-            .expect("page size is none") as usize
-    });
-    roundup(n, *round_to)
+    roundup(n, page_size())
 }
 
 #[cfg(test)]
