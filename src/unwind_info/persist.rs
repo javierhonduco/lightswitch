@@ -145,12 +145,17 @@ pub enum ReaderError {
 pub struct Reader<'a> {
     header: Header,
     data: &'a [u8],
+    check_digest: bool,
 }
 
 impl<'a> Reader<'a> {
-    pub fn new(data: &'a [u8]) -> Result<Self, ReaderError> {
+    pub fn new(data: &'a [u8], check_digest: bool) -> Result<Self, ReaderError> {
         let header = Self::parse_header(data)?;
-        Ok(Reader { header, data })
+        Ok(Reader {
+            header,
+            data,
+            check_digest,
+        })
     }
 
     fn parse_header(data: &[u8]) -> Result<Header, ReaderError> {
@@ -190,22 +195,26 @@ impl<'a> Reader<'a> {
             let unwind_row_data = unwind_info_data
                 .get(step..step + unwind_row_size)
                 .ok_or(ReaderError::OutOfRange)?;
-            context.update(unwind_row_data);
+            if self.check_digest {
+                context.update(unwind_row_data);
+            }
             plain::copy_from_bytes(&mut unwind_row, unwind_row_data)
                 .map_err(|e| ReaderError::Generic(format!("{e:?}")))?;
             unwind_info.push(unwind_row);
         }
 
-        let mut buffer = [0; 8];
-        let _ = context
-            .finish()
-            .as_ref()
-            .read(&mut buffer)
-            .map_err(|e| ReaderError::Generic(e.to_string()));
-        let digest = u64::from_ne_bytes(buffer);
+        if self.check_digest {
+            let mut buffer = [0; 8];
+            let _ = context
+                .finish()
+                .as_ref()
+                .read(&mut buffer)
+                .map_err(|e| ReaderError::Generic(e.to_string()));
+            let digest = u64::from_ne_bytes(buffer);
 
-        if self.header.unwind_info_digest != digest {
-            return Err(ReaderError::Digest);
+            if self.header.unwind_info_digest != digest {
+                return Err(ReaderError::Digest);
+            }
         }
 
         Ok(unwind_info)
@@ -226,7 +235,7 @@ mod tests {
         let writer = Writer::new(&path, None);
         assert!(writer.write(&mut buffer).is_ok());
 
-        let reader = Reader::new(&buffer.get_ref()[..]);
+        let reader = Reader::new(&buffer.get_ref()[..], true);
         let unwind_info = reader.unwrap().unwind_info();
         assert!(unwind_info.is_ok());
         let unwind_info = unwind_info.unwrap();
@@ -247,7 +256,7 @@ mod tests {
             .write_all(unsafe { plain::as_bytes(&header) })
             .unwrap();
         assert!(matches!(
-            Reader::new(&buffer),
+            Reader::new(&buffer, true),
             Err(ReaderError::MagicNumber)
         ));
     }
@@ -263,7 +272,10 @@ mod tests {
         buffer
             .write_all(unsafe { plain::as_bytes(&header) })
             .unwrap();
-        assert!(matches!(Reader::new(&buffer), Err(ReaderError::Version)));
+        assert!(matches!(
+            Reader::new(&buffer, true),
+            Err(ReaderError::Version)
+        ));
     }
 
     #[test]
@@ -277,15 +289,22 @@ mod tests {
         buffer.seek(SeekFrom::End(-10)).unwrap();
         buffer.write_all(&[0, 0, 0, 0, 0, 0, 0]).unwrap();
 
-        let reader = Reader::new(&buffer.get_ref()[..]);
+        let reader = Reader::new(&buffer.get_ref()[..], true);
         let unwind_info = reader.unwrap().unwind_info();
         assert!(matches!(unwind_info, Err(ReaderError::Digest)));
+
+        let reader = Reader::new(&buffer.get_ref()[..], false);
+        let unwind_info = reader.unwrap().unwind_info();
+        assert!(unwind_info.is_ok());
     }
 
     #[test]
     fn test_header_too_small() {
         let buffer = Vec::new();
-        assert!(matches!(Reader::new(&buffer), Err(ReaderError::OutOfRange)));
+        assert!(matches!(
+            Reader::new(&buffer, true),
+            Err(ReaderError::OutOfRange)
+        ));
     }
 
     #[test]
@@ -301,7 +320,7 @@ mod tests {
             .write_all(unsafe { plain::as_bytes(&header) })
             .unwrap();
         assert!(matches!(
-            Reader::new(&buffer).unwrap().unwind_info(),
+            Reader::new(&buffer, true).unwrap().unwind_info(),
             Err(ReaderError::OutOfRange)
         ));
     }

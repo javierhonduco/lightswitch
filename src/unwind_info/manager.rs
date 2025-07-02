@@ -82,8 +82,9 @@ impl UnwindInfoManager {
         executable_path: &Path,
         executable_id: ExecutableId,
         first_frame_override: Option<(u64, u64)>,
+        check_digest: bool,
     ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
-        match self.read_from_cache(executable_id) {
+        match self.read_from_cache(executable_id, check_digest) {
             Ok(unwind_info) => Ok(unwind_info),
             Err(e) => {
                 if matches!(e, FetchUnwindInfoError::NotFound) {
@@ -103,6 +104,7 @@ impl UnwindInfoManager {
     fn read_from_cache(
         &self,
         executable_id: ExecutableId,
+        check_digest: bool,
     ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
         let file = File::open(unwind_info_path).map_err(|e| {
@@ -116,7 +118,7 @@ impl UnwindInfoManager {
         let mut buffer = BufReader::new(file);
         let mut data = Vec::new();
         buffer.read_to_end(&mut data)?;
-        let reader = Reader::new(&data).map_err(FetchUnwindInfoError::Reader)?;
+        let reader = Reader::new(&data, check_digest).map_err(FetchUnwindInfoError::Reader)?;
 
         Ok(reader.unwind_info()?)
     }
@@ -223,6 +225,7 @@ mod tests {
                 &PathBuf::from("/proc/self/exe"),
                 ExecutableId(0xFABADA),
                 None,
+                true,
             );
             let manager_unwind_info = manager_unwind_info.unwrap();
             assert_eq!(unwind_info, manager_unwind_info);
@@ -240,6 +243,7 @@ mod tests {
             &PathBuf::from("/proc/self/exe"),
             ExecutableId(0xFABADA),
             None,
+            true,
         );
         assert!(manager_unwind_info.is_ok());
         let manager_unwind_info = manager_unwind_info.unwrap();
@@ -258,6 +262,7 @@ mod tests {
             &PathBuf::from("/proc/self/exe"),
             ExecutableId(0xFABADA),
             None,
+            true,
         );
         let manager_unwind_info = manager_unwind_info.unwrap();
         assert_eq!(unwind_info, manager_unwind_info);

@@ -1592,6 +1592,7 @@ impl Profiler {
                     &executable_path,
                     executable_id,
                     Some((start_low_address, start_high_address)),
+                    false,
                 )
             }
             Runtime::CLike => {
@@ -1613,6 +1614,7 @@ impl Profiler {
                         &executable_path,
                         executable_id,
                         None,
+                        false,
                     )
                 }
             }
