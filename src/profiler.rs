@@ -55,6 +55,7 @@ use crate::profile::*;
 use crate::unwind_info::manager::UnwindInfoManager;
 use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::executable_path;
+use crate::util::page_size;
 use crate::util::roundup_page;
 use crate::util::Architecture;
 use crate::util::{architecture, get_online_cpus, summarize_address_range};
@@ -645,7 +646,7 @@ impl Profiler {
                 .expect("spawn poll thread");
         } else {
             let perf_buffer = PerfBufferBuilder::new(perf_buf_map)
-                .pages(self.perf_buffer_bytes / page_size::get())
+                .pages(self.perf_buffer_bytes / page_size())
                 .sample_cb(move |_cpu: i32, data: &[u8]| {
                     callback(data);
                 })
@@ -1975,7 +1976,7 @@ impl Profiler {
                     //
                     // Note: this doesn't take into consideration the mmap'ed or load offsets.
                     let load_address = |map_start: u64, first_elf_load: &ElfLoad| {
-                        let page_mask = !(page_size::get() - 1) as u64;
+                        let page_mask = !(page_size() - 1) as u64;
                         map_start.saturating_sub(first_elf_load.p_vaddr & page_mask)
                     };
 
