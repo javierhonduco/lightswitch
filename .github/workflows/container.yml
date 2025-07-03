@@ -28,8 +28,3 @@ jobs:
       if: ${{ github.ref_name == 'main' }}
       run: |
         nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:main-${{ github.sha }}
-    - name: Push container image on new releases
-      if: ${{ github.ref_type == 'tag' }}
-      run: |
-        nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:${{ github.ref_name }}
-        nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:latest

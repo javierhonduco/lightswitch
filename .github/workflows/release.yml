@@ -35,6 +35,10 @@ jobs:
       run: nix develop --command cargo test --workspace
     - name: Build container image
       run: nix build .#container
+    - name: Upload container image to GitHub's container registry
+      run: |
+        nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:${{ github.ref_name }}
+        nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:latest
     - name: Upload container
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
