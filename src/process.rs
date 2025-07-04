@@ -57,14 +57,10 @@ pub struct ExecutableMappings(pub Vec<ExecutableMapping>);
 
 impl ExecutableMappings {
     /// Find the executable mapping a given virtual address falls into.
-    pub fn for_address(&self, virtual_address: u64) -> Option<ExecutableMapping> {
-        for mapping in &self.0 {
-            if (mapping.start_addr..mapping.end_addr).contains(&virtual_address) {
-                return Some(mapping.clone());
-            }
-        }
-
-        None
+    pub fn for_address(&self, virtual_address: u64) -> Option<&ExecutableMapping> {
+        self.0
+            .iter()
+            .find(|&mapping| (mapping.start_addr..mapping.end_addr).contains(&virtual_address))
     }
 }
 

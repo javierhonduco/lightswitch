@@ -71,7 +71,7 @@ pub fn to_pprof(
                 Some(obj) => {
                     let normalized_addr = kframe
                         .file_offset
-                        .or_else(|| obj.normalized_address(virtual_address, &mapping));
+                        .or_else(|| obj.normalized_address(virtual_address, mapping));
 
                     if normalized_addr.is_none() {
                         debug!("normalized address is none");
@@ -86,6 +86,7 @@ pub fn to_pprof(
                         obj.path.to_str().expect("will always be valid"), // should this be named name?,
                         &mapping
                             .build_id
+                            .as_ref()
                             .expect("this should never happen")
                             .to_string(),
                     );
@@ -133,7 +134,7 @@ pub fn to_pprof(
                 Some(obj) => {
                     let normalized_addr = uframe
                         .file_offset
-                        .or_else(|| obj.normalized_address(virtual_address, &mapping));
+                        .or_else(|| obj.normalized_address(virtual_address, mapping));
 
                     if normalized_addr.is_none() {
                         debug!("normalized address is none");
@@ -142,7 +143,7 @@ pub fn to_pprof(
 
                     let normalized_addr = normalized_addr.unwrap();
 
-                    let build_id = match mapping.build_id {
+                    let build_id = match &mapping.build_id {
                         Some(build_id) => {
                             format!("{build_id}")
                         }
