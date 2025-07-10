@@ -9,9 +9,6 @@ use crate::unwind_info::types::CompactUnwindRow;
 
 include!(concat!(env!("OUT_DIR"), "/profiler_bindings.rs"));
 
-unsafe impl Plain for stack_sample_t {}
-unsafe impl Plain for stack_sample_header_t {}
-unsafe impl Plain for native_stack_t {}
 unsafe impl Plain for Event {}
 unsafe impl Plain for unwinder_stats_t {}
 unsafe impl Plain for exec_mappings_key {}

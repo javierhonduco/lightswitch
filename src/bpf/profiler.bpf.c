@@ -261,23 +261,38 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u
 static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
 u64 pid_tgid,
 unwind_state_t *unwind_state) {
-  // Get the kernel stack
-  int ret = bpf_get_stack(ctx, unwind_state->stack.kernel_stack.addresses, MAX_STACK_DEPTH * sizeof(u64), 0);
-  if (ret >= 0) {
-    unwind_state->stack.kernel_stack.len = ret / sizeof(u64);
+  // Unwind and copy kernel stack.
+  u32 ulen = unwind_state->sample.stack.ulen;
+  if (ulen < MAX_STACK_DEPTH) {
+    int ret = bpf_get_stack(ctx, &unwind_state->sample.stack.addresses[ulen], MAX_STACK_DEPTH * sizeof(u64), 0);
+    if (ret > 0) {
+      unwind_state->sample.stack.klen = ret / sizeof(u64);
+    }
   }
 
   int per_process_id = pid_tgid >> 32;
   int per_thread_id = pid_tgid;
 
-  unwind_state->stack.header.pid = per_process_id;
-  unwind_state->stack.header.task_id = per_thread_id;
-  unwind_state->stack.header.collected_at = bpf_ktime_get_boot_ns();
+  unwind_state->sample.pid = per_process_id;
+  unwind_state->sample.tid = per_thread_id;
+  unwind_state->sample.collected_at = bpf_ktime_get_boot_ns();
 
+  u32 sample_size = sizeof(sample_t)
+    // Remove the actual stack buffer which was doubled to appease the verifier.
+    - 2 * MAX_STACK_DEPTH * sizeof(u64)
+    // Add the actual stack size in bytes.
+    + (unwind_state->sample.stack.ulen + unwind_state->sample.stack.klen) * sizeof(u64);
+
+  // Appease the verifier.
+  if (sample_size > sizeof(sample_t)) {
+    return;
+  }
+
+  int ret = 0;
   if (lightswitch_config.use_ring_buffers) {
-    ret = bpf_ringbuf_output(&stacks_rb, &(unwind_state->stack), sizeof(stack_sample_t), 0);
+    ret = bpf_ringbuf_output(&stacks_rb, &(unwind_state->sample), sample_size, 0);
   } else {
-    ret = bpf_perf_event_output(ctx, &stacks, BPF_F_CURRENT_CPU, &(unwind_state->stack), sizeof(stack_sample_t));
+    ret = bpf_perf_event_output(ctx, &stacks, BPF_F_CURRENT_CPU, &(unwind_state->sample), sample_size);
   }
 
   if (ret < 0) {
@@ -308,7 +323,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 
   for (int i = 0; i < MAX_STACK_DEPTH_PER_PROGRAM; i++) {
     // LOG("[debug] Within unwinding machinery loop");
-    LOG("## frame: %d", unwind_state->stack.stack.len);
+    LOG("## frame: %d", unwind_state->sample.stack.ulen);
     LOG("\tcurrent pc: %llx", unwind_state->ip);
     LOG("\tcurrent sp: %llx", unwind_state->sp);
     LOG("\tcurrent bp: %llx", unwind_state->bp);
@@ -425,11 +440,11 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     }
 
     // Add address to stack.
-    u64 len = unwind_state->stack.stack.len;
+    u32 ulen = unwind_state->sample.stack.ulen;
     // Appease the verifier.
-    if (len >= 0 && len < MAX_STACK_DEPTH) {
-      unwind_state->stack.stack.addresses[len] = unwind_state->ip;
-      unwind_state->stack.stack.len++;
+    if (ulen < MAX_STACK_DEPTH) {
+      unwind_state->sample.stack.addresses[ulen] = unwind_state->ip;
+      unwind_state->sample.stack.ulen++;
     }
 
     if (found_rbp_type == RBP_TYPE_REGISTER ||
@@ -513,7 +528,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 
 #ifdef __TARGET_ARCH_arm64
     // Special handling for leaf frame.
-    if (unwind_state->stack.stack.len == 0) {
+    if (unwind_state->sample.stack.ulen == 0) {
       previous_rip = unwind_state->lr;
     } else {
       // This is guaranteed by the Aarch64 ABI.
@@ -574,7 +589,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     bump_unwind_success_dwarf();
     return 0;
 
-  } else if (unwind_state->stack.stack.len < MAX_STACK_DEPTH &&
+  } else if (unwind_state->sample.stack.ulen < MAX_STACK_DEPTH &&
              unwind_state->tail_calls < MAX_TAIL_CALLS) {
     LOG("Continuing walking the stack in a tail call, current tail %d",
         unwind_state->tail_calls);
@@ -590,13 +605,13 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 
 // Set up the initial unwinding state.
 static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_user_pt_regs_t *regs) {
- unwind_state->stack.stack.len = 0;
- unwind_state->stack.kernel_stack.len = 0;
+ unwind_state->sample.stack.ulen = 0;
+ unwind_state->sample.stack.klen = 0;
  unwind_state->tail_calls = 0;
 
- unwind_state->stack.header.pid = 0;
- unwind_state->stack.header.task_id = 0;
- unwind_state->stack.header.collected_at = 0;
+ unwind_state->sample.pid = 0;
+ unwind_state->sample.tid = 0;
+ unwind_state->sample.collected_at = 0;
 
   if (in_kernel(PT_REGS_IP(regs))) {
     if (!retrieve_task_registers(&unwind_state->ip, &unwind_state->sp, &unwind_state->bp, &unwind_state->lr)) {

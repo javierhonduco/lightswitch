@@ -62,7 +62,7 @@ pub fn to_pprof(
                 continue;
             };
 
-            let Some(mapping) = info.mappings.for_address(virtual_address) else {
+            let Some(mapping) = info.mappings.for_address(&virtual_address) else {
                 // todo: maybe append an error frame for debugging?
                 continue;
             };
@@ -125,7 +125,7 @@ pub fn to_pprof(
                 continue;
             };
 
-            let Some(mapping) = info.mappings.for_address(virtual_address) else {
+            let Some(mapping) = info.mappings.for_address(&virtual_address) else {
                 // todo: maybe append an error frame for debugging?
                 continue;
             };
@@ -330,7 +330,7 @@ pub fn fetch_symbols_for_profile(
         };
 
         for frame in &sample.ustack {
-            let Some(mapping) = info.mappings.for_address(frame.virtual_address) else {
+            let Some(mapping) = info.mappings.for_address(&frame.virtual_address) else {
                 continue;
             };
 
@@ -427,7 +427,7 @@ fn symbolize_user_stack(
             continue;
         };
 
-        let Some(mapping) = info.mappings.for_address(frame.virtual_address) else {
+        let Some(mapping) = info.mappings.for_address(&frame.virtual_address) else {
             result.push(Frame::with_error(
                 frame.virtual_address,
                 "<could not find mapping>".to_string(),

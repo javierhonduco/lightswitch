@@ -6,20 +6,73 @@ use anyhow::anyhow;
 use lightswitch_object::ExecutableId;
 use tracing::error;
 
-use crate::bpf::profiler_bindings::native_stack_t;
 use crate::kernel::KERNEL_PID;
 use crate::process::ObjectFileInfo;
 use crate::process::Pid;
 use crate::process::ProcessInfo;
 use crate::profile::Frame;
 
-#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+/// This *must* be in sync with the C struct `sample_t`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct RawSample {
     pub pid: Pid,
     pub tid: Pid,
     pub collected_at: u64,
-    pub ustack: Option<native_stack_t>,
-    pub kstack: Option<native_stack_t>,
+    pub ustack: Vec<u64>,
+    pub kstack: Vec<u64>,
+}
+
+#[derive(Debug, thiserror::Error, Eq, PartialEq)]
+pub enum RawSampleParsingError {
+    #[error("expected more bytes before the stack")]
+    BeforeStackTooSmall,
+    #[error("expected more bytes for the stack")]
+    StackTooSmall,
+    #[error("expected fewer bytes for the sample")]
+    SampleTooLarge,
+}
+
+/// The unwound stack trace, [`native_stack_t`], is stored in the last field of [`sample_t`] and only the
+/// useful data is sent to userspace. This means that every sample might have a different number of frames.
+/// This is similar to C99's "Flexible Array Fields" and it is the reason why we need to manually parse it
+/// as `plain` doesn't correctly know how to deal with this.
+impl RawSample {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, RawSampleParsingError> {
+        let sample_len = data.len();
+        if sample_len < 24 {
+            return Err(RawSampleParsingError::BeforeStackTooSmall);
+        }
+        if sample_len > 24 + 127 * 2 * 8 {
+            return Err(RawSampleParsingError::SampleTooLarge);
+        }
+
+        let pid = i32::from_ne_bytes(data[0..4].try_into().unwrap());
+        let tid = i32::from_ne_bytes(data[4..8].try_into().unwrap());
+        let collected_at = u64::from_ne_bytes(data[8..16].try_into().unwrap());
+        let ulen = u32::from_ne_bytes(data[16..20].try_into().unwrap()) as usize;
+        let klen = u32::from_ne_bytes(data[20..24].try_into().unwrap()) as usize;
+
+        if sample_len < 24 + (ulen + klen) * 8 {
+            return Err(RawSampleParsingError::StackTooSmall);
+        }
+
+        let ustack = data[24..(24 + ulen * 8)]
+            .chunks_exact(8)
+            .map(|chunk| u64::from_ne_bytes(chunk.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        let kstack = data[(24 + ulen * 8)..(24 + ulen * 8 + klen * 8)]
+            .chunks_exact(8)
+            .map(|chunk| u64::from_ne_bytes(chunk.try_into().unwrap()))
+            .collect::<Vec<_>>();
+
+        Ok(RawSample {
+            pid,
+            tid,
+            collected_at,
+            ustack,
+            kstack,
+        })
+    }
 }
 
 impl std::hash::Hash for RawSample {
@@ -35,27 +88,20 @@ impl std::hash::Hash for RawSample {
 
 impl fmt::Display for RawSample {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        let format_native_stack = |native_stack: Option<native_stack_t>| -> String {
-            let mut res: Vec<String> = Vec::new();
-            match native_stack {
-                Some(native_stack) => {
-                    for (i, addr) in native_stack.addresses.into_iter().enumerate() {
-                        if native_stack.len <= i.try_into().unwrap() {
-                            break;
-                        }
-                        res.push(format!("{i:3}: {addr:#018x}"));
-                    }
-                }
-                None => res.push("NONE".into()),
-            };
+        let format_native_stack = |native_stack: &Vec<u64>| -> String {
+            let mut res = Vec::new();
+
+            for (i, virtual_address) in native_stack.iter().enumerate() {
+                res.push(format!("{i:3}: {virtual_address:#018x}"));
+            }
             format!("[{}]", res.join(","))
         };
 
         fmt.debug_struct("RawSample")
             .field("pid", &self.pid)
             .field("tid", &self.tid)
-            .field("ustack", &format_native_stack(self.ustack))
-            .field("kstack", &format_native_stack(self.kstack))
+            .field("ustack", &format_native_stack(&self.ustack))
+            .field("kstack", &format_native_stack(&self.kstack))
             .finish()
     }
 }
@@ -84,66 +130,54 @@ impl RawAggregatedSample {
             count: self.count,
         };
 
-        if let Some(native_stack) = self.sample.ustack {
-            let Some(info) = procs.get(&self.sample.pid) else {
-                return Err(anyhow!("process not found"));
+        let Some(info) = procs.get(&self.sample.pid) else {
+            return Err(anyhow!("process not found"));
+        };
+
+        for virtual_address in &self.sample.ustack {
+            let Some(mapping) = info.mappings.for_address(virtual_address) else {
+                continue;
             };
 
-            for (i, virtual_address) in native_stack.addresses.into_iter().enumerate() {
-                if native_stack.len <= i.try_into().unwrap() {
-                    break;
+            let file_offset = match objs.get(&mapping.executable_id) {
+                Some(obj) => obj.normalized_address(*virtual_address, mapping),
+                None => {
+                    error!("executable with id 0x{} not found", mapping.executable_id);
+                    None
                 }
+            };
 
-                let Some(mapping) = info.mappings.for_address(virtual_address) else {
-                    continue;
-                };
-
-                let file_offset = match objs.get(&mapping.executable_id) {
-                    Some(obj) => obj.normalized_address(virtual_address, mapping),
-                    None => {
-                        error!("executable with id 0x{} not found", mapping.executable_id);
-                        None
-                    }
-                };
-
-                processed_sample.ustack.push(Frame {
-                    virtual_address,
-                    file_offset,
-                    symbolization_result: None,
-                });
-            }
+            processed_sample.ustack.push(Frame {
+                virtual_address: *virtual_address,
+                file_offset,
+                symbolization_result: None,
+            });
         }
 
-        if let Some(kernel_stack) = self.sample.kstack {
-            let Some(info) = procs.get(&KERNEL_PID) else {
-                return Err(anyhow!("kernel process not found"));
+        let Some(info) = procs.get(&KERNEL_PID) else {
+            return Err(anyhow!("kernel process not found"));
+        };
+
+        for virtual_address in &self.sample.kstack {
+            let Some(mapping) = info.mappings.for_address(virtual_address) else {
+                continue;
             };
 
-            for (i, virtual_address) in kernel_stack.addresses.into_iter().enumerate() {
-                if kernel_stack.len <= i.try_into().unwrap() {
-                    break;
+            let file_offset = match objs.get(&mapping.executable_id) {
+                Some(obj) => obj.normalized_address(*virtual_address, mapping),
+                None => {
+                    error!("executable with id 0x{} not found", mapping.executable_id);
+                    None
                 }
+            };
 
-                let Some(mapping) = info.mappings.for_address(virtual_address) else {
-                    continue;
-                };
-
-                let file_offset = match objs.get(&mapping.executable_id) {
-                    Some(obj) => obj.normalized_address(virtual_address, mapping),
-                    None => {
-                        error!("executable with id 0x{} not found", mapping.executable_id);
-                        None
-                    }
-                };
-
-                // todo: revisit this as the file offset calculation won't work
-                // for kaslr
-                processed_sample.kstack.push(Frame {
-                    virtual_address,
-                    file_offset,
-                    symbolization_result: None,
-                });
-            }
+            // todo: revisit this as the file offset calculation won't work
+            // for kaslr
+            processed_sample.kstack.push(Frame {
+                virtual_address: *virtual_address,
+                file_offset,
+                symbolization_result: None,
+            });
         }
 
         if processed_sample.ustack.is_empty() && processed_sample.kstack.is_empty() {
@@ -213,35 +247,102 @@ pub type AggregatedProfile = Vec<AggregatedSample>;
 
 #[cfg(test)]
 mod tests {
+    use crate::bpf::profiler_bindings::native_stack_t;
+    use crate::bpf::profiler_bindings::sample_t;
     use crate::profile::SymbolizedFrame;
 
     use super::*;
 
     #[test]
+    fn test_sample_too_little_data() {
+        assert_eq!(
+            RawSample::from_bytes(&[0x12, 0x23]),
+            Err(RawSampleParsingError::BeforeStackTooSmall)
+        );
+
+        let c_sample = sample_t {
+            pid: 234,
+            tid: 987,
+            collected_at: 0xDEADBEEF,
+            stack: native_stack_t {
+                ulen: 2,
+                klen: 1,
+                addresses: [0; 254],
+            },
+        };
+        assert_eq!(
+            RawSample::from_bytes(&unsafe { plain::as_bytes(&c_sample) }[..30]),
+            Err(RawSampleParsingError::StackTooSmall)
+        );
+    }
+
+    #[test]
+    fn test_sample_too_large() {
+        let c_sample = sample_t {
+            pid: 234,
+            tid: 987,
+            collected_at: 0xDEADBEEF,
+            stack: native_stack_t {
+                ulen: 2,
+                klen: 1,
+                addresses: [0; 254],
+            },
+        };
+        let bytes = unsafe { plain::as_bytes(&c_sample) };
+        let mut new_bytes = Vec::from(bytes);
+        new_bytes.push(0x10);
+
+        assert_eq!(
+            RawSample::from_bytes(&new_bytes[..]),
+            Err(RawSampleParsingError::SampleTooLarge)
+        );
+    }
+
+    #[test]
+    fn test_sample_parsing() {
+        let mut c_sample = sample_t {
+            pid: 234,
+            tid: 987,
+            collected_at: 0xDEADBEEF,
+            stack: native_stack_t {
+                ulen: 2,
+                klen: 1,
+                addresses: [0; 254],
+            },
+        };
+
+        c_sample.stack.addresses[0] = 0xFFFBBBDDD;
+        c_sample.stack.addresses[1] = 0x113355770;
+        c_sample.stack.addresses[2] = 0xBBBAAADDD;
+        // Garbage data that shouldn't be read.
+        c_sample.stack.addresses[3] = 0xBADBADBAD;
+
+        assert_eq!(
+            RawSample::from_bytes(unsafe { plain::as_bytes(&c_sample) }),
+            Ok(RawSample {
+                pid: 234,
+                tid: 987,
+                collected_at: 0xDEADBEEF,
+                ustack: vec![0xFFFBBBDDD, 0x113355770],
+                kstack: vec![0xBBBAAADDD]
+            })
+        );
+    }
+
+    #[test]
     fn display_raw_aggregated_sample() {
-        let addrs = [0; 127];
-
         // User stack but no kernel stack
-        let mut ustack = addrs;
-        ustack[0] = 0xffff;
-        ustack[1] = 0xdeadbeef;
-
-        let ustack_data = Some(native_stack_t {
-            addresses: ustack,
-            len: 2,
-        });
-
         let raw_aggregated_sample = RawAggregatedSample {
             sample: RawSample {
                 pid: 1234,
                 tid: 1235,
                 collected_at: 1748865070,
-                ustack: ustack_data,
-                kstack: None,
+                ustack: vec![0xffff, 0xdeadbeef],
+                kstack: vec![],
             },
             count: 1,
         };
-        insta::assert_yaml_snapshot!(format!("{}", raw_aggregated_sample), @r#""RawAggregatedSample { sample: \"RawSample { pid: 1234, tid: 1235, ustack: \\\"[  0: 0x000000000000ffff,  1: 0x00000000deadbeef]\\\", kstack: \\\"[NONE]\\\" }\", count: 1 }""#);
+        insta::assert_yaml_snapshot!(format!("{}", raw_aggregated_sample), @r#""RawAggregatedSample { sample: \"RawSample { pid: 1234, tid: 1235, ustack: \\\"[  0: 0x000000000000ffff,  1: 0x00000000deadbeef]\\\", kstack: \\\"[]\\\" }\", count: 1 }""#);
 
         // No user or kernel stacks
         let raw_aggregated_sample = RawAggregatedSample {
@@ -249,64 +350,12 @@ mod tests {
                 pid: 1234,
                 tid: 1235,
                 collected_at: 1748865170,
-                ustack: None,
-                kstack: None,
+                ustack: vec![],
+                kstack: vec![],
             },
             count: 1,
         };
-        insta::assert_yaml_snapshot!(format!("{}", raw_aggregated_sample), @r#""RawAggregatedSample { sample: \"RawSample { pid: 1234, tid: 1235, ustack: \\\"[NONE]\\\", kstack: \\\"[NONE]\\\" }\", count: 1 }""#);
-
-        // user and kernel stacks
-        let mut ustack = addrs;
-        let ureplace: &[u64] = &[
-            0x007f7c91c82314,
-            0x007f7c91c4ff93,
-            0x007f7c91c5d8ae,
-            0x007f7c91c4d2c3,
-            0x007f7c91c45400,
-            0x007f7c91c10933,
-            0x007f7c91c38153,
-            0x007f7c91c331d9,
-            0x007f7c91dfa501,
-            0x007f7c91c16b05,
-            0x007f7c91e22038,
-            0x007f7c91e23fc6,
-        ];
-        ustack[..ureplace.len()].copy_from_slice(ureplace);
-
-        let mut kstack = addrs;
-        let kreplace: &[u64] = &[
-            0xffffffff8749ae51,
-            0xffffffffc04c4804,
-            0xffffffff874ddfd0,
-            0xffffffff874e0843,
-            0xffffffff874e0b8a,
-            0xffffffff8727f600,
-            0xffffffff8727f8a7,
-            0xffffffff87e0116e,
-        ];
-        kstack[..kreplace.len()].copy_from_slice(kreplace);
-
-        let ustack_data = Some(native_stack_t {
-            addresses: ustack,
-            len: ureplace.len() as u64,
-        });
-        let kstack_data = Some(native_stack_t {
-            addresses: kstack,
-            len: kreplace.len() as u64,
-        });
-
-        let raw_aggregated_sample = RawAggregatedSample {
-            sample: RawSample {
-                pid: 128821,
-                tid: 128822,
-                collected_at: 1748865070,
-                ustack: ustack_data,
-                kstack: kstack_data,
-            },
-            count: 42,
-        };
-        insta::assert_yaml_snapshot!(format!("{}", raw_aggregated_sample), @r#""RawAggregatedSample { sample: \"RawSample { pid: 128821, tid: 128822, ustack: \\\"[  0: 0x00007f7c91c82314,  1: 0x00007f7c91c4ff93,  2: 0x00007f7c91c5d8ae,  3: 0x00007f7c91c4d2c3,  4: 0x00007f7c91c45400,  5: 0x00007f7c91c10933,  6: 0x00007f7c91c38153,  7: 0x00007f7c91c331d9,  8: 0x00007f7c91dfa501,  9: 0x00007f7c91c16b05, 10: 0x00007f7c91e22038, 11: 0x00007f7c91e23fc6]\\\", kstack: \\\"[  0: 0xffffffff8749ae51,  1: 0xffffffffc04c4804,  2: 0xffffffff874ddfd0,  3: 0xffffffff874e0843,  4: 0xffffffff874e0b8a,  5: 0xffffffff8727f600,  6: 0xffffffff8727f8a7,  7: 0xffffffff87e0116e]\\\" }\", count: 42 }""#);
+        insta::assert_yaml_snapshot!(format!("{}", raw_aggregated_sample), @r#""RawAggregatedSample { sample: \"RawSample { pid: 1234, tid: 1235, ustack: \\\"[]\\\", kstack: \\\"[]\\\" }\", count: 1 }""#);
     }
 
     #[test]

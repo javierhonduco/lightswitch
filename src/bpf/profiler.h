@@ -149,34 +149,32 @@ typedef struct __attribute__((packed)) {
 _Static_assert(sizeof(stack_unwind_row_t) == 8,
                "unwind row has the expected size");
 
+
+
 // The addresses of a native stack trace.
 typedef struct {
-  u64 len;
-  u64 addresses[MAX_STACK_DEPTH];
+  u32 ulen;
+  u32 klen;
+  // Needed as the verifier won't operate with dynamically computed offsets and
+  // wants to ensure that any write won't be out of bounds. Note that only the
+  // actual unwound stack will be sent to userspace.
+  u64 addresses[MAX_STACK_DEPTH * 2];
 } native_stack_t;
 
 typedef struct {
-  int task_id;
   int pid;
-  // offset since system boot
+  int tid;
   u64 collected_at;
-} stack_sample_header_t;
+  native_stack_t stack;
+} sample_t;
 
 typedef struct {
-  stack_sample_header_t header;
-  native_stack_t        stack;
-  native_stack_t        kernel_stack;
-} stack_sample_t;
-
-typedef struct {
-  stack_sample_t stack;
-
   unsigned long long ip;
   unsigned long long sp;
   unsigned long long bp;
   unsigned long long lr;
-  int tail_calls;
-
+  u64 tail_calls;
+  sample_t sample;
 } unwind_state_t;
 
 enum event_type {
