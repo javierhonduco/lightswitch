@@ -65,7 +65,7 @@ use lightswitch_metadata::metadata_provider::{
 use lightswitch_metadata::types::TaskKey;
 use lightswitch_object::{ExecutableId, ObjectFile, Runtime};
 
-const MAX_UNWIND_INFO_SIZE: usize = 5_000_000;
+const MAX_UNWIND_INFO_SIZE: usize = 7_000_000;
 
 pub enum TracerEvent {
     ProcessExit(Pid),
