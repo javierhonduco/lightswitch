@@ -101,12 +101,12 @@ impl NativeUnwindState {
 
     /// Checks if the last eviction happened long ago enough to prevent excessive overhead.
     fn can_evict_executable(&self) -> bool {
-        self.last_executable_eviction.elapsed() >= Duration::from_secs(5)
+        self.last_executable_eviction.elapsed() >= Duration::from_millis(500)
     }
 
     /// Checks if the last eviction happened long ago enough to prevent excessive overhead.
     fn can_evict_process(&self) -> bool {
-        self.last_process_eviction.elapsed() >= Duration::from_secs(5)
+        self.last_process_eviction.elapsed() >= Duration::from_millis(500)
     }
 }
 
