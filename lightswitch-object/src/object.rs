@@ -30,7 +30,7 @@ pub struct ElfLoad {
 
 #[derive(Clone)]
 pub enum Runtime {
-    /// C, C++, Rust, Fortran.
+    /// C, C++, Rust, Fortran
     CLike,
     /// Zig. Needs special handling because before [0] the top level frame (`start`) didn't have the
     /// right unwind information
@@ -40,8 +40,11 @@ pub enum Runtime {
         start_low_address: u64,
         start_high_address: u64,
     },
-    /// Golang.
+    /// Golang
     Go(Vec<StopUnwindingFrames>),
+    /// V8, used by Node.js which is always compiled with frame pointers and has handwritten
+    /// code sections that aren't covered by the unwind information
+    V8,
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +141,9 @@ impl ObjectFile {
 
             for symbol in self.object.symbols() {
                 let Ok(name) = symbol.name() else { continue };
+                if name.starts_with("_ZZN2v88internal") {
+                    return Runtime::V8;
+                }
                 if name.starts_with("__zig") {
                     is_zig = true;
                 }
