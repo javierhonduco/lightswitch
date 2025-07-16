@@ -296,6 +296,9 @@ impl SystemInfo {
             && self.tracepoints_support_detected
             && bpf_features.can_load_trivial_bpf_program
             && bpf_features.has_tail_call
+            && bpf_features.has_map_of_maps
+            && bpf_features.has_mmapable_bpf_array
+            && bpf_features.has_variable_inner_map
     }
 }
 

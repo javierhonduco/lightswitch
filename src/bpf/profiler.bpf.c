@@ -32,31 +32,14 @@ struct {
 } heap SEC(".maps");
 
 
-// Maps to store unwind information. There are 'outer' maps for every
-// bucket size. The bucket sizes are defined in userspace and they'll
-// determine how many unwind entries fit in the 'inner' BPF array maps
+// Holds BPF array maps which store unwind information.
 
-#define NEW_OUTER_MAP(__map_id)                         \
-  struct {                                              \
-    __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);            \
-    __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);  \
-    __type(key, u64);                                   \
-    __type(value, u32);                                 \
-  } outer_map_##__map_id SEC(".maps");
-
-NEW_OUTER_MAP(0);
-NEW_OUTER_MAP(1);
-NEW_OUTER_MAP(2);
-NEW_OUTER_MAP(3);
-NEW_OUTER_MAP(4);
-NEW_OUTER_MAP(5);
-NEW_OUTER_MAP(6);
-NEW_OUTER_MAP(7);
-NEW_OUTER_MAP(8);
-NEW_OUTER_MAP(9);
-NEW_OUTER_MAP(10);
-NEW_OUTER_MAP(11);
-NEW_OUTER_MAP(12);
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
+  __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);
+  __type(key, u64);
+  __type(value, u32);
+} outer_map SEC(".maps");
 
 struct {
   __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
@@ -129,40 +112,6 @@ static __always_inline u64 find_offset_for_pc(void *inner_map, u16 pc_low, u64 l
   return BINARY_SEARCH_EXHAUSTED_ITERATIONS;
 }
 
-void* find_map_for_bucket(u32 bucket_id) {
-  void *outer_map = NULL;
-
-  if (bucket_id == 0) {
-    outer_map = &outer_map_0;
-  } else if (bucket_id == 1) {
-    outer_map = &outer_map_1;
-  } else if (bucket_id == 2) {
-    outer_map = &outer_map_2;
-  } else if (bucket_id == 3) {
-    outer_map = &outer_map_3;
-  } else if (bucket_id == 4) {
-    outer_map = &outer_map_4;
-  } else if (bucket_id == 5) {
-    outer_map = &outer_map_5;
-  } else if (bucket_id == 6) {
-    outer_map = &outer_map_6;
-  } else if (bucket_id == 7) {
-    outer_map = &outer_map_7;
-  } else if (bucket_id == 8) {
-    outer_map = &outer_map_8;
-  } else if (bucket_id == 9) {
-    outer_map = &outer_map_9;
-  } else if (bucket_id == 10) {
-    outer_map = &outer_map_10;
-  } else if (bucket_id == 11) {
-    outer_map = &outer_map_11;
-  } else if (bucket_id == 12) {
-    outer_map = &outer_map_12;
-  }
-
-  return outer_map;
-}
-
 // Finds the shard information for a given pid and program counter. Optionally,
 // and offset can be passed that will be filled in with the mapping's load
 // address.
@@ -176,12 +125,7 @@ find_page(mapping_t *mapping, u64 object_relative_pc, u64 *low_index, u64 *high_
   page_value_t *found_page = bpf_map_lookup_elem(&executable_to_page, &page_key);
 
   if (found_page != NULL) {
-    void *outer_map = find_map_for_bucket(found_page->bucket_id);
-    if (outer_map == NULL) {
-      return NULL;
-    }
-
-    void *inner_map = bpf_map_lookup_elem(outer_map, &mapping->executable_id);
+    void *inner_map = bpf_map_lookup_elem(&outer_map, &mapping->executable_id);
     if (inner_map != NULL) {
       *low_index = found_page->low_index;
       *high_index = found_page->high_index;
