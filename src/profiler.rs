@@ -136,7 +136,7 @@ pub struct Profiler {
     profile_receive: Arc<Receiver<RawAggregatedProfile>>,
     // A vector of raw samples received from bpf in the current profiling session
     raw_samples: Vec<RawSample>,
-    // Raw sample channel. Used for receiving raw samples from the ringbuf/perfbuf poll thread
+    // Raw samples channel. Used for receiving raw samples from the ringbuf/perfbuf poll thread
     raw_sample_send: Arc<Sender<RawSample>>,
     raw_sample_receive: Arc<Receiver<RawSample>>,
     /// For how long to profile.
@@ -317,8 +317,8 @@ impl Profiler {
         let num_cpus = get_online_cpus().expect("get online CPUs").len() as u32;
         let num_expected_entries = std::cmp::max(num_cpus, sample_freq);
 
-        let entry_size_bytes = std::mem::size_of::<stack_sample_t>() as u32;
-        let max_entries_bytes: u32 = entry_size_bytes * num_expected_entries;
+        let sample_size_bytes = std::mem::size_of::<sample_t>() as u32;
+        let max_entries_bytes: u32 = sample_size_bytes * num_expected_entries;
 
         // max_entries for ringbuf is required to specified in bytes, be a multiple of
         // the page size and a power of two
@@ -726,8 +726,8 @@ impl Profiler {
             "raw_samples",
             &self.native_unwinder.maps.stacks_rb,
             &self.native_unwinder.maps.stacks,
-            move |data| Self::handle_stack(&raw_sample_send, data, self.walltime_at_system_boot),
-            Self::handle_lost_stack,
+            move |data| Self::handle_sample(&raw_sample_send, data, self.walltime_at_system_boot),
+            Self::handle_lost_sample,
         );
 
         self.start_poll_thread(
@@ -965,11 +965,7 @@ impl Profiler {
 
         for aggregated_sample in raw_aggregated_samples {
             let pid = aggregated_sample.sample.pid;
-            let ustack = aggregated_sample.sample.ustack;
-            let Some(ustack) = ustack else {
-                continue;
-            };
-
+            let ustack = &aggregated_sample.sample.ustack;
             {
                 let mut procs = self.procs.write();
                 let proc = procs.get_mut(&pid);
@@ -978,15 +974,11 @@ impl Profiler {
                 }
             }
 
-            for (i, addr) in ustack.addresses.into_iter().enumerate() {
-                if ustack.len <= i.try_into().unwrap() {
-                    break;
-                }
-
+            for virtual_address in ustack {
                 let procs = self.procs.read();
                 let proc = procs.get(&pid);
                 let Some(proc) = proc else { continue };
-                let mapping = proc.mappings.for_address(addr);
+                let mapping = proc.mappings.for_address(virtual_address);
                 if let Some(mapping) = mapping {
                     if let Some(executable) = self
                         .native_unwind_state
@@ -1727,7 +1719,7 @@ impl Profiler {
             return;
         };
 
-        let mapping_data = if let Some(mapping) = proc_info.mappings.for_address(address) {
+        let mapping_data = if let Some(mapping) = proc_info.mappings.for_address(&address) {
             Some((mapping.executable_id, mapping.start_addr, mapping.end_addr))
         } else {
             info!("event_need_unwind_info, mapping not known");
@@ -2021,28 +2013,26 @@ impl Profiler {
         Ok(())
     }
 
-    fn handle_stack(
-        raw_sample_send: &Arc<Sender<RawSample>>,
+    fn handle_sample(
+        sample_send: &Arc<Sender<RawSample>>,
         data: &[u8],
         walltime_at_system_boot: u64,
     ) {
-        let mut stack_sample = stack_sample_t::default();
-        plain::copy_from_bytes(&mut stack_sample, data).expect("handle stack serde");
-
-        let raw_sample = RawSample {
-            pid: stack_sample.header.pid,
-            tid: stack_sample.header.task_id,
-            collected_at: walltime_at_system_boot + stack_sample.header.collected_at,
-            ustack: Some(stack_sample.stack),
-            kstack: Some(stack_sample.kernel_stack),
-        };
-        if let Err(e) = raw_sample_send.send(raw_sample) {
-            error!("failed to send raw sample, err={:?}", e);
+        match RawSample::from_bytes(data) {
+            Ok(mut sample) => {
+                sample.collected_at += walltime_at_system_boot;
+                if let Err(e) = sample_send.send(sample) {
+                    error!("failed to send sample, err={:?}", e);
+                }
+            }
+            Err(e) => {
+                error!("failed to parse sample, err={:?}", e);
+            }
         }
     }
 
-    fn handle_lost_stack(cpu: i32, count: u64) {
-        error!("lost {count} stacks on cpu {cpu}");
+    fn handle_lost_sample(cpu: i32, count: u64) {
+        error!("lost {count} samples on cpu {cpu}");
     }
 
     fn handle_event(sender: &Arc<Sender<Event>>, data: &[u8]) {
