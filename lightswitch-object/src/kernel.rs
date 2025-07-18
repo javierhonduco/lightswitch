@@ -161,6 +161,8 @@ NUMBER(sme_mask)=0";
         );
     }
 
+    /// Several arm64 Linux distros don't have /proc/kcore.
+    #[cfg(not(target_arch = "aarch64"))]
     #[test]
     fn test_aslr_offset() {
         assert!(kaslr_offset().is_ok());
