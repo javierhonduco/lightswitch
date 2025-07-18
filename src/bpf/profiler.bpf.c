@@ -259,7 +259,6 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u
 }
 
 static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
-u64 pid_tgid,
 unwind_state_t *unwind_state) {
   // Unwind and copy kernel stack.
   u32 ulen = unwind_state->sample.stack.ulen;
@@ -270,8 +269,11 @@ unwind_state_t *unwind_state) {
     }
   }
 
-  int per_process_id = pid_tgid >> 32;
-  int per_thread_id = pid_tgid;
+  struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+  unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
+  int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
+  int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
+
 
   unwind_state->sample.pid = per_process_id;
   unwind_state->sample.tid = per_thread_id;
@@ -308,9 +310,10 @@ unwind_state_t *unwind_state) {
 // The unwinding machinery lives here.
 SEC("perf_event")
 int dwarf_unwind(struct bpf_perf_event_data *ctx) {
-  u64 pid_tgid = bpf_get_current_pid_tgid();
-  int per_process_id = pid_tgid >> 32;
-  int per_thread_id = pid_tgid;
+	struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+	unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
+	int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
+  int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
 
   bool reached_bottom_of_stack = false;
   u64 zero = 0;
@@ -585,7 +588,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     }
 
     LOG("======= reached bottom frame! =======");
-    add_stack(ctx, pid_tgid, unwind_state);
+    add_stack(ctx, unwind_state);
     bump_unwind_success_dwarf();
     return 0;
 
@@ -632,8 +635,9 @@ static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_
 
 SEC("perf_event")
 int on_event(struct bpf_perf_event_data *ctx) {
-  u64 pid_tgid = bpf_get_current_pid_tgid();
-  int per_process_id = pid_tgid >> 32;
+	struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+	unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
+	int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
 
   // There's no point in checking for the swapper process.
   if (per_process_id == 0) {
