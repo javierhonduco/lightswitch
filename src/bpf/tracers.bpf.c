@@ -5,6 +5,8 @@
 #include "tracers.h"
 
 #include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+
 
 typedef struct {
     u64 pid_tgid;
@@ -44,9 +46,11 @@ struct munmap_entry_args {
 
 SEC("tracepoint/sched/sched_process_exit")
 int tracer_process_exit(void *ctx) {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    int per_process_id = pid_tgid >> 32;
-    int per_thread_id = pid_tgid;
+
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+    unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
+    int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
+    int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
 
     if (!process_is_known(per_process_id)) {
         return 0;
@@ -80,9 +84,10 @@ int tracer_process_exit(void *ctx) {
 
 SEC("tracepoint/syscalls/sys_enter_munmap")
 int tracer_enter_munmap(struct munmap_entry_args *args) {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    int per_process_id = pid_tgid >> 32;
     u64 start_address = args->addr;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+    unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
+    int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
 
     // We might not know about some mappings, but also we definitely don't want to notify
     // of non-executable mappings being unmapped.
