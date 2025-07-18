@@ -1,11 +1,11 @@
 use anyhow::anyhow;
-use object::elf::{FileHeader32, FileHeader64, ELF_NOTE_GNU, NT_GNU_BUILD_ID, PT_NOTE};
-use object::read::elf::FileHeader;
-use object::read::elf::NoteIterator;
-use object::read::elf::ProgramHeader;
 use object::Endianness;
 use object::FileKind;
 use object::ReadCache;
+use object::elf::{ELF_NOTE_GNU, FileHeader32, FileHeader64, NT_GNU_BUILD_ID, PT_NOTE};
+use object::read::elf::FileHeader;
+use object::read::elf::NoteIterator;
+use object::read::elf::ProgramHeader;
 use std::fs::File;
 
 use crate::BuildId;

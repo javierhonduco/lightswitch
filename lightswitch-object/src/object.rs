@@ -3,19 +3,19 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use memmap2::Mmap;
 use ring::digest::{Context, Digest, SHA256};
 
-use object::elf::{FileHeader32, FileHeader64, PF_X, PT_LOAD};
-use object::read::elf::FileHeader;
-use object::read::elf::ProgramHeader;
 use object::Endianness;
 use object::FileKind;
 use object::Object;
 use object::ObjectKind;
 use object::ObjectSection;
 use object::ObjectSymbol;
+use object::elf::{FileHeader32, FileHeader64, PF_X, PT_LOAD};
+use object::read::elf::FileHeader;
+use object::read::elf::ProgramHeader;
 
 use crate::{BuildId, ExecutableId};
 
@@ -109,10 +109,10 @@ impl ObjectFile {
 
         // Golang (the Go toolchain does not interpret these bytes as we do).
         for section in object.sections() {
-            if section.name()? == ".note.go.buildid" {
-                if let Ok(data) = section.data() {
-                    return Ok(BuildId::go_from_bytes(data)?);
-                }
+            if section.name()? == ".note.go.buildid"
+                && let Ok(data) = section.data()
+            {
+                return Ok(BuildId::go_from_bytes(data)?);
             }
         }
 
@@ -168,13 +168,12 @@ impl ObjectFile {
 
     pub fn is_go(&self) -> bool {
         for section in self.object.sections() {
-            if let Ok(section_name) = section.name() {
-                if section_name == ".gosymtab"
+            if let Ok(section_name) = section.name()
+                && (section_name == ".gosymtab"
                     || section_name == ".gopclntab"
-                    || section_name == ".note.go.buildid"
-                {
-                    return true;
-                }
+                    || section_name == ".note.go.buildid")
+            {
+                return true;
             }
         }
         false
@@ -263,10 +262,10 @@ pub fn code_hash(object: &object::File) -> Option<Digest> {
             continue;
         };
 
-        if section_name == ".text" {
-            if let Ok(section) = section.data() {
-                return Some(sha256_digest(section));
-            }
+        if section_name == ".text"
+            && let Ok(section) = section.data()
+        {
+            return Some(sha256_digest(section));
         }
     }
 
