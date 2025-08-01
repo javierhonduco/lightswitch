@@ -2064,21 +2064,21 @@ impl Profiler {
     }
 
     pub fn setup_perf_events(&mut self) {
-        let mut prog_fds = Vec::new();
+        let mut perf_fds = Vec::new();
         for i in get_online_cpus().expect("get online CPUs") {
             let perf_fd = unsafe { setup_perf_event(i.try_into().unwrap(), self.sample_freq) }
                 .expect("setup perf event");
-            prog_fds.push(perf_fd);
+            perf_fds.push(perf_fd);
         }
 
-        for prog_fd in prog_fds {
+        for perf_fd in perf_fds {
             let prog = self
                 .native_unwinder
                 .object_mut()
                 .progs_mut()
                 .find(|prog| prog.name() == "on_event")
                 .expect("get prog");
-            let link = prog.attach_perf_event(prog_fd);
+            let link = prog.attach_perf_event(perf_fd);
             self._links.push(link.expect("bpf link is present"));
         }
     }
