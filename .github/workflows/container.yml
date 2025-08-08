@@ -25,6 +25,6 @@ jobs:
     - name: Build container image
       run: nix build .#container
     - name: Push container image on commits to main
-      if: ${{ github.ref_name == 'main' }}
+      if: ${{ github.repository_owner == 'javierhonduco' && github.ref_name == 'main' }}
       run: |
         nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:main-${{ github.sha }}
