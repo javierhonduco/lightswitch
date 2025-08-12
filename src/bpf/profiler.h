@@ -13,7 +13,7 @@ _Static_assert(MAX_TAIL_CALLS *MAX_STACK_DEPTH_PER_PROGRAM >= MAX_STACK_DEPTH,
 // Number of items in the stack counts aggregation map.
 #define MAX_STACK_COUNTS_ENTRIES 10240
 // Maximum number of processes we are willing to track.
-#define MAX_PROCESSES 5000
+#define MAX_PROCESSES 5000 // @nocommit
 // Maximum number of memory mappings entries we can store in the LPM trie. This is shared across all
 // the processes and assumes an average of 200 entries per process. These are LPM entries that in most
 // cases will be higher than the number of mappings.

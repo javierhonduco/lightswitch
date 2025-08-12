@@ -2,6 +2,7 @@ use libbpf_rs::MapImpl;
 use libbpf_rs::OpenObject;
 use libbpf_rs::RingBufferBuilder;
 use lightswitch_object::ElfLoad;
+use lru::LruCache;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
 use std::collections::hash_map::OccupiedEntry;
@@ -14,6 +15,7 @@ use std::iter;
 use std::mem::size_of;
 use std::mem::ManuallyDrop;
 use std::mem::MaybeUninit;
+use std::num::NonZeroUsize;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
@@ -23,7 +25,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
-use itertools::Itertools;
 use libbpf_rs::num_possible_cpus;
 use libbpf_rs::skel::SkelBuilder;
 use libbpf_rs::skel::{OpenSkel, Skel};
@@ -82,7 +83,6 @@ pub struct KnownExecutableInfo {
 pub struct NativeUnwindState {
     known_executables: HashMap<ExecutableId, KnownExecutableInfo>,
     last_executable_eviction: Instant,
-    last_process_eviction: Instant,
 }
 
 impl NativeUnwindState {
@@ -90,7 +90,6 @@ impl NativeUnwindState {
         NativeUnwindState {
             known_executables: HashMap::new(),
             last_executable_eviction: Instant::now(),
-            last_process_eviction: Instant::now(),
         }
     }
 
@@ -103,11 +102,6 @@ impl NativeUnwindState {
     fn can_evict_executable(&self) -> bool {
         self.last_executable_eviction.elapsed() >= Duration::from_millis(500)
     }
-
-    /// Checks if the last eviction happened long ago enough to prevent excessive overhead.
-    fn can_evict_process(&self) -> bool {
-        self.last_process_eviction.elapsed() >= Duration::from_millis(500)
-    }
 }
 
 pub struct Profiler {
@@ -119,6 +113,12 @@ pub struct Profiler {
     tracers_open_object: ManuallyDrop<Box<MaybeUninit<OpenObject>>>,
     tracers: ManuallyDrop<TracersSkel<'static>>,
     procs: Arc<RwLock<HashMap<Pid, ProcessInfo>>>,
+    /// The number of tracked processes in [`ProcessStatus::Exited`] state to avoid
+    /// having to recalculate this number during the eviction logic.
+    running_procs_count: u32,
+    /// Used during eviction to find processes that have not sent samples for a while
+    /// and that can be evicted from the BPF maps.
+    loaded_procs_lru: LruCache<Pid, Instant>,
     object_files: Arc<RwLock<HashMap<ExecutableId, ObjectFileInfo>>>,
     // Channel for new process events.
     new_proc_chan_send: Arc<Sender<Event>>,
@@ -128,7 +128,7 @@ pub struct Profiler {
     tracers_chan_receive: Arc<Receiver<TracerEvent>>,
     /// Profiler stop channel. Used to receive signals from users to stop profiling.
     stop_chan_receive: Receiver<()>,
-    pub(crate) native_unwind_state: NativeUnwindState,
+    native_unwind_state: NativeUnwindState,
     /// Pids excluded from profiling.
     filter_pids: HashMap<Pid, bool>,
     // Profile channel
@@ -206,7 +206,7 @@ impl Default for ProfilerConfig {
 pub enum AddProcessError {
     #[error("could not evict process information")]
     Eviction,
-    #[error("procfs race")]
+    #[error("likely procfs race")]
     ProcfsRace,
 }
 
@@ -539,6 +539,8 @@ impl Profiler {
             tracers_open_object,
             tracers,
             procs: Arc::new(RwLock::new(HashMap::new())),
+            running_procs_count: 0,
+            loaded_procs_lru: LruCache::new(NonZeroUsize::new(MAX_PROCESSES as usize).unwrap()),
             object_files: Arc::new(RwLock::new(HashMap::new())),
             new_proc_chan_send: chan_send,
             new_proc_chan_receive: chan_receive,
@@ -684,7 +686,6 @@ impl Profiler {
                                 })
                                 .collect(),
                         ),
-                        last_used: Instant::now(),
                     },
                 );
 
@@ -847,17 +848,32 @@ impl Profiler {
         start.elapsed()
     }
 
-    pub fn handle_process_exit(&mut self, pid: Pid, partial_write: bool) {
+    pub fn handle_process_exit(&mut self, pid: Pid, ignore_errors: bool) {
         // TODO: remove ratelimits for this process.
         let mut procs = self.procs.write();
         match procs.get_mut(&pid) {
             Some(proc_info) => {
-                debug!("marking process {} as exited", pid);
+                assert!(proc_info.status == ProcessStatus::Running);
+
+                debug!("marking process with pid {} as exited", pid);
                 proc_info.status = ProcessStatus::Exited;
+                // TODO: add to list of processes to clean up later.
+                self.running_procs_count -= 1;
+                // OLD: might have been deleted already in the eviction path
+                if self.loaded_procs_lru.pop(&pid).is_none() {
+                    debug!("failed to clear loaded process lru for pid {}", pid);
+                }
+
+                // Q: Do we want to delete from LRU cache even if the below fails?
 
                 let err = Self::delete_bpf_process(&self.native_unwinder, pid);
                 if let Err(e) = err {
-                    debug!("could not remove bpf process due to {:?}", e);
+                    if !ignore_errors {
+                        debug!(
+                            "could not remove bpf process with pid {} due to `{}`",
+                            pid, e
+                        );
+                    }
                 }
 
                 for mapping in &mut proc_info.mappings.0 {
@@ -873,7 +889,7 @@ impl Profiler {
                                 &mut self.native_unwinder,
                                 mapping,
                                 entry,
-                                partial_write,
+                                ignore_errors,
                             );
                         }
                     }
@@ -966,12 +982,11 @@ impl Profiler {
         for aggregated_sample in raw_aggregated_samples {
             let pid = aggregated_sample.sample.pid;
             let ustack = &aggregated_sample.sample.ustack;
-            {
-                let mut procs = self.procs.write();
-                let proc = procs.get_mut(&pid);
-                if let Some(proc) = proc {
-                    proc.last_used = now;
-                }
+            // Update the timestamp if the entry exist and bump it. It might not exist if the process
+            // has already exited and in that case adding it again can cause a future eviction to
+            // fail.
+            if let Some(thing) = self.loaded_procs_lru.get_mut(&pid) {
+                *thing = now;
             }
 
             for virtual_address in ustack {
@@ -1230,7 +1245,7 @@ impl Profiler {
         pid: Pid,
         mapping_begin: u64,
         mapping_end: u64,
-        partial_write: bool,
+        ignore_errors: bool,
     ) {
         for address_range in summarize_address_range(mapping_begin, mapping_end - 1) {
             let key = exec_mappings_key::new(
@@ -1245,11 +1260,8 @@ impl Profiler {
                 .exec_mappings
                 .delete(unsafe { plain::as_bytes(&key) });
             if let Err(e) = res {
-                if !partial_write {
-                    error!(
-                        "failed to delete bpf mappings for process {} with {:?}",
-                        pid, e
-                    );
+                if !ignore_errors {
+                    error!("failed to delete bpf mappings for pid {} with {:?}", pid, e);
                 }
             }
         }
@@ -1282,14 +1294,14 @@ impl Profiler {
         native_unwinder: &mut ProfilerSkel,
         mapping: &ExecutableMapping,
         entry: OccupiedEntry<ExecutableId, KnownExecutableInfo>,
-        partial_write: bool,
+        ignore_errors: bool,
     ) {
         Self::delete_bpf_mappings(
             native_unwinder,
             pid,
             mapping.start_addr,
             mapping.end_addr,
-            partial_write,
+            ignore_errors,
         );
 
         Self::delete_bpf_pages(
@@ -1360,6 +1372,8 @@ impl Profiler {
             panic!("add_unwind_info -- expected process to be known");
         }
 
+        debug!("adding all BPF data for process with pid {}", pid);
+        let mut bpf_map_update_failed = false;
         let mut bpf_mappings = Vec::new();
 
         // Get unwind info
@@ -1419,34 +1433,36 @@ impl Profiler {
                 mapping.end_addr,
             ) {
                 if e == AddUnwindInformationError::NoUnwindInfoKnownNaughty {
-                    return;
+                    continue;
                 }
                 warn!(
-                    "error adding unwind information for executable 0x{} due to {:?}",
+                    "failed to add unwind information for executable 0x{} due to {:?}",
                     mapping.executable_id, e
                 );
-                // TODO: cleanup unwind information map in case of a partial write.
-                return;
+                bpf_map_update_failed = true;
+                break;
             }
         }
 
-        let mut errored = false;
         // Store all mappings in BPF maps.
         if let Err(e) = Self::add_bpf_mappings(&self.native_unwinder, pid, &bpf_mappings) {
-            errored = true;
-            debug!("failed to add BPF mappings due to {:?}", e);
+            bpf_map_update_failed = true;
+            warn!("failed to add BPF mappings for pid {} due to {:?}", pid, e);
         }
         // Add entry just with the pid to signal processes that we already know about.
         if let Err(e) = Self::add_bpf_process(&self.native_unwinder, pid) {
-            errored = true;
-            debug!("failed to add BPF process due to {:?}", e);
+            bpf_map_update_failed = true;
+            warn!("failed to add BPF process for pid {} due to {:?}", pid, e);
         }
 
-        if errored {
+        if bpf_map_update_failed {
             // Remove partially written data.
             self.handle_process_exit(pid, true);
-            // Evict a process to make room for more.
-            debug!("eviction result {}", self.maybe_evict_process(false));
+        } else {
+            debug!(
+                "succesfully added all BPF data for process with pid {}",
+                pid
+            );
         }
     }
 
@@ -1683,16 +1699,30 @@ impl Profiler {
         true
     }
 
+    /// Determines if the passed process should be profiled.
     fn should_profile(&self, pid: Pid) -> bool {
+        // Do not profile oneself if requested.
         if self.exclude_self && pid == std::process::id() as i32 {
             return false;
         }
 
-        if self.filter_pids.is_empty() {
-            return true;
-        }
+        // Filter by PID if requested.
+        let pass_filters = if self.filter_pids.is_empty() {
+            true
+        } else {
+            self.filter_pids.contains_key(&pid)
+        };
 
-        self.filter_pids.contains_key(&pid)
+        // If we already know about this process but it has already exited,
+        // which can happen due to rate limits or PID reuse before the process
+        // is removed from our tracked processes.
+        let exited = if let Some(proc) = self.procs.read().get(&pid) {
+            proc.status == ProcessStatus::Exited
+        } else {
+            false
+        };
+
+        pass_filters && !exited
     }
 
     fn event_new_proc(&mut self, pid: Pid) {
@@ -1701,7 +1731,7 @@ impl Profiler {
         }
 
         if self.process_is_known(pid) {
-            // We hit this when we had to reset the state of the BPF maps but we know about this process.
+            // We hit this when we had to evict a process and its state in BPF maps.
             self.add_unwind_info_for_process(pid);
             return;
         }
@@ -1710,8 +1740,8 @@ impl Profiler {
             Ok(()) => {
                 self.add_unwind_info_for_process(pid);
             }
-            Err(_e) => {
-                // probabaly a procfs race
+            Err(e) => {
+                debug!("error adding process with pid {} `{}`", pid, e)
             }
         }
     }
@@ -1745,40 +1775,29 @@ impl Profiler {
         }
     }
 
-    /// Evicts a process. If *if_too_many_procs* is true, this will only be done if there are more
-    /// processes with  [`ProcessStatus::Running`] status than the maximum number of processes, [`MAX_PROCESSES`].
-    /// Returns false only if an eviction is necessary but not enough time has elapsed since the last one.
-    fn maybe_evict_process(&mut self, if_too_many_procs: bool) -> bool {
-        let procs = self.procs.read();
-        let running_procs = procs
-            .iter()
-            .filter(|e| e.1.status == ProcessStatus::Running);
-        let should_evict = if if_too_many_procs {
-            running_procs.clone().count() >= MAX_PROCESSES as usize
-        } else {
-            true
-        };
-
-        if should_evict && !self.native_unwind_state.can_evict_process() {
-            return false;
-        }
-
+    /// Evicts a process and all its related data (unwind information, memory mappings, etc) from BPF maps
+    /// and marks the process as exited if the maximum amount of loaded process is reached.
+    ///
+    /// Returns whether a new process can be added.
+    fn try_evict_process(&mut self) -> bool {
         let mut to_evict = None;
-        if should_evict {
-            let victim = running_procs
-                .sorted_by(|a, b| a.1.last_used.cmp(&b.1.last_used))
-                .next();
-
-            if let Some((pid, _)) = victim {
-                to_evict = Some(*pid);
+        if self.running_procs_count >= MAX_PROCESSES {
+            let Some(proc_lru) = self.loaded_procs_lru.peek_lru() else {
+                panic!("should not reach here as this would mean the cache is empty.")
+            };
+            let (pid, last_update) = (*proc_lru.0, *proc_lru.1);
+            // Evict if we don't get any samples from a process for longer than this time.
+            if last_update.elapsed() >= Duration::from_secs(5) {
+                to_evict = Some(pid);
+            } else {
+                return false;
             }
         }
-        std::mem::drop(procs);
 
         if let Some(pid) = to_evict {
             debug!("evicting pid {}", pid);
+            // todo: change name?
             self.handle_process_exit(pid, false);
-            self.native_unwind_state.last_process_eviction = Instant::now();
         }
 
         true
@@ -1787,7 +1806,7 @@ impl Profiler {
     pub fn add_proc(&mut self, pid: Pid) -> Result<(), AddProcessError> {
         let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
         let maps = proc.maps().map_err(|_| AddProcessError::ProcfsRace)?;
-        if !self.maybe_evict_process(true) {
+        if !self.try_evict_process() {
             return Err(AddProcessError::Eviction);
         }
 
@@ -1846,7 +1865,11 @@ impl Profiler {
                         continue;
                     };
 
-                    debug!("Path {:?} executable_id 0x{}", path, executable_id);
+                    debug!(
+                        "executable at {} with executable_id 0x{}",
+                        path.display(),
+                        executable_id
+                    );
 
                     // mmap'ed data is always page aligned but the load segment information might not be.
                     // As we need to account for any randomisation added by ASLR, by substracting the virtual
@@ -1903,7 +1926,7 @@ impl Profiler {
                         }
                     } else {
                         debug!(
-                            "could not find debug information for {}",
+                            "full debug information not found in executable {}",
                             exe_path.display()
                         );
                     }
@@ -1960,6 +1983,7 @@ impl Profiler {
                         };
                         let build_id = object_file.build_id().clone();
 
+                        // Do not insert if already exists...
                         object_files.insert(
                             executable_id,
                             ObjectFileInfo {
@@ -1989,27 +2013,32 @@ impl Profiler {
             }
         }
 
+        debug!("adding process with pid {}", pid);
         mappings.sort_by_key(|k| k.start_addr.cmp(&k.start_addr));
         let proc_info = ProcessInfo {
             status: ProcessStatus::Running,
             mappings: ExecutableMappings(mappings),
-            last_used: Instant::now(),
         };
         self.procs.clone().write().insert(pid, proc_info);
+        self.running_procs_count += 1;
+        self.loaded_procs_lru.put(pid, Instant::now());
 
-        for thread in proc.tasks().map_err(|_| AddProcessError::ProcfsRace)? {
-            match thread {
-                Ok(thread) => {
-                    self.metadata_provider
-                        .lock()
-                        .unwrap()
-                        .register_task(TaskKey {
-                            pid,
-                            tid: thread.tid,
-                        });
-                }
-                Err(e) => {
-                    warn!("failed to get thread info due to {:?}", e);
+        // Getting thread metadata is best effort.
+        if let Ok(threads) = proc.tasks() {
+            for thread in threads {
+                match thread {
+                    Ok(thread) => {
+                        self.metadata_provider
+                            .lock()
+                            .unwrap()
+                            .register_task(TaskKey {
+                                pid,
+                                tid: thread.tid,
+                            });
+                    }
+                    Err(e) => {
+                        warn!("failed to get thread info due to {:?}", e);
+                    }
                 }
             }
         }
@@ -2162,6 +2191,8 @@ mod tests {
                 > 2
         );
         profiler.handle_process_exit(std::process::id() as i32, false);
+        // Ensure adding the same pid works
+        profiler.add_proc(std::process::id() as i32).unwrap();
         assert_eq!(profiler.native_unwinder.maps.outer_map.keys().count(), 0);
         assert_eq!(
             profiler.native_unwinder.maps.exec_mappings.keys().count(),

@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Instant;
 
 use tracing::debug;
 
@@ -33,7 +32,6 @@ pub enum ProcessStatus {
 pub struct ProcessInfo {
     pub status: ProcessStatus,
     pub mappings: ExecutableMappings,
-    pub last_used: Instant,
 }
 
 /// Stores information for a executable mapping with all

@@ -269,6 +269,9 @@ unwind_state_t *unwind_state) {
     }
   }
 
+/*   if(unwind_state->sample.stack.ulen == 0 && ) {
+    // bump counter
+  } */
   struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
   unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
   int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);

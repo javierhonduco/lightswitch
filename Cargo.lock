@@ -1283,6 +1283,7 @@ dependencies = [
  "lightswitch-metadata",
  "lightswitch-object",
  "lightswitch-proto",
+ "lru 0.16.0",
  "memmap2 0.9.7",
  "nix 0.29.0",
  "object",
@@ -1322,7 +1323,7 @@ name = "lightswitch-metadata"
 version = "0.2.1"
 dependencies = [
  "anyhow",
- "lru",
+ "lru 0.13.0",
  "nix 0.29.0",
  "procfs",
  "thiserror 2.0.12",
@@ -1389,6 +1390,15 @@ name = "lru"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "227748d55f2f0ab4735d87fd623798cb6b664512fe979705f829c9f81c934465"
+dependencies = [
+ "hashbrown 0.15.2",
+]
+
+[[package]]
+name = "lru"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86ea4e65087ff52f3862caff188d489f1fab49a0cb09e01b2e3f1a617b10aaed"
 dependencies = [
  "hashbrown 0.15.2",
 ]
