@@ -129,3 +129,24 @@ fn test_integration() {
         ],
     ));
 }
+
+#[test]
+fn test_integration_without_pt_regs() {
+    let bpf_test_debug = std::env::var("TEST_DEBUG_BPF").is_ok();
+
+    let collector = Arc::new(Mutex::new(
+        Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
+    ));
+
+    let profiler_config = ProfilerConfig {
+        libbpf_debug: bpf_test_debug,
+        bpf_logging: bpf_test_debug,
+        duration: Duration::from_secs(1),
+        sample_freq: 19,
+        use_task_pt_regs_helper: true,
+        ..Default::default()
+    };
+    let (_stop_signal_send, stop_signal_receive) = bounded(1);
+    let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+    let _p = Profiler::new(profiler_config, stop_signal_receive, metadata_provider);
+}

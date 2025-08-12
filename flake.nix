@@ -26,10 +26,11 @@
             nativeBuildInputs = attrs.nativeBuildInputs ++ [ pkgs.pkg-config ];
           });
           buildInputs = with pkgs; [
-            llvmPackages_16.clang
-            llvmPackages_16.libcxx
-            llvmPackages_16.libclang
-            llvmPackages_16.lld
+            llvmPackages_19.clang
+            llvmPackages_19.libcxx
+            llvmPackages_19.libclang
+            llvmPackages_19.lld
+            llvmPackages_19.bolt
             elfutils'
             zlib.static
             zlib.dev
