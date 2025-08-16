@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/javierhonduco/lightswitch"
 
 [dependencies]
-data-encoding = "2.8.0"
+data-encoding = "2.9.0"
 ring = { workspace = true }
 memmap2 = { workspace = true }
 object = { workspace = true }
