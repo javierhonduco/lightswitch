@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/javierhonduco/lightswitch"
 
 [dependencies]
-lru = "0.13.0"
+lru = "0.16.0"
 nix = { workspace = true, features = ["user", "process"] }
 anyhow = { workspace = true }
 procfs = { workspace = true }
