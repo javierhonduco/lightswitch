@@ -7,11 +7,11 @@ license = "MIT"
 repository = "https://github.com/javierhonduco/lightswitch"
 
 [dependencies]
-prost = "0.13"
+prost = "0.14"
 thiserror = { workspace = true }
 
 [build-dependencies]
-prost-build = "0.13.5"
+prost-build = "0.14.1"
 
 [package.metadata.cargo-shear]
 ignored = ["prost"]
