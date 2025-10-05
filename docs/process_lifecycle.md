@@ -9,8 +9,44 @@ what actions are taken
 lightswitch does not directly detect process existence or startup. Instead, it infers
 process (and thread) existence by the stack samples it takes.
 
+As lightswitch starts up, it sets up eBPF perf events for every online CPU via Profiler::setup_perf_events, which:
+* Iterates over every online CPU
+  * Uses setup_perf_event() (from perf_events.rs) to sets up a software CPU event at a specified frequency
+  * Attaches the on_event() (from src/bpf/profiler.bpf.c) eBPF program so it is fired each time a stack sample is collected
+
+As stack samples are collected, the on_event() eBPF program:
+* Collects the sample's thread and process info (as stacks are always per thread)
+* If the process containing the thread has never been seen before, an EVENT_NEW_PROCESS event is created and placed in the events_rb ringbuffer map
+
+The Profiler object:
+* Creates a send/receive channel for new processes (new_proc_chan_[send|receive])
+* Creates a polling thread (unwinder_events) to monitor the events_rb ringbuffer map for EVENT_NEW_PROCESS events
+  and call Profiler::handle_event() when one occurs
+  * Upon receiving an EVENT_NEW_PROCESS event on the new_proc_chan_receive:
+    * Profiler::event_new_proc()
+      * Profiler::add_proc()
+        Which adds the new PID info to the Profiler::procs HashMap of PID => ProcessInfo
+
 ## Process Exit/Cleanup
 
+As processes exit, it is often (but not solely) the case that the `tracepoint/sched/sched_process_exit`
+probe will fire, as long as they use exit() to exit. For such processes, it is easy to detect process
+exit() and schedule Profiler.procs and related data structures for cleanup.
+
+Why not clean up immediately when a process exits?  Because pending stack samples that must still be
+unwound are a real possibility for at least 1 or 2 more collection sessions.  Thus we schedule such
+cleanup for 2 sessions later.
+
+## Potential Problems
+* Not all processes are created solely via fork(), although we should be immune to this possibility
+  by virtue of the fact that we detect new processes by determining the PID/TID for each sample as
+  it comes in.
+  * But we must also make sure the Executable ID continues to match the PID over time.  Thus entries
+    in Profiler.procs might need to be keyed with a combination of the PID and Executable ID, so we
+    can detect process "exit"s that don't come from exit(), as noted in the following.
+* Not all processes exit via exit() - many PIDs are simply re-used by some form of exec*() call that
+  overwrites the executable - thus the Executable ID for a PID can change at any time for such
+  occurrences.
 
 First stack for process thread seen ->
   new_proc_chan_receive +-> event_new_proc
