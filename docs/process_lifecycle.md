@@ -17,6 +17,7 @@ As lightswitch starts up, it sets up eBPF perf events for every online CPU via P
 As stack samples are collected, the on_event() eBPF program:
 * Collects the sample's thread and process info (as stacks are always per thread)
 * If the process containing the thread has never been seen before, an EVENT_NEW_PROCESS event is created and placed in the events_rb ringbuffer map
+* Adds an entry to the rate_limits map for this process
 
 The Profiler object:
 * Creates a send/receive channel for new processes (new_proc_chan_[send|receive])
@@ -26,6 +27,11 @@ The Profiler object:
     * Profiler::event_new_proc()
       * Profiler::add_proc()
         Which adds the new PID info to the Profiler::procs HashMap of PID => ProcessInfo
+    * TBD: Information on how mappings we need are added to exec_mappings, all others ignored
+    * TBD: Information on how object_files we need are added to object_files
+* Every "session", the collected profiling information is aggregated, possibly sent to backend host, and cleared
+  * As part of this, all of the rate_limits map entries for newly added processes over the session
+    are cleared - otherwise we would stop adding new processes eventually
 
 ## Process Exit/Cleanup
 
@@ -35,7 +41,7 @@ exit() and schedule Profiler.procs and related data structures for cleanup.
 
 Why not clean up immediately when a process exits?  Because pending stack samples that must still be
 unwound are a real possibility for at least 1 or 2 more collection sessions.  Thus we schedule such
-cleanup for 2 sessions later.
+cleanup for (at least) 2 sessions later.
 
 ## Potential Problems
 * Not all processes are created solely via fork(), although we should be immune to this possibility
