@@ -1866,8 +1866,10 @@ impl Profiler {
 
         let mut to_evict = None;
         if should_evict {
+            // Make sure we never pick PID 0 (the kernel) as a victim
             let victim = running_procs
                 .sorted_by(|a, b| a.1.last_used.cmp(&b.1.last_used))
+                .filter(|e| e.0 != 0)
                 .next();
 
             if let Some((pid, _)) = victim {
@@ -1877,10 +1879,6 @@ impl Profiler {
         std::mem::drop(procs);
 
         if let Some(pid) = to_evict {
-            if pid == 0 {
-                debug!("Never evict pid 0");
-                return false;
-            }
             debug!("evicting pid {}", pid);
             self.handle_process_exit(pid, false);
             self.native_unwind_state.last_process_eviction = Instant::now();
