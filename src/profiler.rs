@@ -841,7 +841,7 @@ impl Profiler {
                             }
                         }
                     } else {
-                        debug!("No processes schedule for final deletion this session");
+                        debug!("No processes scheduled for final deletion this session");
                     }
                 },
                 recv(self.raw_sample_receive) -> raw_sample => {
