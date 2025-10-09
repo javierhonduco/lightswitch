@@ -1803,8 +1803,10 @@ impl Profiler {
                 self.new_proc_total += 1;
                 self.new_proc_per_session += 1;
             }
-            Err(_e) => {
+            Err(e) => {
                 // probabaly a procfs race
+                // Well, could be other things too, like eviction failures
+                error!("Failed to add a process: {:?}", e);
             }
         }
     }
@@ -1870,6 +1872,10 @@ impl Profiler {
         std::mem::drop(procs);
 
         if let Some(pid) = to_evict {
+            if pid == 0 {
+                debug!("Never evict pid 0");
+                return false;
+            }
             debug!("evicting pid {}", pid);
             self.handle_process_exit(pid, false);
             self.native_unwind_state.last_process_eviction = Instant::now();
@@ -1882,7 +1888,6 @@ impl Profiler {
         let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
         let maps = proc.maps().map_err(|_| AddProcessError::ProcfsRace)?;
         if !self.maybe_evict_process(true) {
-            error!("AddProcessError::Eviction failed for PID {}", pid);
             return Err(AddProcessError::Eviction);
         }
 
