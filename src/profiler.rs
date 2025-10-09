@@ -821,7 +821,7 @@ impl Profiler {
                     let mut pending_deletion: Vec<Pid> = vec![];
                     loop {
                         let to_delete_vec = self.deletion_scheduler.write().pop_pending();
-                        if to_delete_vec.is_empty() {
+                        if ! to_delete_vec.is_empty() {
                             let pid = match to_delete_vec[0] {
                                 ToDelete::Process(_, pid) => pid,
                             };
@@ -1797,6 +1797,10 @@ impl Profiler {
             return;
         }
 
+        // TODO: There's a problem here - we only increment new_proc_total/
+        //       new_proc_per_session if add_proc() was successful - but
+        //       the count is lower than the actual number in procs - so some
+        //       of the failures are apparently being added anyway?
         match self.add_proc(pid) {
             Ok(()) => {
                 self.add_unwind_info_for_process(pid);
