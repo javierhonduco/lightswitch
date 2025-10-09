@@ -48,8 +48,8 @@ use crate::kernel::get_all_kernel_modules;
 use crate::kernel::KERNEL_PID;
 use crate::perf_events::setup_perf_event;
 use crate::process::{
-    ExecutableMapping, ExecutableMappingType, ExecutableMappings, ObjectFileInfo, Pid, ProcessInfo,
-    ProcessStatus,
+    DeletionScheduler, ExecutableMapping, ExecutableMappingType, ExecutableMappings,
+    ObjectFileInfo, Pid, ProcessInfo, ProcessStatus, ToDelete,
 };
 use crate::profile::*;
 use crate::unwind_info::manager::UnwindInfoManager;
@@ -162,6 +162,7 @@ pub struct Profiler {
     // Baseline for calculating raw_sample collection wall clock time
     // as bpf currently only supports getting the offset since system boot.
     walltime_at_system_boot: u64,
+    deletion_scheduler: Arc<RwLock<DeletionScheduler>>,
 }
 
 pub struct ProfilerConfig {
@@ -531,6 +532,10 @@ impl Profiler {
         let walltime_at_system_boot =
             procfs::boot_time().unwrap().timestamp_nanos_opt().unwrap() as u64;
 
+        // Schedule Dead Processes as reap-able after 2 publishing sessions have elapsed
+        let deletion_scheduler =
+            DeletionScheduler::new(profiler_config.session_duration.checked_mul(2).unwrap());
+
         Profiler {
             cache_dir,
             _links: Vec::new(),
@@ -564,6 +569,7 @@ impl Profiler {
             aggregator: Aggregator::default(),
             metadata_provider,
             walltime_at_system_boot,
+            deletion_scheduler: Arc::new(RwLock::new(deletion_scheduler)),
         }
     }
 
@@ -802,6 +808,41 @@ impl Profiler {
                     debug!("collecting profiles on schedule");
                     let profile = self.collect_profile();
                     self.send_profile(profile);
+                    // Pop off any processes that we've kept around long enough after they exited
+                    // TODO: Do this in a separate thread?
+                    let mut pending_deletion: Vec<Pid> = vec![];
+                    loop {
+                        let to_delete_vec = self.deletion_scheduler.write().pop_pending();
+                        if to_delete_vec.len() != 0 {
+                            let pid = match to_delete_vec[0] {
+                                ToDelete::Process(_, pid) => pid,
+                            };
+                            pending_deletion.push(pid);
+                        } else { break; }
+                    }
+
+                    // TODO: Want to perform the following in another thread, but BPF maps don't
+                    // seem to be reliably Send - for now, perform actual Profiler.procs deletion
+                    // here
+                    let procs_to_reap = pending_deletion.len();
+                    if procs_to_reap > 0 {
+                        let pids_to_del_str = pending_deletion.iter().map(|&n| n.to_string())
+                            .collect::<Vec<String>>()
+                            .join(", ");
+                        debug!("Final deletion of {} exited processes: {}", procs_to_reap, pids_to_del_str);
+                        let mut procs = self.procs.write();
+                        for pid in pending_deletion {
+                            match procs.remove(&pid) {
+                                // TODO: Do more here with exec_mappings and object_files
+                                Some(_proc_info) => (),
+                                None => {
+                                    debug!("could not find process {} that we're trying to delete procs entry for", pid);
+                                },
+                            }
+                        }
+                    } else {
+                        debug!("No processes schedule for final deletion this session");
+                    }
                 },
                 recv(self.raw_sample_receive) -> raw_sample => {
                     if let Ok(raw_sample) = raw_sample {
@@ -854,6 +895,10 @@ impl Profiler {
             Some(proc_info) => {
                 debug!("marking process {} as exited", pid);
                 proc_info.status = ProcessStatus::Exited;
+
+                self.deletion_scheduler
+                    .write()
+                    .add(ToDelete::Process(Instant::now(), pid));
 
                 let err = Self::delete_bpf_process(&self.native_unwinder, pid);
                 if let Err(e) = err {
