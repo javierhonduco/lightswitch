@@ -1797,15 +1797,9 @@ impl Profiler {
             return;
         }
 
-        // TODO: There's a problem here - we only increment new_proc_total/
-        //       new_proc_per_session if add_proc() was successful - but
-        //       the count is lower than the actual number in procs - so some
-        //       of the failures are apparently being added anyway?
         match self.add_proc(pid) {
             Ok(()) => {
                 self.add_unwind_info_for_process(pid);
-                self.new_proc_total += 1;
-                self.new_proc_per_session += 1;
             }
             Err(e) => {
                 // probabaly a procfs race
@@ -1891,7 +1885,11 @@ impl Profiler {
     }
 
     pub fn add_proc(&mut self, pid: Pid) -> Result<(), AddProcessError> {
+        // NOTE: There are 3 places where AddProcessError::ProcfsRace can be returned from this
+        // function, and one of them is *after* the Pid ha been added to Profiler.procs
+        // ProcfsRace #1
         let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
+        // ProcfsRace #2
         let maps = proc.maps().map_err(|_| AddProcessError::ProcfsRace)?;
         if !self.maybe_evict_process(true) {
             return Err(AddProcessError::Eviction);
@@ -2102,7 +2100,14 @@ impl Profiler {
             last_used: Instant::now(),
         };
         self.procs.clone().write().insert(pid, proc_info);
+        // NOTE: due to how ProcfsRace can be returned with different side effects on
+        // Profiler.procs, this is where we increment the number of processes that the
+        // Profiler is actually tracking
+        self.new_proc_total += 1;
+        self.new_proc_per_session += 1;
 
+        // ProcfsRace #3 - This Pid has already been added to self.procs just above, but this
+        // function will still return with an error if ProcfsRaceis returned for any thread
         for thread in proc.tasks().map_err(|_| AddProcessError::ProcfsRace)? {
             match thread {
                 Ok(thread) => {
