@@ -912,7 +912,7 @@ impl Profiler {
             }
         }
         std::mem::drop(procs_guard);
-        let live_pid_count = self.live_pids();
+        let live_pid_count = self.live_pid_count();
         debug!(
             "{} processes tracked, {} actually live",
             running_procs, live_pid_count
@@ -2182,7 +2182,7 @@ impl Profiler {
         self._links = vec![];
     }
 
-    fn live_pids(&mut self) -> usize {
+    fn live_pid_count(&mut self) -> usize {
         let live_pids: Vec<Pid> = procfs::process::all_processes()
             .expect("Cannot read proc")
             .filter_map(|p| match p {
