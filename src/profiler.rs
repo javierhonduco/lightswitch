@@ -870,6 +870,8 @@ impl Profiler {
                         },
                         Ok(TracerEvent::ProcessExit(pid)) => {
                                 self.handle_process_exit(pid, false);
+                                self.exit_proc_total += 1;
+                                self.exit_proc_per_session += 1;
                         },
                         Err(_) => {}
                     }
@@ -1794,6 +1796,8 @@ impl Profiler {
         match self.add_proc(pid) {
             Ok(()) => {
                 self.add_unwind_info_for_process(pid);
+                self.new_proc_total += 1;
+                self.new_proc_per_session += 1;
             }
             Err(_e) => {
                 // probabaly a procfs race
