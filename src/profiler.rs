@@ -1806,7 +1806,12 @@ impl Profiler {
             Err(e) => {
                 // probabaly a procfs race
                 // Well, could be other things too, like eviction failures
-                error!("Failed to add a process: {:?}", e);
+                match e {
+                    AddProcessError::ProcfsRace => (),
+                    _ => {
+                        error!("Failed to add a process: {:?}", e);
+                    }
+                }
             }
         }
     }
