@@ -912,7 +912,11 @@ impl Profiler {
             }
         }
         std::mem::drop(procs_guard);
-        debug!("{} processes are still running", running_procs);
+        let live_pid_count = self.live_pids();
+        debug!(
+            "{} processes tracked, {} actually live",
+            running_procs, live_pid_count
+        );
         debug!(
             "{} Processes have exited and are awaiting FINAL DELETION",
             exited_procs
@@ -2176,6 +2180,24 @@ impl Profiler {
 
     pub fn teardown_perf_events(&mut self) {
         self._links = vec![];
+    }
+
+    fn live_pids(&mut self) -> usize {
+        let live_pids: Vec<Pid> = procfs::process::all_processes()
+            .expect("Cannot read proc")
+            .filter_map(|p| match p {
+                Ok(p) => Some(p.pid()),
+                Err(e) => match e {
+                    procfs::ProcError::NotFound(_) => None, // pid vanished, all is well
+                    procfs::ProcError::Io(_e, _path) => None, // match on path if you care
+                    x => {
+                        warn!("cannot read process due to error {x:?}");
+                        None
+                    }
+                },
+            })
+            .collect();
+        live_pids.len()
     }
 }
 
