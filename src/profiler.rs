@@ -1987,7 +1987,7 @@ impl Profiler {
                             .add_if_not_present(&name, build_id, &exe_path);
                         match res {
                             Ok(_) => {
-                                debug!("debuginfo add_if_not_present succeded {:?}", res);
+                                debug!("debuginfo add_if_not_present succeeded {:?}", res);
                             }
                             Err(e) => {
                                 error!(
