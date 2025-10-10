@@ -1,7 +1,7 @@
 #ifndef __LIGHTSWITCH_LINUX_PAGE_CONSTANTS__
 #define __LIGHTSWITCH_LINUX_PAGE_CONSTANTS__
 
-#define PAGE_SIZE (1UL << 12) // 4KB
+#define PAGE_SIZE (1UL << 12)  // 4KB
 #define PAGE_MASK ~(PAGE_SIZE - 1)
 
 // Values for x86_64 as of 6.0.18-200.
