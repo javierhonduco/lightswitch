@@ -17,7 +17,8 @@ As lightswitch starts up, it sets up eBPF perf events for every online CPU via P
 As stack samples are collected, the on_event() eBPF program:
 * Collects the sample's thread and process info (as stacks are always per thread)
 * If the process containing the thread has never been seen before, an EVENT_NEW_PROCESS event is created and placed in the events_rb ringbuffer map
-* Adds an entry to the rate_limits map for this process
+* Adds an entry to the rate_limits map for each process - to prevent events from many threads of a single
+  process from flooding the system - only the first is needed to ensure the process is known
 
 The Profiler object:
 * Creates a send/receive channel for new processes (new_proc_chan_[send|receive])
