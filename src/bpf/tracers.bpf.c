@@ -7,28 +7,27 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
-
 typedef struct {
     u64 pid_tgid;
 } mmap_data_key_t;
 
 struct {
-  __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
-  __uint(key_size, sizeof(u32));
-  __uint(value_size, sizeof(u32));
-  __uint(max_entries, 0);
+    __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+    __uint(key_size, sizeof(u32));
+    __uint(value_size, sizeof(u32));
+    __uint(max_entries, 0);
 } tracer_events SEC(".maps");
 
 struct {
-  __uint(type, BPF_MAP_TYPE_RINGBUF);
-  __uint(max_entries, 256 * 1024 /* 256 KB */);
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 256 * 1024 /* 256 KB */);
 } tracer_events_rb SEC(".maps");
 
 struct {
-  __uint(type, BPF_MAP_TYPE_HASH);
-  __uint(max_entries, 500);
-  __type(key, mmap_data_key_t);
-  __type(value, u64);
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 500);
+    __type(key, mmap_data_key_t);
+    __type(value, u64);
 } tracked_munmap SEC(".maps");
 
 // Arguments from
@@ -43,10 +42,8 @@ struct munmap_entry_args {
     size_t len;
 };
 
-
 SEC("tracepoint/sched/sched_process_exit")
 int tracer_process_exit(void *ctx) {
-
     struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
     unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
@@ -92,13 +89,13 @@ int tracer_enter_munmap(struct munmap_entry_args *args) {
     // We might not know about some mappings, but also we definitely don't want to notify
     // of non-executable mappings being unmapped.
     mapping_t *mapping = find_mapping(per_process_id, start_address);
-    if (mapping == NULL){
+    if (mapping == NULL) {
         return 0;
     }
 
     // Ensure we didn't get a process entry.
     if (start_address < mapping->begin || start_address >= mapping->end) {
-      return 0;
+        return 0;
     }
 
     mmap_data_key_t key = {
@@ -121,7 +118,7 @@ int tracer_exit_munmap(struct trace_event_raw_sys_exit *ctx) {
     }
 
     int ret = ctx->ret;
-    if (ret != 0)  {
+    if (ret != 0) {
         return 0;
     }
 
