@@ -48,8 +48,8 @@ use crate::kernel::get_all_kernel_modules;
 use crate::kernel::KERNEL_PID;
 use crate::perf_events::setup_perf_event;
 use crate::process::{
-    ExecutableMapping, ExecutableMappingType, ExecutableMappings, ObjectFileInfo, Pid, ProcessInfo,
-    ProcessStatus,
+    DeletionScheduler, ExecutableMapping, ExecutableMappingType, ExecutableMappings,
+    ObjectFileInfo, Pid, ProcessInfo, ProcessStatus, ToDelete,
 };
 use crate::profile::*;
 use crate::unwind_info::manager::UnwindInfoManager;
@@ -162,6 +162,11 @@ pub struct Profiler {
     // Baseline for calculating raw_sample collection wall clock time
     // as bpf currently only supports getting the offset since system boot.
     walltime_at_system_boot: u64,
+    deletion_scheduler: Arc<RwLock<DeletionScheduler>>,
+    new_proc_total: u64,
+    new_proc_per_session: u64,
+    exit_proc_total: u64,
+    exit_proc_per_session: u64,
 }
 
 pub struct ProfilerConfig {
@@ -531,6 +536,10 @@ impl Profiler {
         let walltime_at_system_boot =
             procfs::boot_time().unwrap().timestamp_nanos_opt().unwrap() as u64;
 
+        // Schedule Dead Processes as reap-able after 2 publishing sessions have elapsed
+        let deletion_scheduler =
+            DeletionScheduler::new(profiler_config.session_duration.checked_mul(2).unwrap());
+
         Profiler {
             cache_dir,
             _links: Vec::new(),
@@ -564,6 +573,11 @@ impl Profiler {
             aggregator: Aggregator::default(),
             metadata_provider,
             walltime_at_system_boot,
+            deletion_scheduler: Arc::new(RwLock::new(deletion_scheduler)),
+            new_proc_total: 0,
+            new_proc_per_session: 0,
+            exit_proc_total: 0,
+            exit_proc_per_session: 0,
         }
     }
 
@@ -802,6 +816,44 @@ impl Profiler {
                     debug!("collecting profiles on schedule");
                     let profile = self.collect_profile();
                     self.send_profile(profile);
+                    // Pop off any processes that we've kept around long enough after they exited
+                    // TODO: Do this in a separate thread?
+                    let mut pending_deletion: Vec<Pid> = vec![];
+                    loop {
+                        let to_delete_vec = self.deletion_scheduler.write().pop_pending();
+                        if ! to_delete_vec.is_empty() {
+                            let pid = match to_delete_vec[0] {
+                                ToDelete::Process(_, pid) => pid,
+                            };
+                            pending_deletion.push(pid);
+                        } else { break; }
+                    }
+
+                    // TODO: Want to perform the following in another thread, but BPF maps don't
+                    // seem to be reliably Send - for now, perform actual Profiler.procs deletion
+                    // here
+                    let procs_to_reap = pending_deletion.len();
+                    if procs_to_reap > 0 {
+                        let pids_to_del_str = pending_deletion.iter().map(|&n| n.to_string())
+                            .collect::<Vec<String>>()
+                            .join(", ");
+                        debug!("Final deletion of {} exited processes: {}", procs_to_reap, pids_to_del_str);
+                        let mut procs = self.procs.write();
+                        for pid in pending_deletion {
+                            match procs.remove(&pid) {
+                                // TODO: Do more here with exec_mappings and object_files
+                                Some(_proc_info) => (),
+                                None => {
+                                    debug!("could not find process {} that we're trying to delete procs entry for", pid);
+                                },
+                            }
+                        }
+                        // TODO: Make sure whether we need the following
+                        // std::mem::drop(procs);
+                    } else {
+                        debug!("No processes scheduled for final deletion this session");
+                    }
+                    self.report_resource_consumption();
                 },
                 recv(self.raw_sample_receive) -> raw_sample => {
                     if let Ok(raw_sample) = raw_sample {
@@ -818,6 +870,8 @@ impl Profiler {
                         },
                         Ok(TracerEvent::ProcessExit(pid)) => {
                                 self.handle_process_exit(pid, false);
+                                self.exit_proc_total += 1;
+                                self.exit_proc_per_session += 1;
                         },
                         Err(_) => {}
                     }
@@ -847,6 +901,39 @@ impl Profiler {
         start.elapsed()
     }
 
+    fn report_resource_consumption(&mut self) {
+        let (mut exited_procs, mut running_procs) = (0, 0);
+        let procs_guard = self.procs.read();
+        for (_pid, proc_info) in procs_guard.iter() {
+            if proc_info.status == ProcessStatus::Exited {
+                exited_procs += 1;
+            } else if proc_info.status == ProcessStatus::Running {
+                running_procs += 1;
+            }
+        }
+        std::mem::drop(procs_guard);
+        let live_pid_count = self.live_pid_count();
+        debug!(
+            "{} processes tracked, {} actually live",
+            running_procs, live_pid_count
+        );
+        debug!(
+            "{} Processes have exited and are awaiting FINAL DELETION",
+            exited_procs
+        );
+        debug!(
+            "{} new processes this session, {} new processes since profiler startup",
+            self.new_proc_per_session, self.new_proc_total
+        );
+        debug!(
+            "{} process exits this session; {} process exits since profiler startup",
+            self.exit_proc_per_session, self.exit_proc_total
+        );
+        // Reset per session metrics
+        self.new_proc_per_session = 0;
+        self.exit_proc_per_session = 0;
+    }
+
     pub fn handle_process_exit(&mut self, pid: Pid, partial_write: bool) {
         // TODO: remove ratelimits for this process.
         let mut procs = self.procs.write();
@@ -854,6 +941,10 @@ impl Profiler {
             Some(proc_info) => {
                 debug!("marking process {} as exited", pid);
                 proc_info.status = ProcessStatus::Exited;
+
+                self.deletion_scheduler
+                    .write()
+                    .add(ToDelete::Process(Instant::now(), pid));
 
                 let err = Self::delete_bpf_process(&self.native_unwinder, pid);
                 if let Err(e) = err {
@@ -1710,8 +1801,15 @@ impl Profiler {
             Ok(()) => {
                 self.add_unwind_info_for_process(pid);
             }
-            Err(_e) => {
+            Err(e) => {
                 // probabaly a procfs race
+                // Well, could be other things too, like eviction failures
+                match e {
+                    AddProcessError::ProcfsRace => (),
+                    _ => {
+                        error!("Failed to add a process: {:?}", e);
+                    }
+                }
             }
         }
     }
@@ -1756,6 +1854,7 @@ impl Profiler {
         let should_evict = if if_too_many_procs {
             running_procs.clone().count() >= MAX_PROCESSES as usize
         } else {
+            // TODO: Shouldn't this be false?
             true
         };
 
@@ -1765,9 +1864,10 @@ impl Profiler {
 
         let mut to_evict = None;
         if should_evict {
+            // Make sure we never pick PID 0 (the kernel) as a victim
             let victim = running_procs
                 .sorted_by(|a, b| a.1.last_used.cmp(&b.1.last_used))
-                .next();
+                .find(|e| *e.0 != 0);
 
             if let Some((pid, _)) = victim {
                 to_evict = Some(*pid);
@@ -1785,7 +1885,11 @@ impl Profiler {
     }
 
     pub fn add_proc(&mut self, pid: Pid) -> Result<(), AddProcessError> {
+        // NOTE: There are 3 places where AddProcessError::ProcfsRace can be returned from this
+        // function, and one of them is *after* the Pid ha been added to Profiler.procs
+        // ProcfsRace #1
         let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
+        // ProcfsRace #2
         let maps = proc.maps().map_err(|_| AddProcessError::ProcfsRace)?;
         if !self.maybe_evict_process(true) {
             return Err(AddProcessError::Eviction);
@@ -1892,7 +1996,7 @@ impl Profiler {
                             .add_if_not_present(&name, build_id, &exe_path);
                         match res {
                             Ok(_) => {
-                                debug!("debuginfo add_if_not_present succeded {:?}", res);
+                                debug!("debuginfo add_if_not_present succeeded {:?}", res);
                             }
                             Err(e) => {
                                 error!(
@@ -1996,7 +2100,14 @@ impl Profiler {
             last_used: Instant::now(),
         };
         self.procs.clone().write().insert(pid, proc_info);
+        // NOTE: due to how ProcfsRace can be returned with different side effects on
+        // Profiler.procs, this is where we increment the number of processes that the
+        // Profiler is actually tracking
+        self.new_proc_total += 1;
+        self.new_proc_per_session += 1;
 
+        // ProcfsRace #3 - This Pid has already been added to self.procs just above, but this
+        // function will still return with an error if ProcfsRaceis returned for any thread
         for thread in proc.tasks().map_err(|_| AddProcessError::ProcfsRace)? {
             match thread {
                 Ok(thread) => {
@@ -2085,6 +2196,24 @@ impl Profiler {
 
     pub fn teardown_perf_events(&mut self) {
         self._links = vec![];
+    }
+
+    fn live_pid_count(&mut self) -> usize {
+        let live_pids: Vec<Pid> = procfs::process::all_processes()
+            .expect("Cannot read proc")
+            .filter_map(|p| match p {
+                Ok(p) => Some(p.pid()),
+                Err(e) => match e {
+                    procfs::ProcError::NotFound(_) => None, // pid vanished, all is well
+                    procfs::ProcError::Io(_e, _path) => None, // match on path if you care
+                    x => {
+                        warn!("cannot read process due to error {x:?}");
+                        None
+                    }
+                },
+            })
+            .collect();
+        live_pids.len()
     }
 }
 
