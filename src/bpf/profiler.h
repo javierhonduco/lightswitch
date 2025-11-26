@@ -24,13 +24,13 @@ _Static_assert(MAX_TAIL_CALLS *MAX_STACK_DEPTH_PER_PROGRAM >= MAX_STACK_DEPTH,
 #define MAX_OUTER_UNWIND_MAP_ENTRIES 3000
 
 #define UNWIND_INFO_PAGE_BIT_LEN 16
-#define UNWIND_INFO_PAGE_SIZE (1 << UNWIND_INFO_PAGE_BIT_LEN)
-#define PREVIOUS_PAGE(address) (address - UNWIND_INFO_PAGE_SIZE)
+#define UNWIND_INFO_PAGE_SIZE    (1 << UNWIND_INFO_PAGE_BIT_LEN)
+#define PREVIOUS_PAGE(address)   (address - UNWIND_INFO_PAGE_SIZE)
 _Static_assert(MAX_BINARY_SEARCH_DEPTH >= UNWIND_INFO_PAGE_BIT_LEN, "unwind table is big enough");
-#define HIGH_PC_MASK 0x0000FFFFFFFF0000LLU
-#define LOW_PC_MASK 0x000000000000FFFFLLU
+#define HIGH_PC_MASK  0x0000FFFFFFFF0000LLU
+#define LOW_PC_MASK   0x000000000000FFFFLLU
 #define HIGH_PC(addr) (addr & HIGH_PC_MASK)
-#define LOW_PC(addr) (addr & LOW_PC_MASK)
+#define LOW_PC(addr)  (addr & LOW_PC_MASK)
 
 #define MAX_EXECUTABLE_TO_PAGE_ENTRIES 500 * 1000
 
@@ -49,27 +49,27 @@ typedef struct {
 } page_value_t;
 
 // Values for the unwind table's CFA type.
-#define CFA_TYPE_RBP 1
-#define CFA_TYPE_RSP 2
-#define CFA_TYPE_CFA_TYPE_UNSUP_EXP 3
-#define CFA_TYPE_PLT1 4
-#define CFA_TYPE_PLT2 5
-#define CFA_TYPE_DEREF_AND_ADD 6
-#define CFA_TYPE_END_OF_FDE_MARKER 7
+#define CFA_TYPE_RBP                   1
+#define CFA_TYPE_RSP                   2
+#define CFA_TYPE_CFA_TYPE_UNSUP_EXP    3
+#define CFA_TYPE_PLT1                  4
+#define CFA_TYPE_PLT2                  5
+#define CFA_TYPE_DEREF_AND_ADD         6
+#define CFA_TYPE_END_OF_FDE_MARKER     7
 #define CFA_TYPE_UNSUP_REGISTER_OFFSET 8  // not used in the unwinder yet.
-#define CFA_TYPE_OFFSET_DID_NOT_FIT 9
+#define CFA_TYPE_OFFSET_DID_NOT_FIT    9
 
 // Values for the unwind table's frame pointer type.
-#define RBP_TYPE_UNCHANGED 0
-#define RBP_TYPE_OFFSET 1
-#define RBP_TYPE_REGISTER 2
-#define RBP_TYPE_EXPRESSION 3
+#define RBP_TYPE_UNCHANGED                0
+#define RBP_TYPE_OFFSET                   1
+#define RBP_TYPE_REGISTER                 2
+#define RBP_TYPE_EXPRESSION               3
 #define RBP_TYPE_UNDEFINED_RETURN_ADDRESS 4
-#define RBP_TYPE_OFFSET_DID_NOT_FIT 5
+#define RBP_TYPE_OFFSET_DID_NOT_FIT       5
 
 // Binary search error codes.
-#define BINARY_SEARCH_DEFAULT 0xFABADAFABADAULL
-#define BINARY_SEARCH_SHOULD_NEVER_HAPPEN 0xDEADBEEFDEADBEEFULL
+#define BINARY_SEARCH_DEFAULT              0xFABADAFABADAULL
+#define BINARY_SEARCH_SHOULD_NEVER_HAPPEN  0xDEADBEEFDEADBEEFULL
 #define BINARY_SEARCH_EXHAUSTED_ITERATIONS 0xBADFADBADFADBADULL
 
 struct lightswitch_config_t {
