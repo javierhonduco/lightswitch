@@ -31,13 +31,13 @@ impl exec_mappings_key {
         }
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let p: &Self = Plain::from_bytes(bytes);
-        Self {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, plain::Error> {
+        let p: &Self = plain::from_bytes(bytes)?;
+        Ok(Self {
             prefix_len: p.prefix_len,
             pid: u32::from_be(p.pid),
             data: u64::from_be(p.data),
-        }
+        })
     }
 }
 
