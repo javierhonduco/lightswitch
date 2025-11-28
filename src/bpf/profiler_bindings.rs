@@ -30,6 +30,15 @@ impl exec_mappings_key {
             data: address.to_be(),
         }
     }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let p: &Self = Plain::from_bytes(bytes);
+        Self {
+            prefix_len: p.prefix_len,
+            pid: u32::from_be(p.pid),
+            data: u64::from_be(p.data),
+        }
+    }
 }
 
 impl Add for unwinder_stats_t {
