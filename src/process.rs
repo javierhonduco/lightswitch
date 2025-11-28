@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 use std::time::Instant;
 
 use tracing::debug;
@@ -156,9 +157,168 @@ impl ObjectFileInfo {
     }
 }
 
+use std::collections::BinaryHeap;
+
+pub struct DeletionScheduler {
+    heap: BinaryHeap<ToDelete>,
+    // Duration after which an item will be pop_pending-able
+    pending_after: Duration,
+}
+
+impl DeletionScheduler {
+    pub fn new(pending_after: Duration) -> Self {
+        DeletionScheduler {
+            heap: BinaryHeap::new(),
+            pending_after,
+        }
+    }
+
+    pub fn add(&mut self, item: ToDelete) {
+        self.heap.push(item)
+    }
+
+    pub fn peek(&self) -> Option<&ToDelete> {
+        self.heap.peek()
+    }
+
+    pub fn pop(&mut self) -> Option<ToDelete> {
+        self.heap.pop()
+    }
+
+    pub fn pop_pending(&mut self) -> Vec<ToDelete> {
+        let mut r = Vec::new();
+
+        match self.peek() {
+            Some(ToDelete::Process(time, _, _)) => {
+                if time.elapsed() > self.pending_after {
+                    r.push(self.pop().unwrap())
+                }
+            }
+            None => {}
+        }
+
+        r
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum ToDelete {
+    // The bool is whether the deletion is of a partial_write or not
+    Process(Instant, Pid, bool),
+}
+
+impl PartialOrd for ToDelete {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ToDelete {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let a = match self {
+            ToDelete::Process(time, _, _) => time,
+        };
+        let b = match other {
+            ToDelete::Process(time, _, _) => time,
+        };
+        // We want a reversed comparison - the older it is, the more we want it
+        b.cmp(a)
+    }
+}
+
+impl ToDelete {
+    pub fn from_pid(pid: Pid, when: Option<Instant>, partial_write: bool) -> Self {
+        Self::Process(when.unwrap_or(Instant::now()), pid, partial_write)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_schedule_deletion() {
+        let mut d = DeletionScheduler::new(Duration::from_secs(5));
+        let base_time = Instant::now();
+        d.add(ToDelete::Process(
+            base_time + Duration::from_secs(0),
+            314,
+            true,
+        ));
+        d.add(ToDelete::Process(
+            base_time + Duration::from_secs(100),
+            482,
+            true,
+        ));
+        d.add(ToDelete::Process(
+            base_time + Duration::from_secs(200),
+            572,
+            true,
+        ));
+
+        assert!(matches!(d.pop(), Some(ToDelete::Process(_, 314, true))));
+        assert!(matches!(d.pop(), Some(ToDelete::Process(_, 482, true))));
+        assert!(matches!(d.pop(), Some(ToDelete::Process(_, 572, true))));
+
+        assert_eq!(d.pop_pending().len(), 0);
+
+        d.add(ToDelete::Process(
+            base_time - Duration::from_secs(4),
+            4,
+            true,
+        ));
+        d.add(ToDelete::Process(
+            base_time - Duration::from_secs(0),
+            0,
+            true,
+        ));
+        d.add(ToDelete::Process(
+            base_time - Duration::from_secs(6),
+            6,
+            true,
+        ));
+        d.add(ToDelete::Process(
+            base_time - Duration::from_secs(20),
+            20,
+            true,
+        ));
+        d.add(ToDelete::Process(
+            base_time - Duration::from_secs(5),
+            5,
+            true,
+        ));
+        d.add(ToDelete::Process(
+            base_time - Duration::from_secs(1),
+            1,
+            true,
+        ));
+
+        assert_eq!(
+            d.pop_pending(),
+            vec![ToDelete::Process(
+                base_time - Duration::from_secs(20),
+                20,
+                true
+            )]
+        );
+        assert_eq!(
+            d.pop_pending(),
+            vec![ToDelete::Process(
+                base_time - Duration::from_secs(6),
+                6,
+                true
+            )]
+        );
+        assert_eq!(
+            d.pop_pending(),
+            vec![ToDelete::Process(
+                base_time - Duration::from_secs(5),
+                5,
+                true
+            )]
+        );
+        assert_eq!(d.pop_pending(), vec![]);
+    }
 
     #[test]
     fn test_address_normalization() {
