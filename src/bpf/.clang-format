@@ -1,0 +1,8 @@
+---
+BasedOnStyle: Google
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+ColumnLimit: 0
+IndentWidth: 4
+SortIncludes: false
+AlignConsecutiveMacros: true

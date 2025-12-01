@@ -4,29 +4,29 @@
 #include <bpf/bpf_tracing.h>
 
 struct {
-  __uint(type, BPF_MAP_TYPE_LPM_TRIE);
-  __type(key, struct exec_mappings_key);
-  __type(value, mapping_t);
-  __uint(map_flags, BPF_F_NO_PREALLOC);
-  __uint(max_entries, MAX_MAPPINGS);
+    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+    __type(key, struct exec_mappings_key);
+    __type(value, mapping_t);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __uint(max_entries, MAX_MAPPINGS);
 } exec_mappings SEC(".maps");
 
 struct {
-  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-  __uint(max_entries, 1);
-  __type(key, u32);
-  __type(value, struct unwinder_stats_t);
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, u32);
+    __type(value, struct unwinder_stats_t);
 } percpu_stats SEC(".maps");
 
-#define DEFINE_COUNTER(__func__name)                                           \
-  static void bump_unwind_##__func__name() {                                   \
-    u32 zero = 0;                                                              \
-    struct unwinder_stats_t *unwinder_stats =                                  \
-        bpf_map_lookup_elem(&percpu_stats, &zero);                             \
-    if (unwinder_stats != NULL) {                                              \
-      unwinder_stats->__func__name++;                                          \
-    }                                                                          \
-  }
+#define DEFINE_COUNTER(__func__name)                   \
+    static void bump_unwind_##__func__name() {         \
+        u32 zero = 0;                                  \
+        struct unwinder_stats_t *unwinder_stats =      \
+            bpf_map_lookup_elem(&percpu_stats, &zero); \
+        if (unwinder_stats != NULL) {                  \
+            unwinder_stats->__func__name++;            \
+        }                                              \
+    }
 
 DEFINE_COUNTER(total);
 DEFINE_COUNTER(success_dwarf);
