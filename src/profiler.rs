@@ -1190,7 +1190,7 @@ impl Profiler {
 
     fn add_bpf_process(bpf: &ProfilerSkel, pid: Pid) -> Result<(), libbpf_rs::Error> {
         let key = exec_mappings_key::new(
-            pid as u32, 0x0, 32, // pid bits
+            pid, 0x0, 32, // pid bits
         );
         Self::add_bpf_mapping(
             bpf,
@@ -1213,11 +1213,8 @@ impl Profiler {
     ) -> Result<(), libbpf_rs::Error> {
         for mapping in mappings {
             for address_range in summarize_address_range(mapping.begin, mapping.end - 1) {
-                let key = exec_mappings_key::new(
-                    pid as u32,
-                    address_range.addr,
-                    32 + address_range.prefix_len,
-                );
+                let key =
+                    exec_mappings_key::new(pid, address_range.addr, 32 + address_range.prefix_len);
 
                 Self::add_bpf_mapping(bpf, &key, mapping)?
             }
@@ -1233,11 +1230,8 @@ impl Profiler {
         partial_write: bool,
     ) {
         for address_range in summarize_address_range(mapping_begin, mapping_end - 1) {
-            let key = exec_mappings_key::new(
-                pid as u32,
-                address_range.addr,
-                32 + address_range.prefix_len,
-            );
+            let key =
+                exec_mappings_key::new(pid, address_range.addr, 32 + address_range.prefix_len);
 
             // TODO keep track of errors
             let res = bpf
@@ -1257,7 +1251,7 @@ impl Profiler {
 
     fn delete_bpf_process(bpf: &ProfilerSkel, pid: Pid) -> Result<(), libbpf_rs::Error> {
         let key = exec_mappings_key::new(
-            pid as u32, 0x0, 32, // pid bits
+            pid, 0x0, 32, // pid bits
         );
         bpf.maps
             .exec_mappings

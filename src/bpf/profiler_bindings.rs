@@ -17,7 +17,7 @@ unsafe impl Plain for page_key_t {}
 unsafe impl Plain for page_value_t {}
 
 impl exec_mappings_key {
-    pub fn new(pid: u32, address: u64, prefix_len: u32) -> Self {
+    pub fn new(pid: i32, address: u64, prefix_len: u32) -> Self {
         let key_size_bits = std::mem::size_of::<Self>() * 8;
         assert!(
             prefix_len <= key_size_bits.try_into().unwrap(),
