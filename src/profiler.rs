@@ -1765,9 +1765,10 @@ impl Profiler {
 
         let mut to_evict = None;
         if should_evict {
+            // Make sure we never pick KERNEL_PID as an eviction victim
             let victim = running_procs
                 .sorted_by(|a, b| a.1.last_used.cmp(&b.1.last_used))
-                .next();
+                .find(|e| *e.0 != KERNEL_PID);
 
             if let Some((pid, _)) = victim {
                 to_evict = Some(*pid);
