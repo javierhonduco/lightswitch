@@ -118,7 +118,7 @@ mod tests {
                 exec_mappings_key::new(13130, address_range.addr, 32 + address_range.prefix_len);
             let key_as_bytes = unsafe { plain::as_bytes(&key) };
             // Convert key back from bytes and make sure it's right
-            let key_back_from_bytes = exec_mappings_key::from_bytes(&key_as_bytes).unwrap();
+            let key_back_from_bytes = exec_mappings_key::from_bytes(key_as_bytes).unwrap();
             assert_eq!(key_back_from_bytes.pid, 13130);
             assert_eq!(
                 key_back_from_bytes.prefix_len,
