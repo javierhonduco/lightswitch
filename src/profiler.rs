@@ -1627,14 +1627,9 @@ impl Profiler {
             return false;
         }
 
-        // We should print informational logs if we're going to need to evict for now
+        // We should print info log if we're going to need to evict for now
         if to_free_mb > 0 {
             info!(
-                "unwind information size to free {} MB (used {} MB / {} MB)",
-                to_free_mb, total_memory_used_mb, max_memory_mb
-            );
-        } else {
-            debug!(
                 "unwind information size to free {} MB (used {} MB / {} MB)",
                 to_free_mb, total_memory_used_mb, max_memory_mb
             );
