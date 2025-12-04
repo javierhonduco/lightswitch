@@ -1595,7 +1595,7 @@ impl Profiler {
     }
 
     /// Evict executables if the 'outer' map is full or if the max memory is exceeded. Note that
-    /// the memory accounting is approximate. If returns whether the unwind information can
+    /// the memory accounting is approximate. It returns whether the unwind information can
     /// be added to added BPF maps.
     ///
     ///  * `unwind_info_len`: The number of unwind information rows that will be added.
@@ -1627,15 +1627,18 @@ impl Profiler {
             return false;
         }
 
-        debug!(
-            "unwind information size to free {} MB (used {} MB / {} MB)",
-            to_free_mb, total_memory_used_mb, max_memory_mb
-        );
+        // We should print info log if we're going to need to evict for now
+        if to_free_mb > 0 {
+            info!(
+                "unwind information size to free {} MB (used {} MB / {} MB)",
+                to_free_mb, total_memory_used_mb, max_memory_mb
+            );
+        }
 
         // Figure out what are the unwind info we should evict to stay below the memory limit.
         let mut could_be_freed_mb = 0;
-        for (executable_id, _) in self.last_used_executables() {
-            let unwind_size_mb = Self::unwind_info_size_mb(unwind_info_len);
+        for (executable_id, executable_info) in self.last_used_executables() {
+            let unwind_size_mb = Self::unwind_info_size_mb(executable_info.unwind_info_len);
             if could_be_freed_mb >= to_free_mb {
                 break;
             }
