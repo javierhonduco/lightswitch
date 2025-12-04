@@ -17,7 +17,7 @@ unsafe impl Plain for page_key_t {}
 unsafe impl Plain for page_value_t {}
 
 impl exec_mappings_key {
-    pub fn new(pid: u32, address: u64, prefix_len: u32) -> Self {
+    pub fn new(pid: i32, address: u64, prefix_len: u32) -> Self {
         let key_size_bits = std::mem::size_of::<Self>() * 8;
         assert!(
             prefix_len <= key_size_bits.try_into().unwrap(),
@@ -29,6 +29,15 @@ impl exec_mappings_key {
             pid: pid.to_be(),
             data: address.to_be(),
         }
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, plain::Error> {
+        let p: &Self = plain::from_bytes(bytes)?;
+        Ok(Self {
+            prefix_len: p.prefix_len,
+            pid: i32::from_be(p.pid),
+            data: u64::from_be(p.data),
+        })
     }
 }
 
@@ -85,5 +94,23 @@ impl From<&CompactUnwindRow> for stack_unwind_row_t {
             rbp_type: row.rbp_type as u8,
             rbp_offset: row.rbp_offset,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::bpf::profiler_bindings::exec_mappings_key;
+
+    #[test]
+    fn exec_mappings_key_from_bytes() {
+        let test_addr = 140136879489024;
+        let test_prefix_len = 46;
+        let key = exec_mappings_key::new(13130, test_addr, 32 + test_prefix_len);
+        let key_as_bytes = unsafe { plain::as_bytes(&key) };
+        // Convert key back from bytes and make sure it's right
+        let key_back_from_bytes = exec_mappings_key::from_bytes(key_as_bytes).unwrap();
+        assert_eq!(key_back_from_bytes.pid, 13130);
+        assert_eq!(key_back_from_bytes.prefix_len, 32 + test_prefix_len);
+        assert_eq!(key_back_from_bytes.data, test_addr);
     }
 }
