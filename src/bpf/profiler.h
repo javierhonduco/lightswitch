@@ -129,7 +129,8 @@ typedef struct {
 // in the kernel in struct bpf_lpm_trie_key.
 struct exec_mappings_key {
     u32 prefix_len;
-    u32 pid;
+    // Per /usr/include/bits/typesizes.h, __PID_T_TYPE is S32 (i32 in Rust)
+    s32 pid;
     u64 data;
 };
 
