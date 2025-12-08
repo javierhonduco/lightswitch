@@ -69,8 +69,8 @@ impl Ord for ToDelete {
 }
 
 impl ToDelete {
-    pub fn from_pid(pid: Pid, when: Option<Instant>, partial_write: bool) -> Self {
-        Self::Process(when.unwrap_or(Instant::now()), pid, partial_write)
+    pub fn from_pid(pid: Pid, when: Instant, partial_write: bool) -> Self {
+        Self::Process(when, pid, partial_write)
     }
 }
 
