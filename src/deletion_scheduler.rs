@@ -7,6 +7,12 @@ pub struct DeletionScheduler {
     heap: BinaryHeap<ToDelete>,
 }
 
+impl Default for DeletionScheduler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DeletionScheduler {
     pub fn new() -> Self {
         DeletionScheduler {
@@ -45,6 +51,7 @@ impl DeletionScheduler {
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum ToDelete {
+    // The Instant is the moment we track elapsed time from
     // The bool is whether the deletion is of a partial_write or not
     Process(Instant, Pid, bool),
 }
