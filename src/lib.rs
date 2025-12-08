@@ -2,6 +2,7 @@ pub mod aggregator;
 pub mod bpf;
 pub mod collector;
 pub mod debug_info;
+pub mod deletion_scheduler;
 pub mod kernel;
 pub mod ksym;
 pub mod perf_events;
