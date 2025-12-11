@@ -916,7 +916,7 @@ impl Profiler {
             .collect();
         info!("There are {} PIDs with mappings", pids_with_mappings.len());
         // - How many mappings per PID (mappings_by_pid HashMap)
-        let mut mappings_by_pid: HashMap<u32, u32> = HashMap::new();
+        let mut mappings_by_pid: HashMap<i32, u32> = HashMap::new();
         for key in self.native_unwinder.maps.exec_mappings.keys() {
             let pid = exec_mappings_key::from_bytes(&key).unwrap().pid;
             mappings_by_pid
@@ -952,12 +952,9 @@ impl Profiler {
         // If we know about this PID, mark it as having exited.  If it lived a short enough time
         // that we didn't start tracking its exit is being handled, it won't matter
         let mut procs = self.procs.write();
-        match procs.get_mut(&pid) {
-            Some(proc_info) => {
-                debug!("marking process {} as exited", pid);
-                proc_info.status = ProcessStatus::Exited;
-            }
-            None => {} // Nothing to do
+        if let Some(proc_info) = procs.get_mut(&pid) {
+            debug!("marking process {} as exited", pid);
+            proc_info.status = ProcessStatus::Exited;
         }
     }
 
@@ -2169,7 +2166,7 @@ impl Profiler {
                         // Make a note of how many mappings we had recorded/stored for
                         // each PID, for comparison with how many actually exist for
                         // each PID when we check at the end
-                        let mapping_count = proc_info.mappings.0.iter().count();
+                        let mapping_count = proc_info.mappings.0.len();
                         // How many mappings for the PID we "know" about
                         debug!("PID {} had {} known mappings", pid, mapping_count);
                         for mapping in &mut proc_info.mappings.0 {
@@ -2224,12 +2221,12 @@ impl Profiler {
                             let exec_mappings_key {
                                 pid: found_pid,
                                 data: summarized_addr,
-                                prefix_len: prefix_len,
+                                prefix_len,
                             } = key_from_bytes;
                             // let found_pid = key_from_bytes.pid;
                             // let summarized_addr = key_from_bytes.data;
                             // let prefix_len = key_from_bytes.prefix_len;
-                            if found_pid == pid.try_into().unwrap() {
+                            if found_pid == pid {
                                 mappings_to_delete.push(key);
                                 mappings_by_pid
                                     .entry(pid.try_into().unwrap())
