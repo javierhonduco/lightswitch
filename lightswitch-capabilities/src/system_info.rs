@@ -57,6 +57,9 @@ pub enum SystemInfoError {
 
     #[error("BPF feature detection failed, err={0}")]
     ErrorDetectingBpfFeatures(String),
+
+    #[error("BSS section is none")]
+    ErrorBssIsNone,
 }
 
 struct DroppableFiledescriptor {
@@ -231,22 +234,24 @@ fn check_bpf_features() -> Result<BpfFeatures> {
     let skel_builder = FeaturesSkelBuilder::default();
     let mut a = MaybeUninit::uninit();
 
-    let open_skel = match skel_builder.open(&mut a) {
-        Ok(open_skel) => open_skel,
-        Err(err) => return Err(SystemInfoError::ErrorDetectingBpfFeatures(err.to_string()).into()),
-    };
-    let mut bpf_features = match open_skel.load() {
-        Ok(bpf_features) => bpf_features,
-        Err(err) => return Err(SystemInfoError::ErrorDetectingBpfFeatures(err.to_string()).into()),
-    };
-    match bpf_features.attach() {
-        Ok(_) => {}
-        Err(err) => return Err(SystemInfoError::ErrorDetectingBpfFeatures(err.to_string()).into()),
-    };
+    let open_skel = skel_builder
+        .open(&mut a)
+        .map_err(|e| SystemInfoError::ErrorDetectingBpfFeatures(e.to_string()))?;
+
+    let mut bpf_features = open_skel
+        .load()
+        .map_err(|e| SystemInfoError::ErrorDetectingBpfFeatures(e.to_string()))?;
+    bpf_features
+        .attach()
+        .map_err(|e| SystemInfoError::ErrorDetectingBpfFeatures(e.to_string()))?;
 
     thread::sleep(Duration::from_millis(1));
 
-    let bpf_features_bss = bpf_features.maps.bss_data;
+    let bpf_features_bss = bpf_features
+        .maps
+        .bss_data
+        .ok_or(SystemInfoError::ErrorBssIsNone)?;
+
     if !bpf_features_bss.feature_check_done {
         warn!("Failed to detect available bpf features");
         return Ok(BpfFeatures {
