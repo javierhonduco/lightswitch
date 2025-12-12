@@ -70,12 +70,6 @@ impl Ord for ToDelete {
     }
 }
 
-impl ToDelete {
-    pub fn from_pid(pid: Pid, when: Instant, partial_write: bool) -> Self {
-        Self::Process(when, pid, partial_write)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
