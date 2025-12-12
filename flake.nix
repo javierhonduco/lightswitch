@@ -26,10 +26,10 @@
             nativeBuildInputs = attrs.nativeBuildInputs ++ [ pkgs.pkg-config ];
           });
           buildInputs = with pkgs; [
-            llvmPackages_16.clang
-            llvmPackages_16.libcxx
-            llvmPackages_16.libclang
-            llvmPackages_16.lld
+            llvmPackages_19.clang
+            llvmPackages_19.libcxx
+            llvmPackages_19.libclang
+            llvmPackages_19.lld
             elfutils'
             zlib.static
             zlib.dev
@@ -48,7 +48,7 @@
             buildInputs = buildInputs;
             nativeBuildInputs = nativeBuildInputs;
             hardeningDisable = [ "all" ];
-            LIBCLANG_PATH = with pkgs; lib.makeLibraryPath [ llvmPackages_16.libclang ];
+            LIBCLANG_PATH = with pkgs; lib.makeLibraryPath [ llvmPackages_19.libclang ];
             LIBBPF_SYS_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [ zlib.static elfutils' ];
           };
         in
@@ -97,7 +97,7 @@
               just
             ];
             hardeningDisable = [ "all" ];
-            LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_16.libclang ];
+            LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_19.libclang ];
             LIBBPF_SYS_LIBRARY_PATH = lib.makeLibraryPath [ zlib.static elfutils' ];
             RUST_GDB = "${gdb}/bin/gdb";
           };
