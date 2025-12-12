@@ -1,0 +1,29 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+.github
+.jj
+
+# Nix files
+flake.nix
+flake.lock
+.envrc
+.direnv
+
+# Build artifacts
+target/
+*.svg
+flame.svg
+
+# Documentation and tests
+docs/
+README.md
+LICENSE-MIT
+vm.nix
+justfile
+
+# Development files
+benches/
+tests/
+*.md
