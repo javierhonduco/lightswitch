@@ -10,7 +10,7 @@ use memmap2::Mmap;
 use object::Architecture;
 use object::{Object, ObjectSection};
 use thiserror::Error;
-use tracing::{debug, error, span, Level};
+use tracing::{debug, span, Level};
 
 use crate::unwind_info::optimize::remove_redundant;
 use crate::unwind_info::optimize::remove_unnecesary_markers;
