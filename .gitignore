@@ -5,3 +5,4 @@ profile.pb
 .vmtest.log
 /result
 .vscode/
+.direnv/
