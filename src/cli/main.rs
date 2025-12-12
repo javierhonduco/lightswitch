@@ -72,7 +72,7 @@ fn start_deadlock_detector() {
         for deadlock in parking_lot::deadlock::check_deadlock() {
             for deadlock in deadlock {
                 eprintln!(
-                    "Found a deadlock! {}: {:?}",
+                    "Found a deadlock! {:?}: {:?}",
                     deadlock.thread_id(),
                     deadlock.backtrace()
                 );
@@ -350,6 +350,7 @@ mod tests {
 
     #[test]
     fn cli_help() {
+        #[allow(deprecated)]
         let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
 
         cmd.arg("--help");
