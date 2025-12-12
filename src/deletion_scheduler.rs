@@ -3,14 +3,9 @@ use std::collections::BinaryHeap;
 use std::time::Duration;
 use std::time::Instant;
 
+#[derive(Default)]
 pub struct DeletionScheduler {
     heap: BinaryHeap<ToDelete>,
-}
-
-impl Default for DeletionScheduler {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl DeletionScheduler {
@@ -72,12 +67,6 @@ impl Ord for ToDelete {
         };
         // We want a reversed comparison - the older it is, the more we want it
         b.cmp(a)
-    }
-}
-
-impl ToDelete {
-    pub fn from_pid(pid: Pid, when: Instant, partial_write: bool) -> Self {
-        Self::Process(when, pid, partial_write)
     }
 }
 
