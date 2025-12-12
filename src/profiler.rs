@@ -337,15 +337,18 @@ impl Profiler {
             .rate_limits
             .set_max_entries(profiler_config.mapsize_rate_limits)
             .expect("Unable to set rate_limits map max_entries");
-        open_skel
+
+        let rodata = open_skel
             .maps
             .rodata_data
+            .as_mut()
+            .expect(".rodata must be present");
+
+        rodata
             .lightswitch_config
             .verbose_logging
             .write(profiler_config.bpf_logging);
-        open_skel
-            .maps
-            .rodata_data
+        rodata
             .lightswitch_config
             .use_ring_buffers
             .write(profiler_config.use_ring_buffers);
@@ -492,15 +495,17 @@ impl Profiler {
             .exec_mappings
             .reuse_fd(exec_mappings_fd)
             .expect("reuse exec_mappings");
-        open_tracers
+
+        let rodata = open_tracers
             .maps
             .rodata_data
+            .as_mut()
+            .expect(".rodata must be present");
+        rodata
             .lightswitch_config
             .verbose_logging
             .write(profiler_config.bpf_logging);
-        open_tracers
-            .maps
-            .rodata_data
+        rodata
             .lightswitch_config
             .use_ring_buffers
             .write(profiler_config.use_ring_buffers);
