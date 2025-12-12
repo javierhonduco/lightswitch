@@ -3,14 +3,9 @@ use std::collections::BinaryHeap;
 use std::time::Duration;
 use std::time::Instant;
 
+#[derive(Default)]
 pub struct DeletionScheduler {
     heap: BinaryHeap<ToDelete>,
-}
-
-impl Default for DeletionScheduler {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl DeletionScheduler {
