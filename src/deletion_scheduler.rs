@@ -10,9 +10,7 @@ pub struct DeletionScheduler {
 
 impl DeletionScheduler {
     pub fn new() -> Self {
-        DeletionScheduler {
-            heap: BinaryHeap::new(),
-        }
+        Self::default()
     }
 
     pub fn add(&mut self, item: ToDelete) {
