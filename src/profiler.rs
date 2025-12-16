@@ -886,6 +886,7 @@ impl Profiler {
     }
 
     fn report_resource_consumption(&mut self) {
+        let _span = span!(Level::INFO, "report_resource_consumption").entered();
         // Static reference to exec_mappings max entries count
         let exec_mappings_max_entries = *self.get_exec_mappings_max_entries();
         let (mut exited_procs, mut running_procs) = (0, 0);
