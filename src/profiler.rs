@@ -17,6 +17,7 @@ use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -870,14 +871,29 @@ impl Profiler {
         start.elapsed()
     }
 
+    fn get_exec_mappings_max_entries(&mut self) -> &'static u32 {
+        // Since the max entries for an eBPF map should be fixed, only grab it once
+        static VALUE: OnceLock<u32> = OnceLock::new();
+        VALUE.get_or_init(|| {
+            self.native_unwinder
+                .maps
+                .exec_mappings
+                .info()
+                .expect("Should be able to get info about exec_mappings map")
+                .info
+                .max_entries
+        })
+    }
+
     fn report_resource_consumption(&mut self) {
+        // Static reference to exec_mappings max entries count
+        let exec_mappings_max_entries = *self.get_exec_mappings_max_entries();
         let (mut exited_procs, mut running_procs) = (0, 0);
         let procs_guard = self.procs.read();
-        for (_pid, proc_info) in procs_guard.iter() {
-            if proc_info.status == ProcessStatus::Exited {
-                exited_procs += 1;
-            } else if proc_info.status == ProcessStatus::Running {
-                running_procs += 1;
+        for proc_info in procs_guard.values() {
+            match proc_info.status {
+                ProcessStatus::Exited => exited_procs += 1,
+                ProcessStatus::Running => running_procs += 1,
             }
         }
         std::mem::drop(procs_guard);
@@ -887,7 +903,7 @@ impl Profiler {
             running_procs, live_pid_count
         );
         info!(
-            "{} Processes have exited and are awaiting FINAL DELETION",
+            "{} Processes have exited and are awaiting final deletion",
             exited_procs
         );
         info!(
@@ -901,13 +917,7 @@ impl Profiler {
         info!(
             "exec_mappings usage: {}/{}",
             self.native_unwinder.maps.exec_mappings.keys().count(),
-            self.native_unwinder
-                .maps
-                .exec_mappings
-                .info()
-                .unwrap()
-                .info
-                .max_entries
+            exec_mappings_max_entries
         );
         // DEBUG exec_mappings usage:
         // - Total PIDs represented (pids_with_mappings Vec)
@@ -916,20 +926,27 @@ impl Profiler {
             .maps
             .exec_mappings
             .keys()
-            .map(|key| exec_mappings_key::from_bytes(&key).unwrap().pid)
+            .filter_map(|key| match exec_mappings_key::from_bytes(&key) {
+                // Keep the PID from the exec_mappings_key that converted
+                Ok(map_key) => Some(map_key.pid),
+                Err(e) => {
+                    error!("exec_mappings_key::from_bytes failed: {:?}", e);
+                    None // Discard this from the final collection
+                }
+            })
             .unique()
             .collect();
         info!("There are {} PIDs with mappings", pids_with_mappings.len());
-        // - How many mappings per PID (mappings_by_pid HashMap)
-        let mut mappings_by_pid: HashMap<i32, u32> = HashMap::new();
+        // - How many mappings per PID (mappings_count_by_pid HashMap)
+        let mut mappings_count_by_pid: HashMap<i32, u32> = HashMap::new();
         for key in self.native_unwinder.maps.exec_mappings.keys() {
             let pid = exec_mappings_key::from_bytes(&key).unwrap().pid;
-            mappings_by_pid
+            mappings_count_by_pid
                 .entry(pid)
                 .and_modify(|count| *count += 1)
                 .or_insert(1);
         }
-        for (key, value) in mappings_by_pid {
+        for (key, value) in mappings_count_by_pid {
             debug!("PID {} has {} mappings", key, value);
         }
         // - Compare PIDs represented in exec_mappings with PIDs we're tracking, note differences
@@ -2116,15 +2133,19 @@ impl Profiler {
         // TODO: Wrap this function's activities in a logged duration timer
         // Pop off any processes that we've kept around long enough after they've exited
         // Where "long enough" is 2 sessions worth
-        let pending_duration = self.session_duration.checked_mul(2).unwrap();
-        let mut pending_deletion: Vec<(Pid, bool)> = vec![];
+        let pending_duration = self
+            .session_duration
+            .checked_mul(2)
+            .expect("should be able to multiply the session_duration by 2");
+        let mut pending_deletion = vec![];
+
         loop {
-            let to_delete_vec = self
+            let pids_to_delete = self
                 .deletion_scheduler
                 .write()
                 .pop_pending(pending_duration);
-            if !to_delete_vec.is_empty() {
-                let (pid, partial_write) = match to_delete_vec[0] {
+            if !pids_to_delete.is_empty() {
+                let (pid, partial_write) = match pids_to_delete[0] {
                     ToDelete::Process(_, pid, partial_write) => (pid, partial_write),
                 };
                 pending_deletion.push((pid, partial_write));
@@ -2145,7 +2166,7 @@ impl Profiler {
             //
             // 1st pass - eliminate any exited PIDs we never got samples from
             debug!(
-                "First pass of pending_deletions had {} exited processes",
+                "First pass of pending_deletions has {} exited processes",
                 procs_to_reap
             );
             let procs = self.procs.read(); // read lock to start
@@ -2205,10 +2226,10 @@ impl Profiler {
                         // Now check how many mappings still exist for the PID, after
                         // all should have been obliterated, and print out the keys in
                         // debug format
-                        // - How many mappings per PID (mappings_by_pid HashMap)
-                        let mut mappings_by_pid: HashMap<u32, u32> = HashMap::new();
+                        // - How many mappings per PID (mappings_count_by_pid HashMap)
+                        let mut mappings_count_by_pid: HashMap<i32, u32> = HashMap::new();
                         // - Mappings we're going to have to manually delete
-                        let mut mappings_to_delete: Vec<_> = vec![];
+                        let mut mappings_to_delete = vec![];
                         for key in self.native_unwinder.maps.exec_mappings.keys() {
                             // Try to convert exec_mappings_key from bytes, error message and skip keys
                             // where this doesn't work
@@ -2233,8 +2254,8 @@ impl Profiler {
                             // let prefix_len = key_from_bytes.prefix_len;
                             if found_pid == pid {
                                 mappings_to_delete.push(key);
-                                mappings_by_pid
-                                    .entry(pid.try_into().unwrap())
+                                mappings_count_by_pid
+                                    .entry(pid)
                                     .and_modify(|count| *count += 1)
                                     .or_insert(1);
                                 // Print out mapping metadata
@@ -2245,7 +2266,7 @@ impl Profiler {
                             }
                         }
                         // How bad were things?
-                        for (key, value) in mappings_by_pid {
+                        for (key, value) in mappings_count_by_pid {
                             warn!(
                                 "Dead PID {} still has {} mappings! (will remove)",
                                 key, value
