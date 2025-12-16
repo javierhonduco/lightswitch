@@ -2130,7 +2130,8 @@ impl Profiler {
     }
 
     fn cleanup_procs(&mut self) {
-        // TODO: Wrap this function's activities in a logged duration timer
+        // Wrap this function's activities in a logged duration timer
+        let _span = span!(Level::INFO, "cleanup_procs").entered();
         // Pop off any processes that we've kept around long enough after they've exited
         // Where "long enough" is 2 sessions worth
         let pending_duration = self
@@ -2311,6 +2312,8 @@ impl Profiler {
         } else {
             debug!("No processes scheduled for final deletion this session");
         }
+        _span.exit();
+
         // End with a resource consumption report
         self.report_resource_consumption();
     }
