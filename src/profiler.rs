@@ -920,16 +920,27 @@ impl Profiler {
             self.native_unwinder.maps.exec_mappings.keys().count(),
             exec_mappings_max_entries
         );
-        // DEBUG exec_mappings usage:
+        // exec_mappings usage:
         // - Total PIDs represented (pids_with_mappings Vec)
+        // - How many mappings per PID (mappings_count_by_pid HashMap)
+        let mut mappings_count_by_pid: HashMap<i32, u32> = HashMap::new();
         let pids_with_mappings: Vec<_> = self
             .native_unwinder
             .maps
             .exec_mappings
             .keys()
             .filter_map(|key| match exec_mappings_key::from_bytes(&key) {
-                // Keep the PID from the exec_mappings_key that converted
-                Ok(map_key) => Some(map_key.pid),
+                Ok(map_key) => {
+                    // Keep the PID from the exec_mappings_key that converted
+                    let pid = map_key.pid;
+                    // Populate the number of mappings per PID opportunistically
+                    mappings_count_by_pid
+                        .entry(pid)
+                        .and_modify(|count| *count += 1)
+                        .or_insert(1);
+                    // Pass this on to the collection below
+                    Some(map_key.pid)
+                }
                 Err(e) => {
                     error!("exec_mappings_key::from_bytes failed: {:?}", e);
                     None // Discard this from the final collection
@@ -938,15 +949,6 @@ impl Profiler {
             .unique()
             .collect();
         info!("There are {} PIDs with mappings", pids_with_mappings.len());
-        // - How many mappings per PID (mappings_count_by_pid HashMap)
-        let mut mappings_count_by_pid: HashMap<i32, u32> = HashMap::new();
-        for key in self.native_unwinder.maps.exec_mappings.keys() {
-            let pid = exec_mappings_key::from_bytes(&key).unwrap().pid;
-            mappings_count_by_pid
-                .entry(pid)
-                .and_modify(|count| *count += 1)
-                .or_insert(1);
-        }
         for (key, value) in mappings_count_by_pid {
             debug!("PID {} has {} mappings", key, value);
         }
