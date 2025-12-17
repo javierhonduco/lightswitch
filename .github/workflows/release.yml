@@ -40,14 +40,14 @@ jobs:
         nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:${{ github.ref_name }}
         nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:latest
     - name: Upload container
-      uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       with:
         name: lightswitch-container-${{ matrix.config.target }}
         path: ./result
     - name: Build `lightswitch` statically linked with glibc
       run: nix develop --ignore-environment --keep TARGET --command bash -c 'RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target $TARGET'
     - name: Upload static binary
-      uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       with:
         name: lightswitch-static-glibc-${{ matrix.config.target }}
         path: ./target/${{ matrix.config.target }}/release/lightswitch
@@ -58,7 +58,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
       - name: Display artifacts structure
         run: tree -h
       - name: Rename artifacts
