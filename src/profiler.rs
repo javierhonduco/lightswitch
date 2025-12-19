@@ -2136,10 +2136,7 @@ impl Profiler {
         let _span = span!(Level::INFO, "cleanup_procs").entered();
         // Pop off any processes that we've kept around long enough after they've exited
         // Where "long enough" is 2 sessions worth
-        let pending_duration = self
-            .session_duration
-            .checked_mul(2)
-            .expect("should be able to multiply the session_duration by 2");
+        let pending_duration = self.session_duration * 2;
 
         let to_deletes = self
             .deletion_scheduler
@@ -2162,7 +2159,7 @@ impl Profiler {
             // We note which PIDs we're actually tracking by way of receiving stacks for them at
             // any time and ignore the rest
             //
-            // 1st pass - eliminate any exited PIDs we never got samples from
+            // 1st pass - eliminate from consideration any exited PIDs we never got samples from
             debug!(
                 "First pass of pending_deletions has {} exited processes",
                 procs_to_reap
