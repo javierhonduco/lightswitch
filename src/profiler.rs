@@ -2133,7 +2133,6 @@ impl Profiler {
     }
 
     fn cleanup_procs(&mut self) {
-        // Wrap this function's activities in a logged duration timer
         let _span = span!(Level::INFO, "cleanup_procs").entered();
         // Pop off any processes that we've kept around long enough after they've exited
         // Where "long enough" is 2 sessions worth
