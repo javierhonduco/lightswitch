@@ -2167,15 +2167,11 @@ impl Profiler {
             let procs = self.procs.read(); // read lock to start
             pending_deletion.retain(|(pid, _)| procs.contains_key(pid));
             // 2nd pass - Perform the actual final deletions
-            let pids_to_del_str = pending_deletion
-                .iter()
-                .map(|(n, _)| n.to_string())
-                .collect::<Vec<String>>()
-                .join(", ");
+            let pids_to_del = pending_deletion.iter().map(|(n, _)| n).collect::<Vec<_>>();
             debug!(
-                "Final deletion of {} exited processes we were actually tracking: {}",
+                "Final deletion of {} exited processes we were actually tracking: {:?}",
                 pending_deletion.len(),
-                pids_to_del_str
+                pids_to_del
             );
             // promote to a write lock - attempting in one step failed
             std::mem::drop(procs);
