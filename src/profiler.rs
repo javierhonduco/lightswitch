@@ -2141,22 +2141,17 @@ impl Profiler {
             .session_duration
             .checked_mul(2)
             .expect("should be able to multiply the session_duration by 2");
-        let mut pending_deletion = vec![];
 
-        loop {
-            let pids_to_delete = self
-                .deletion_scheduler
-                .write()
-                .pop_pending(pending_duration);
-            if !pids_to_delete.is_empty() {
-                let (pid, partial_write) = match pids_to_delete[0] {
-                    ToDelete::Process(_, pid, partial_write) => (pid, partial_write),
-                };
-                pending_deletion.push((pid, partial_write));
-            } else {
-                break;
-            }
-        }
+        let to_deletes = self
+            .deletion_scheduler
+            .write()
+            .pop_pending(pending_duration);
+        let mut pending_deletion: Vec<(i32, bool)> = to_deletes
+            .into_iter()
+            .map(|to_delete| match to_delete {
+                ToDelete::Process(_, pid, partial_write) => (pid, partial_write),
+            })
+            .collect();
         // Perform actual Profiler.procs deletion here
         let procs_to_reap = pending_deletion.len();
         if procs_to_reap > 0 {
