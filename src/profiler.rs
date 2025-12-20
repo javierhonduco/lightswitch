@@ -2,6 +2,7 @@ use libbpf_rs::MapImpl;
 use libbpf_rs::OpenObject;
 use libbpf_rs::RingBufferBuilder;
 use lightswitch_object::ElfLoad;
+use memmap2::Mmap;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
 use std::collections::hash_map::OccupiedEntry;
@@ -16,6 +17,7 @@ use std::mem::ManuallyDrop;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -188,7 +190,7 @@ impl Default for ProfilerConfig {
             libbpf_debug: false,
             bpf_logging: false,
             duration: Duration::MAX,
-            sample_freq: 19,
+            sample_freq: 997,
             perf_buffer_bytes: 512 * 1024,
             session_duration: Duration::from_secs(5),
             mapsize_info: false,
@@ -262,6 +264,49 @@ enum AddUnwindInformationResult {
     Success,
     /// The unwind information information and its pages are already loaded in BPF maps.
     AlreadyLoaded,
+}
+
+fn setup_cache(cache_dir_base: &Path) -> (PathBuf, PathBuf) {
+    debug!("base cache directory {}", cache_dir_base.display());
+    let cache_dir = cache_dir_base.join("lightswitch");
+
+    if let Ok(metadata) = fs::symlink_metadata(&cache_dir) {
+        if metadata.is_symlink() {
+            panic!("symlink!!");
+        }
+
+        if !metadata.is_dir() {
+            panic!("not a dir!");
+        }
+
+        if metadata.uid() != 0 {
+            panic!("not root!");
+        }
+
+        // metadata.permissions().mode() check that it is not world writable
+    }
+
+    if let Err(e) = fs::create_dir(&cache_dir) {
+        if e.kind() != ErrorKind::AlreadyExists {
+            panic!(
+                "could not create cache dir at {} with: {:?}",
+                cache_dir.display(),
+                e
+            );
+        }
+    }
+    let unwind_cache_dir = cache_dir.join("unwind-info").to_path_buf();
+    if let Err(e) = fs::create_dir(&unwind_cache_dir) {
+        if e.kind() != ErrorKind::AlreadyExists {
+            panic!(
+                "could not create cache dir at {} with: {:?}",
+                unwind_cache_dir.display(),
+                e
+            );
+        }
+    }
+
+    (cache_dir, unwind_cache_dir)
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -421,30 +466,7 @@ impl Profiler {
         stop_signal_receive: Receiver<()>,
         metadata_provider: ThreadSafeGlobalMetadataProvider,
     ) -> Self {
-        debug!(
-            "base cache directory {}",
-            profiler_config.cache_dir_base.display()
-        );
-        let cache_dir = profiler_config.cache_dir_base.join("lightswitch");
-        if let Err(e) = fs::create_dir(&cache_dir) {
-            if e.kind() != ErrorKind::AlreadyExists {
-                panic!(
-                    "could not create cache dir at {} with: {:?}",
-                    cache_dir.display(),
-                    e
-                );
-            }
-        }
-        let unwind_cache_dir = cache_dir.join("unwind-info").to_path_buf();
-        if let Err(e) = fs::create_dir(&unwind_cache_dir) {
-            if e.kind() != ErrorKind::AlreadyExists {
-                panic!(
-                    "could not create cache dir at {} with: {:?}",
-                    unwind_cache_dir.display(),
-                    e
-                );
-            }
-        }
+        let (cache_dir, unwind_cache_dir) = setup_cache(&profiler_config.cache_dir_base);
 
         let mut native_unwinder_open_object = ManuallyDrop::new(Box::new(MaybeUninit::uninit()));
         let mut tracers_open_object = ManuallyDrop::new(Box::new(MaybeUninit::uninit()));
@@ -654,8 +676,8 @@ impl Profiler {
                 kaslr_offset
             }
             Err(e) => {
-                error!(
-                    "fetching the kaslr offset failed with {:?}, assuming it is 0",
+                warn!(
+                    "reading the kernel ASLR offset failed with `{:?}`, assuming it is 0",
                     e
                 );
                 0
@@ -1092,7 +1114,7 @@ impl Profiler {
     fn add_bpf_unwind_info(
         inner: &MapHandle,
         unwind_info: &[CompactUnwindRow],
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<Mmap, anyhow::Error> {
         let size = inner.value_size() as usize * unwind_info.len();
         let mut mmap = unsafe {
             MmapOptions::new()
@@ -1102,12 +1124,9 @@ impl Profiler {
         let (prefix, middle, suffix) = unsafe { mmap.align_to_mut::<stack_unwind_row_t>() };
         assert_eq!(prefix.len(), 0);
         assert_eq!(suffix.len(), 0);
+        // add assert
 
-        for (row, write) in unwind_info.iter().zip(middle) {
-            *write = row.into();
-        }
-
-        Ok(())
+        Ok(middle)
     }
 
     fn add_bpf_pages(
@@ -1472,7 +1491,7 @@ impl Profiler {
         let runtime = executable_info.runtime.clone();
         std::mem::drop(object_files);
 
-        let unwind_info = match runtime {
+        let unwind_info_reader = match runtime {
             Runtime::Go(stop_frames) => {
                 let mut unwind_info = Vec::new();
 
@@ -1499,7 +1518,7 @@ impl Profiler {
                     Level::DEBUG,
                     "calling in_memory_unwind_info",
                     "{}",
-                    executable_path.display()
+                    executable_path.display(),
                 )
                 .entered();
                 self.unwind_info_manager.fetch_unwind_info(
@@ -1576,7 +1595,7 @@ impl Profiler {
         );
 
         // Add all unwind information and its pages.
-        Self::add_bpf_unwind_info(&inner_map, &unwind_info)
+        let mmap = Self::add_bpf_unwind_info(&inner_map, &unwind_info)
             .map_err(|e| AddUnwindInformationError::BpfUnwindInfo(e.to_string()))?;
         Self::add_bpf_pages(&self.native_unwinder, &unwind_info, executable_id.into())
             .map_err(|e| AddUnwindInformationError::BpfPages(e.to_string()))?;

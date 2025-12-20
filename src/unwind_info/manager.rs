@@ -77,14 +77,15 @@ impl UnwindInfoManager {
         manager
     }
 
-    pub fn fetch_unwind_info(
+    pub fn fetch_unwind_infoM<W: std::io::Write>(
         &mut self,
         executable_path: &Path,
         executable_id: ExecutableId,
         first_frame_override: Option<(u64, u64)>,
         check_digest: bool,
+        w: W,
     ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
-        match self.read_from_cache(executable_id, check_digest) {
+        match self.read_from_cache(executable_id, check_digest, w) {
             Ok(unwind_info) => Ok(unwind_info),
             Err(e) => {
                 if matches!(e, FetchUnwindInfoError::NotFound) {
@@ -101,11 +102,12 @@ impl UnwindInfoManager {
         }
     }
 
-    fn read_from_cache(
+    fn read_from_cache<W: std::io::Write>(
         &self,
         executable_id: ExecutableId,
         check_digest: bool,
-    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
+        w: W,
+    ) -> Result<Reader, FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
         let file = File::open(unwind_info_path).map_err(|e| {
             if e.kind() == ErrorKind::NotFound {
@@ -116,11 +118,9 @@ impl UnwindInfoManager {
         })?;
 
         let mut buffer = BufReader::new(file);
-        let mut data = Vec::new();
-        buffer.read_to_end(&mut data)?;
-        let reader = Reader::new(&data, check_digest).map_err(FetchUnwindInfoError::Reader)?;
-
-        Ok(reader.unwind_info()?)
+        let reader =
+            Reader::new(mut buffer, check_digest).map_err(FetchUnwindInfoError::Reader)?;
+        Ok(reader)
     }
 
     fn write_to_cache(

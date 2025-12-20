@@ -18,7 +18,7 @@ use crate::unwind_info::types::*;
 
 #[derive(Debug, Error)]
 pub enum UnwindInfoError {
-    #[error("no eh_frame section found")]
+    #[error("no .eh_frame section found")]
     NoEhFrameSection,
     #[error("object file could not be parsed due to {0}")]
     ParsingObjectFile(String),
@@ -29,8 +29,7 @@ pub enum UnwindInfoError {
 }
 
 pub enum UnwindData {
-    // Initial, end addresses
-    Function(u64, u64),
+    Function { start_addr: u64, end_addr: u64 },
     Instruction(CompactUnwindRow),
 }
 
@@ -143,10 +142,10 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                 EhFrame::cie_from_offset,
             )?;
 
-            (self.callback)(&UnwindData::Function(
-                fde.initial_address(),
-                fde.initial_address() + fde.len(),
-            ));
+            (self.callback)(&UnwindData::Function {
+                start_addr: fde.initial_address(),
+                end_addr: fde.initial_address() + fde.len(),
+            });
 
             let mut table = fde.rows(&eh_frame, &bases, &mut ctx)?;
 
@@ -274,7 +273,10 @@ pub fn compact_unwind_info(
     let builder =
         CompactUnwindInfoBuilder::with_callback(path, first_frame_override, |unwind_data| {
             match unwind_data {
-                UnwindData::Function(_start_addr, end_addr) => {
+                UnwindData::Function {
+                    start_addr: _,
+                    end_addr,
+                } => {
                     // Add the end addr when we hit a new func
                     match last_function_end_addr {
                         Some(addr) => {

@@ -144,12 +144,12 @@ pub enum ReaderError {
 /// Reads compact information of a bytes slice.
 pub struct Reader<'a> {
     header: Header,
-    data: &'a [u8],
+    data: &'a dyn std::io::Read,
     check_digest: bool,
 }
 
 impl<'a> Reader<'a> {
-    pub fn new(data: &'a [u8], check_digest: bool) -> Result<Self, ReaderError> {
+    pub fn new<R: std::io::Read>(data: mut R, check_digest: bool) -> Result<Self, ReaderError> {
         let header = Self::parse_header(data)?;
         Ok(Reader {
             header,
@@ -158,11 +158,13 @@ impl<'a> Reader<'a> {
         })
     }
 
-    fn parse_header(data: &[u8]) -> Result<Header, ReaderError> {
+    fn parse_header<R: std::io::Read>(data: &mut R) -> Result<Header, ReaderError> {
         let header_size = std::mem::size_of::<Header>();
         let mut header = Header::default();
-        let header_data = data.get(0..header_size).ok_or(ReaderError::OutOfRange)?;
-        plain::copy_from_bytes(&mut header, header_data)
+        let mut header_data = Vec::with_capacity(header_size);
+        data.read_exact(&mut header_data)
+            .map_err(|_| ReaderError::OutOfRange)?;
+        plain::copy_from_bytes(&mut header, &mut header_data)
             .map_err(|e| ReaderError::Generic(format!("{e:?}")))?;
 
         if header.magic != MAGIC_NUMBER {
@@ -176,6 +178,14 @@ impl<'a> Reader<'a> {
         Ok(header)
     }
 
+    pub fn unwind_info_writer<W: std::io::Write>(self, writer: &mut W) {
+        let unwind_info = self.unwind_info();
+        for u in unwind_info.unwrap() {
+            writer.write(&vec![1]);
+        }
+    }
+    // TODO we should be able to stream this somehow, either via a mmap or buffered file
+    // basically returning a struct that implements Read?
     pub fn unwind_info(self) -> Result<Vec<CompactUnwindRow>, ReaderError> {
         let header_size = std::mem::size_of::<Header>();
         let unwind_row_size = std::mem::size_of::<CompactUnwindRow>();
@@ -188,17 +198,18 @@ impl<'a> Reader<'a> {
         let mut unwind_info = Vec::with_capacity(unwind_info_len);
         let mut unwind_row = CompactUnwindRow::default();
 
-        let unwind_info_data = &self.data[header_size..];
+        let unwind_info_data = &self.data;
         let mut context = Context::new(&SHA256);
         for i in 0..unwind_info_len {
             let step = i * unwind_row_size;
-            let unwind_row_data = unwind_info_data
-                .get(step..step + unwind_row_size)
-                .ok_or(ReaderError::OutOfRange)?;
+            let mut unwind_row_data = Vec::with_capacity(step + unwind_row_size);
+            unwind_info_data
+                .read_exact(&mut unwind_row_data)
+                .map_err(|_| ReaderError::OutOfRange)?;
             if self.check_digest {
-                context.update(unwind_row_data);
+                context.update(&unwind_row_data);
             }
-            plain::copy_from_bytes(&mut unwind_row, unwind_row_data)
+            plain::copy_from_bytes(&mut unwind_row, &unwind_row_data)
                 .map_err(|e| ReaderError::Generic(format!("{e:?}")))?;
             unwind_info.push(unwind_row);
         }
