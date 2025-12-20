@@ -17,7 +17,7 @@ use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -53,6 +53,9 @@ use crate::process::{
 };
 use crate::profile::*;
 use crate::unwind_info::manager::UnwindInfoManager;
+use crate::unwind_info::pages::to_pages;
+use crate::unwind_info::persist::ReaderError;
+use crate::unwind_info::source::UnwindInfoSource;
 use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::executable_path;
 use crate::util::page_size;
@@ -570,7 +573,7 @@ impl Profiler {
             exclude_self: profiler_config.exclude_self,
             debug_info_manager: profiler_config.debug_info_manager,
             max_native_unwind_info_size_mb: profiler_config.max_native_unwind_info_size_mb,
-            unwind_info_manager: UnwindInfoManager::new(&unwind_cache_dir, None),
+            unwind_info_manager: UnwindInfoManager::from_mmap(&unwind_cache_dir, None),
             use_ring_buffers: profiler_config.use_ring_buffers,
             aggregator: Aggregator::default(),
             metadata_provider,
@@ -661,7 +664,7 @@ impl Profiler {
             }
             Err(e) => {
                 error!(
-                    "fetching the kaslr offset failed with {:?}, assuming it is 0",
+                    "fetching the kaslr offset failed with `{:?}`, assuming it is 0",
                     e
                 );
                 0
@@ -1112,20 +1115,23 @@ impl Profiler {
 
     fn add_bpf_unwind_info(
         inner: &MapHandle,
-        unwind_info: &[CompactUnwindRow],
+        unwind_info: impl Iterator<Item = Result<CompactUnwindRow, ReaderError>>,
+        unwind_info_len: usize,
     ) -> Result<(), anyhow::Error> {
-        let size = inner.value_size() as usize * unwind_info.len();
+        let size = inner.value_size() as usize * unwind_info_len;
         let mut mmap = unsafe {
             MmapOptions::new()
                 .len(roundup_page(size))
                 .map_mut(&inner.as_fd())
         }?;
         let (prefix, middle, suffix) = unsafe { mmap.align_to_mut::<stack_unwind_row_t>() };
+        // TODO: this assertion should always hold
+        // assert_eq!(middle.len(), unwind_info_len);
         assert_eq!(prefix.len(), 0);
         assert_eq!(suffix.len(), 0);
 
-        for (row, write) in unwind_info.iter().zip(middle) {
-            *write = row.into();
+        for (row, write) in unwind_info.zip(middle) {
+            *write = row.as_ref().map_err(|e| anyhow::anyhow!("{:?}", e))?.into();
         }
 
         Ok(())
@@ -1133,10 +1139,11 @@ impl Profiler {
 
     fn add_bpf_pages(
         bpf: &ProfilerSkel,
-        unwind_info: &[CompactUnwindRow],
+        unwind_info: impl Iterator<Item = Result<CompactUnwindRow, ReaderError>>,
+        unwind_info_len: usize,
         executable_id: u64,
     ) -> Result<(), libbpf_rs::Error> {
-        let pages = crate::unwind_info::pages::to_pages(unwind_info);
+        let pages = to_pages(unwind_info, unwind_info_len);
         for page in pages {
             let page_key = page_key_t {
                 file_offset: page.address,
@@ -1483,14 +1490,13 @@ impl Profiler {
         let object_files = self.object_files.read();
         let executable_info = object_files.get(&executable_id).unwrap();
         let executable_path = executable_info.path.clone();
-        let needs_synthesis = executable_info.is_vdso && architecture() == Architecture::Arm64;
+        let use_frame_pointers = executable_info.is_vdso && architecture() == Architecture::Arm64;
         let runtime = executable_info.runtime.clone();
         std::mem::drop(object_files);
 
         let unwind_info = match runtime {
             Runtime::Go(stop_frames) => {
                 let mut unwind_info = Vec::new();
-
                 // For each bottom frame, add a end of function marker to stop unwinding
                 // covering the exact size of the function, assuming the function after it
                 // has frame pointers.
@@ -1504,7 +1510,7 @@ impl Profiler {
                 unwind_info.push(CompactUnwindRow::stop_unwinding(end_address));
 
                 unwind_info.sort_by_key(|e| e.pc);
-                Ok(unwind_info)
+                Ok(UnwindInfoSource::Vector(unwind_info))
             }
             Runtime::Zig {
                 start_low_address,
@@ -1517,20 +1523,25 @@ impl Profiler {
                     executable_path.display()
                 )
                 .entered();
-                self.unwind_info_manager.fetch_unwind_info(
+                let reader = self.unwind_info_manager.fetch_unwind_info(
                     &executable_path,
                     executable_id,
                     Some((start_low_address, start_high_address)),
                     false,
-                )
+                );
+
+                match reader {
+                    Ok(reader) => Ok(UnwindInfoSource::Reader(reader)),
+                    Err(e) => Err(e),
+                }
             }
             Runtime::CLike => {
-                if needs_synthesis {
+                if use_frame_pointers {
                     debug!("synthetising arm64 unwind information using frame pointers for vDSO");
-                    Ok(vec![
+                    Ok(UnwindInfoSource::Vector(vec![
                         CompactUnwindRow::frame_setup(start_address),
                         CompactUnwindRow::stop_unwinding(end_address),
-                    ])
+                    ]))
                 } else {
                     let _span = span!(
                         Level::DEBUG,
@@ -1539,21 +1550,25 @@ impl Profiler {
                         executable_path.display()
                     )
                     .entered();
-                    self.unwind_info_manager.fetch_unwind_info(
+                    let reader = self.unwind_info_manager.fetch_unwind_info(
                         &executable_path,
                         executable_id,
                         None,
                         false,
-                    )
+                    );
+                    match reader {
+                        Ok(reader) => Ok(UnwindInfoSource::Reader(reader)),
+                        Err(e) => Err(e),
+                    }
                 }
             }
-            Runtime::V8 => Ok(vec![
+            Runtime::V8 => Ok(UnwindInfoSource::Vector(vec![
                 CompactUnwindRow::frame_setup(start_address),
                 CompactUnwindRow::stop_unwinding(end_address),
-            ]),
+            ])),
         };
 
-        let unwind_info = match unwind_info {
+        let mut unwind_info = match unwind_info {
             Ok(unwind_info) => unwind_info,
             Err(e) => {
                 let known_naughty = executable_path.to_string_lossy().contains("libicudata.so")
@@ -1569,38 +1584,54 @@ impl Profiler {
             }
         };
 
-        if !self.maybe_evict_executables(unwind_info.len(), self.max_native_unwind_info_size_mb) {
-            return Err(AddUnwindInformationError::Eviction);
-        }
-
         if unwind_info.is_empty() {
             return Err(AddUnwindInformationError::Empty);
         }
 
-        if unwind_info.len() > MAX_UNWIND_INFO_SIZE {
+        let unwind_info_len = unwind_info.len();
+        if !self.maybe_evict_executables(unwind_info_len, self.max_native_unwind_info_size_mb) {
+            return Err(AddUnwindInformationError::Eviction);
+        }
+
+        if unwind_info_len == 0 {
+            return Err(AddUnwindInformationError::Empty);
+        }
+
+        if unwind_info_len > MAX_UNWIND_INFO_SIZE {
             return Err(AddUnwindInformationError::TooLarge(
                 executable_path.to_string_lossy().to_string(),
-                unwind_info.len(),
+                unwind_info_len,
             ));
         }
 
         let inner_map = Self::create_and_insert_unwind_info_map(
             &mut self.native_unwinder,
             executable_id.into(),
-            unwind_info.len(),
+            unwind_info_len,
         );
 
-        // Add all unwind information and its pages.
-        Self::add_bpf_unwind_info(&inner_map, &unwind_info)
+        // Add all unwind information
+        Self::add_bpf_unwind_info(&inner_map, unwind_info.iter(), unwind_info_len)
             .map_err(|e| AddUnwindInformationError::BpfUnwindInfo(e.to_string()))?;
-        Self::add_bpf_pages(&self.native_unwinder, &unwind_info, executable_id.into())
-            .map_err(|e| AddUnwindInformationError::BpfPages(e.to_string()))?;
+
+        // Add pages
+        Self::add_bpf_pages(
+            &self.native_unwinder,
+            unwind_info.iter(),
+            unwind_info_len,
+            executable_id.into(),
+        )
+        .map_err(|e| AddUnwindInformationError::BpfPages(e.to_string()))?;
+
+        // Get start and end addresses
+        let unwind_info_len = unwind_info.len();
         let unwind_info_start_address = unwind_info.first().unwrap().pc;
         let unwind_info_end_address = unwind_info.last().unwrap().pc;
+
         self.native_unwind_state.known_executables.insert(
             executable_id,
             KnownExecutableInfo {
-                unwind_info_len: unwind_info.len(),
+                unwind_info_len,
                 unwind_info_start_address,
                 unwind_info_end_address,
                 last_used: Instant::now(),
