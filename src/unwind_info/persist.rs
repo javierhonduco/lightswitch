@@ -63,10 +63,7 @@ impl Writer {
         }
     }
 
-    pub fn write<W: Write + Seek>(
-        self,
-        writer: &mut W,
-    ) -> Result<Vec<CompactUnwindRow>, WriterError> {
+    pub fn write<W: Write + Seek>(self, writer: &mut W) -> Result<(), WriterError> {
         let unwind_info = self.read_unwind_info(self.first_frame_override)?;
         // Write dummy header.
         self.write_header(writer, 0, None)?;
@@ -74,9 +71,11 @@ impl Writer {
         // Write real header.
         writer.seek(SeekFrom::Start(0))?;
         self.write_header(writer, unwind_info.len(), Some(digest))?;
-        Ok(unwind_info)
+
+        Ok(())
     }
 
+    // this righ tnow allocates it all
     fn read_unwind_info(
         &self,
         first_frame_override: Option<(u64, u64)>,
@@ -143,7 +142,8 @@ pub enum ReaderError {
 }
 
 /// Reads compact information of a bytes slice.
-pub struct Reader<R: Read> {
+/// no
+pub struct Reader<R: Read + Seek> {
     header: Header,
     reader: R,
     check_digest: bool,
@@ -156,10 +156,16 @@ pub struct LeIter<R: Read> {
     check_digest: bool,
     unwind_info_digest: UnwindInformationDigest,
     context: Context,
+    first: Option<CompactUnwindRow>,
+    last: Option<CompactUnwindRow>,
 }
 
 impl<R: Read> LeIter<R> {
-    fn next(&mut self) -> Result<Option<CompactUnwindRow>, ReaderError> {
+    pub fn len(&mut self) -> usize {
+        self.size as usize
+    }
+
+    pub fn next(&mut self) -> Result<Option<CompactUnwindRow>, ReaderError> {
         if self.index >= self.size {
             return Ok(None);
         }
@@ -178,6 +184,15 @@ impl<R: Read> LeIter<R> {
             .map_err(|e| ReaderError::Generic(format!("{e:?}")))?;
 
         self.index += 1;
+
+        if self.index == 0 {
+            self.first = Some(unwind_row);
+        }
+
+        if self.index == self.size - 1 {
+            self.last = Some(unwind_row);
+        }
+
         Ok(Some(unwind_row))
     }
 
@@ -202,7 +217,7 @@ impl<R: Read> LeIter<R> {
     }
 }
 
-impl<R: Read> Reader<R> {
+impl<R: Read + Seek> Reader<R> {
     pub fn new(mut reader: R, check_digest: bool) -> Result<Self, ReaderError> {
         let header = Self::parse_header(&mut reader)?;
         Ok(Reader {
@@ -210,6 +225,14 @@ impl<R: Read> Reader<R> {
             reader,
             check_digest,
         })
+    }
+
+    pub fn len(&self) -> usize {
+        self.header.unwind_info_len as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     fn parse_header(data: &mut R) -> Result<Header, ReaderError> {
@@ -232,18 +255,22 @@ impl<R: Read> Reader<R> {
         Ok(header)
     }
 
-    pub fn unwind_info_iter(self) -> LeIter<R> {
+    pub fn unwind_info_iter(&mut self) -> LeIter<&mut R> {
+        self.reader.seek(SeekFrom::Start(0)).unwrap();
+
         LeIter {
             context: Context::new(&SHA256),
             unwind_info_digest: self.header.unwind_info_digest,
             check_digest: self.check_digest,
-            reader: self.reader,
+            reader: &mut self.reader,
             index: 0,
             size: self.header.unwind_info_len,
+            first: None,
+            last: None,
         }
     }
 
-    pub fn unwind_info(self) -> Result<Vec<CompactUnwindRow>, ReaderError> {
+    pub fn unwind_info(&mut self) -> Result<Vec<CompactUnwindRow>, ReaderError> {
         let mut unwind_info = Vec::with_capacity(self.header.unwind_info_len as usize);
         let mut iter = self.unwind_info_iter();
         while let Some(row) = iter.next()? {
@@ -267,7 +294,7 @@ mod tests {
         let writer = Writer::new(&path, None);
         assert!(writer.write(&mut buffer).is_ok());
 
-        let reader = Reader::new(&buffer.get_ref()[..], true);
+        let reader = Reader::new(buffer, true);
         let unwind_info = reader.unwrap().unwind_info();
         assert!(unwind_info.is_ok());
         let unwind_info = unwind_info.unwrap();
@@ -279,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_bad_magic() {
-        let mut buffer = Vec::new();
+        let mut buffer = Cursor::new(Vec::new());
         let header = Header {
             magic: 0xBAD,
             ..Default::default()
@@ -287,15 +314,17 @@ mod tests {
         buffer
             .write_all(unsafe { plain::as_bytes(&header) })
             .unwrap();
+
+        buffer.seek(SeekFrom::Start(0)).unwrap();
         assert!(matches!(
-            Reader::new(&buffer[..], true),
+            Reader::new(buffer, true),
             Err(ReaderError::MagicNumber)
         ));
     }
 
     #[test]
     fn test_version_mismatch() {
-        let mut buffer = Vec::new();
+        let mut buffer = Cursor::new(Vec::new());
         let header = Header {
             version: VERSION + 1,
             magic: MAGIC_NUMBER,
@@ -304,8 +333,9 @@ mod tests {
         buffer
             .write_all(unsafe { plain::as_bytes(&header) })
             .unwrap();
+        buffer.seek(SeekFrom::Start(0)).unwrap();
         assert!(matches!(
-            Reader::new(&buffer[..], true),
+            Reader::new(buffer, true),
             Err(ReaderError::Version)
         ));
     }
@@ -320,28 +350,29 @@ mod tests {
         // Corrupt unwind info.
         buffer.seek(SeekFrom::End(-10)).unwrap();
         buffer.write_all(&[0, 0, 0, 0, 0, 0, 0]).unwrap();
+        buffer.seek(SeekFrom::Start(0)).unwrap();
 
-        let reader = Reader::new(&buffer.get_ref()[..], true);
+        let reader = Reader::new(buffer.clone(), true);
         let unwind_info = reader.unwrap().unwind_info();
-        // assert!(matches!(unwind_info, Err(ReaderError::Digest)));
+        assert!(matches!(unwind_info, Err(ReaderError::Digest)));
 
-        let reader = Reader::new(&buffer.get_ref()[..], false);
+        let reader = Reader::new(buffer, false);
         let unwind_info = reader.unwrap().unwind_info();
         assert!(unwind_info.is_ok());
     }
 
     #[test]
     fn test_header_too_small() {
-        let buffer = Vec::new();
+        let buffer = Cursor::new(Vec::new());
         assert!(matches!(
-            Reader::new(&buffer[..], true),
+            Reader::new(buffer, true),
             Err(ReaderError::OutOfRange)
         ));
     }
 
     #[test]
     fn test_unwind_info_too_small() {
-        let mut buffer = Vec::new();
+        let mut buffer = Cursor::new(Vec::new());
         let header = Header {
             version: VERSION,
             magic: MAGIC_NUMBER,
@@ -351,8 +382,9 @@ mod tests {
         buffer
             .write_all(unsafe { plain::as_bytes(&header) })
             .unwrap();
+        buffer.seek(SeekFrom::Start(0)).unwrap();
         assert!(matches!(
-            Reader::new(&buffer[..], true).unwrap().unwind_info(),
+            Reader::new(buffer, true).unwrap().unwind_info(),
             Err(ReaderError::OutOfRange)
         ));
     }

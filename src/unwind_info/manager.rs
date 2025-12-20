@@ -5,6 +5,8 @@ use std::fs::File;
 use std::io::BufReader;
 use std::io::BufWriter;
 use std::io::ErrorKind;
+use std::io::Read;
+use std::io::Seek;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -83,20 +85,22 @@ impl UnwindInfoManager {
         executable_id: ExecutableId,
         first_frame_override: Option<(u64, u64)>,
         check_digest: bool,
-    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
+    ) -> Result<Reader<impl Read + Seek>, FetchUnwindInfoError> {
         match self.read_from_cache(executable_id, check_digest) {
-            Ok(unwind_info) => Ok(unwind_info),
+            Ok(reader) => Ok(reader),
             Err(e) => {
                 if matches!(e, FetchUnwindInfoError::NotFound) {
                     debug!("error fetch_unwind_info: {:?}, regenerating...", e);
                 }
                 // No matter the error, regenerate the unwind information.
-                let unwind_info =
+
+                let writer =
                     self.write_to_cache(executable_path, executable_id, first_frame_override);
-                if unwind_info.is_ok() {
+                if writer.is_ok() {
                     self.bump(executable_id, None);
                 }
-                unwind_info
+
+                self.read_from_cache(executable_id, check_digest)
             }
         }
     }
@@ -105,7 +109,7 @@ impl UnwindInfoManager {
         &self,
         executable_id: ExecutableId,
         check_digest: bool,
-    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
+    ) -> Result<Reader<impl Read + Seek>, FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
         let file = File::open(unwind_info_path).map_err(|e| {
             if e.kind() == ErrorKind::NotFound {
@@ -115,10 +119,10 @@ impl UnwindInfoManager {
             }
         })?;
 
-        let mut file = BufReader::new(file);
-        let reader = Reader::new(&mut file, check_digest).map_err(FetchUnwindInfoError::Reader)?;
+        let file = BufReader::new(file);
+        let reader = Reader::new(file, check_digest).map_err(FetchUnwindInfoError::Reader)?;
 
-        Ok(reader.unwind_info()?)
+        Ok(reader)
     }
 
     fn write_to_cache(
@@ -126,7 +130,7 @@ impl UnwindInfoManager {
         executable_path: &Path,
         executable_id: ExecutableId,
         first_frame_override: Option<(u64, u64)>,
-    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
+    ) -> Result<(), FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
         let unwind_info_writer = Writer::new(executable_path, first_frame_override);
         // [`File::create`] will truncate an existing file to the size it needs.
@@ -225,8 +229,8 @@ mod tests {
                 None,
                 true,
             );
-            let manager_unwind_info = manager_unwind_info.unwrap();
-            assert_eq!(unwind_info, manager_unwind_info);
+            let mut manager_unwind_info = manager_unwind_info.unwrap();
+            assert_eq!(unwind_info, manager_unwind_info.unwind_info().unwrap());
         }
     }
 
@@ -244,8 +248,8 @@ mod tests {
             true,
         );
         assert!(manager_unwind_info.is_ok());
-        let manager_unwind_info = manager_unwind_info.unwrap();
-        assert_eq!(unwind_info, manager_unwind_info);
+        let mut manager_unwind_info = manager_unwind_info.unwrap();
+        assert_eq!(unwind_info, manager_unwind_info.unwind_info().unwrap());
 
         // Corrupt it.
         let mut file = OpenOptions::new()
