@@ -1,14 +1,14 @@
 use lightswitch_object::ExecutableId;
 use std::collections::BinaryHeap;
 use std::fs;
+use std::fs::File;
+use std::io::BufReader;
 use std::io::BufWriter;
 use std::io::ErrorKind;
-use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Instant;
-use std::{fs::File, io::BufReader};
 
 use thiserror::Error;
 use tracing::debug;
@@ -115,10 +115,8 @@ impl UnwindInfoManager {
             }
         })?;
 
-        let mut buffer = BufReader::new(file);
-        let mut data = Vec::new();
-        buffer.read_to_end(&mut data)?;
-        let reader = Reader::new(&data, check_digest).map_err(FetchUnwindInfoError::Reader)?;
+        let mut file = BufReader::new(file);
+        let reader = Reader::new(&mut file, check_digest).map_err(FetchUnwindInfoError::Reader)?;
 
         Ok(reader.unwind_info()?)
     }

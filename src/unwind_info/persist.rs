@@ -142,27 +142,29 @@ pub enum ReaderError {
 }
 
 /// Reads compact information of a bytes slice.
-pub struct Reader<'a> {
+pub struct Reader<R: Read> {
     header: Header,
-    data: &'a [u8],
+    reader: R,
     check_digest: bool,
 }
 
-impl<'a> Reader<'a> {
-    pub fn new(data: &'a [u8], check_digest: bool) -> Result<Self, ReaderError> {
-        let header = Self::parse_header(data)?;
+impl<R: Read> Reader<R> {
+    pub fn new(mut reader: R, check_digest: bool) -> Result<Self, ReaderError> {
+        let header = Self::parse_header(&mut reader)?;
         Ok(Reader {
             header,
-            data,
+            reader,
             check_digest,
         })
     }
 
-    fn parse_header(data: &[u8]) -> Result<Header, ReaderError> {
+    fn parse_header(data: &mut R) -> Result<Header, ReaderError> {
         let header_size = std::mem::size_of::<Header>();
         let mut header = Header::default();
-        let header_data = data.get(0..header_size).ok_or(ReaderError::OutOfRange)?;
-        plain::copy_from_bytes(&mut header, header_data)
+        let mut header_data = vec![0; header_size];
+        data.read_exact(&mut header_data)
+            .map_err(|_| ReaderError::OutOfRange)?;
+        plain::copy_from_bytes(&mut header, &header_data)
             .map_err(|e| ReaderError::Generic(format!("{e:?}")))?;
 
         if header.magic != MAGIC_NUMBER {
@@ -176,8 +178,7 @@ impl<'a> Reader<'a> {
         Ok(header)
     }
 
-    pub fn unwind_info(self) -> Result<Vec<CompactUnwindRow>, ReaderError> {
-        let header_size = std::mem::size_of::<Header>();
+    pub fn unwind_info(mut self) -> Result<Vec<CompactUnwindRow>, ReaderError> {
         let unwind_row_size = std::mem::size_of::<CompactUnwindRow>();
         let unwind_info_len: usize = self
             .header
@@ -188,17 +189,16 @@ impl<'a> Reader<'a> {
         let mut unwind_info = Vec::with_capacity(unwind_info_len);
         let mut unwind_row = CompactUnwindRow::default();
 
-        let unwind_info_data = &self.data[header_size..];
         let mut context = Context::new(&SHA256);
-        for i in 0..unwind_info_len {
-            let step = i * unwind_row_size;
-            let unwind_row_data = unwind_info_data
-                .get(step..step + unwind_row_size)
-                .ok_or(ReaderError::OutOfRange)?;
+        let mut unwind_row_data = vec![0; unwind_row_size];
+        for _ in 0..unwind_info_len {
+            self.reader
+                .read_exact(&mut unwind_row_data)
+                .map_err(|_| ReaderError::OutOfRange)?;
             if self.check_digest {
-                context.update(unwind_row_data);
+                context.update(&unwind_row_data);
             }
-            plain::copy_from_bytes(&mut unwind_row, unwind_row_data)
+            plain::copy_from_bytes(&mut unwind_row, &unwind_row_data)
                 .map_err(|e| ReaderError::Generic(format!("{e:?}")))?;
             unwind_info.push(unwind_row);
         }
@@ -256,7 +256,7 @@ mod tests {
             .write_all(unsafe { plain::as_bytes(&header) })
             .unwrap();
         assert!(matches!(
-            Reader::new(&buffer, true),
+            Reader::new(&buffer[..], true),
             Err(ReaderError::MagicNumber)
         ));
     }
@@ -273,7 +273,7 @@ mod tests {
             .write_all(unsafe { plain::as_bytes(&header) })
             .unwrap();
         assert!(matches!(
-            Reader::new(&buffer, true),
+            Reader::new(&buffer[..], true),
             Err(ReaderError::Version)
         ));
     }
@@ -302,7 +302,7 @@ mod tests {
     fn test_header_too_small() {
         let buffer = Vec::new();
         assert!(matches!(
-            Reader::new(&buffer, true),
+            Reader::new(&buffer[..], true),
             Err(ReaderError::OutOfRange)
         ));
     }
@@ -320,7 +320,7 @@ mod tests {
             .write_all(unsafe { plain::as_bytes(&header) })
             .unwrap();
         assert!(matches!(
-            Reader::new(&buffer, true).unwrap().unwind_info(),
+            Reader::new(&buffer[..], true).unwrap().unwind_info(),
             Err(ReaderError::OutOfRange)
         ));
     }
