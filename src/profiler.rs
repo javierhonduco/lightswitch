@@ -1125,7 +1125,9 @@ impl Profiler {
     ) -> Result<(), libbpf_rs::Error> {
         // HACK
         let unwind_info = unwind_info.unwind_info().unwrap();
+        let span = span!(Level::ERROR, "to_pages").entered();
         let pages = crate::unwind_info::pages::to_pages(&unwind_info);
+        span.exit();
         for page in pages {
             let page_key = page_key_t {
                 file_offset: page.address,
@@ -1543,7 +1545,7 @@ impl Profiler {
                 // }
             }
             _ => {
-                panic!()
+                return Err(AddUnwindInformationError::Empty);
             } // Runtime::V8 => Ok(vec![
               //     CompactUnwindRow::frame_setup(start_address),
               //     CompactUnwindRow::stop_unwinding(end_address),
