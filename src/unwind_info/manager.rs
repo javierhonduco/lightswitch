@@ -89,17 +89,18 @@ impl UnwindInfoManager {
         match self.read_from_cache(executable_id, check_digest) {
             Ok(reader) => Ok(reader),
             Err(e) => {
+                println!("error!!! {:?}", e);
                 if matches!(e, FetchUnwindInfoError::NotFound) {
                     debug!("error fetch_unwind_info: {:?}, regenerating...", e);
                 }
                 // No matter the error, regenerate the unwind information.
-
                 let writer =
                     self.write_to_cache(executable_path, executable_id, first_frame_override);
                 if writer.is_ok() {
                     self.bump(executable_id, None);
                 }
 
+                println!("about to read from cache");
                 self.read_from_cache(executable_id, check_digest)
             }
         }
@@ -120,7 +121,10 @@ impl UnwindInfoManager {
         })?;
 
         let file = BufReader::new(file);
-        let reader = Reader::new(file, check_digest).map_err(FetchUnwindInfoError::Reader)?;
+        let mut reader = Reader::new(file, check_digest).map_err(FetchUnwindInfoError::Reader)?;
+        if check_digest {
+            reader.check_digest()?;
+        }
 
         Ok(reader)
     }
@@ -241,6 +245,7 @@ mod tests {
         let mut manager = UnwindInfoManager::new(tmpdir.path(), None);
 
         // Cache unwind info.
+        println!("initial cache?");
         let manager_unwind_info = manager.fetch_unwind_info(
             &PathBuf::from("/proc/self/exe"),
             ExecutableId(0xFABADA),
@@ -266,8 +271,8 @@ mod tests {
             None,
             true,
         );
-        let manager_unwind_info = manager_unwind_info.unwrap();
-        // assert_eq!(unwind_info, manager_unwind_info);
+        let manager_unwind_info = manager_unwind_info.unwrap().unwind_info().unwrap();
+        assert_eq!(unwind_info, manager_unwind_info);
     }
 
     #[test]

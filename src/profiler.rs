@@ -1109,10 +1109,9 @@ impl Profiler {
         assert_eq!(prefix.len(), 0);
         assert_eq!(suffix.len(), 0);
 
-        let mut iter = unwind_info.unwind_info_iter();
-        let mut middle_iter = middle.iter_mut();
-        while let (Some(row), Some(write)) = (iter.next()?, middle_iter.next()) {
-            *write = (&row).into();
+        for (row, write) in unwind_info.iter().zip(middle) {
+            // @nocommit
+            *write = (&row?).into();
         }
 
         Ok(())
@@ -1545,6 +1544,7 @@ impl Profiler {
                 // }
             }
             _ => {
+                todo!();
                 return Err(AddUnwindInformationError::Empty);
             } // Runtime::V8 => Ok(vec![
               //     CompactUnwindRow::frame_setup(start_address),

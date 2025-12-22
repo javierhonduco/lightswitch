@@ -38,9 +38,9 @@ pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
     let mut prev_high_pc = None;
     let mut prev_index = 0;
 
-    println!("==========");
+    // println!("==========");
     for (i, row) in unwind_info.iter().enumerate() {
-        println!("----- i {}/{}", i, unwind_info.len());
+        // println!("----- i {}/{}", i, unwind_info.len());
         let high_pc = row.pc & high_bits_mask;
         match prev_high_pc {
             None => {
@@ -49,7 +49,7 @@ pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
                 prev_high_pc = Some(high_pc);
             }
             Some(prev_pc_high) => {
-                println!("52");
+                // println!("52");
                 // There's a gap larger than the page size, we need to insert pages that map
                 // to the same range of unwind information rows.
                 if prev_pc_high + page_size < high_pc {

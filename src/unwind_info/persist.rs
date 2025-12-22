@@ -149,6 +149,15 @@ pub struct Reader<R: Read + Seek> {
     check_digest: bool,
 }
 
+impl<T> AsRef<Reader<T>> for Reader<T>
+where
+    T: Seek + Read,
+{
+    fn as_ref(&self) -> &Self {
+        return self;
+    }
+}
+
 pub struct LeIter<R: Read> {
     reader: R,
     index: u64,
@@ -165,23 +174,59 @@ impl<R: Read> LeIter<R> {
         self.size as usize
     }
 
-    pub fn next(&mut self) -> Result<Option<CompactUnwindRow>, ReaderError> {
+    fn check_digest(&self) -> Result<(), ReaderError> {
+        // check we are done!
+        if !self.check_digest {
+            return Ok(());
+        }
+
+        let mut buffer = [0; 8];
+        self.context
+            .clone()
+            .finish()
+            .as_ref()
+            .read(&mut buffer)
+            .map_err(|e| ReaderError::Generic(e.to_string()))?;
+        let digest = u64::from_ne_bytes(buffer);
+
+        if self.unwind_info_digest != digest {
+            return Err(ReaderError::Digest);
+        }
+
+        Ok(())
+    }
+}
+
+// impl<R: Read> IntoIterator for LeIter<R> {
+//     type Item = Result<CompactUnwindRow, ReaderError>;
+//     type IntoIter = std::vec::IntoIter<Self::Item>;
+
+//     fn into_iter(self) -> Self::IntoIter {
+//         self.0.into_iter()
+//     }
+// }
+
+impl<'a, R: Read> Iterator for &'a mut LeIter<R> {
+    type Item = Result<CompactUnwindRow, ReaderError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
         if self.index >= self.size {
-            return Ok(None);
+            return None;
         }
 
         let unwind_row_size = std::mem::size_of::<CompactUnwindRow>();
         let mut unwind_row = CompactUnwindRow::default();
 
         let mut unwind_row_data = vec![0; unwind_row_size];
-        self.reader
-            .read_exact(&mut unwind_row_data)
-            .map_err(|_| ReaderError::OutOfRange)?;
+        if let Err(_) = self.reader.read_exact(&mut unwind_row_data) {
+            return Some(Err(ReaderError::OutOfRange));
+        };
         if self.check_digest {
             self.context.update(&unwind_row_data);
         }
-        plain::copy_from_bytes(&mut unwind_row, &unwind_row_data)
-            .map_err(|e| ReaderError::Generic(format!("{e:?}")))?;
+        if let Err(e) = plain::copy_from_bytes(&mut unwind_row, &unwind_row_data) {
+            return Some(Err(ReaderError::Generic(format!("{e:?}"))));
+        };
 
         self.index += 1;
 
@@ -193,27 +238,7 @@ impl<R: Read> LeIter<R> {
             self.last = Some(unwind_row);
         }
 
-        Ok(Some(unwind_row))
-    }
-
-    fn check_digest(&mut self) -> Result<(), ReaderError> {
-        // check we are done!
-
-        let mut buffer = [0; 8];
-        let _ = self
-            .context
-            .clone()
-            .finish()
-            .as_ref()
-            .read(&mut buffer)
-            .map_err(|e| ReaderError::Generic(e.to_string()));
-        let digest = u64::from_ne_bytes(buffer);
-
-        if self.unwind_info_digest != digest {
-            return Err(ReaderError::Digest);
-        }
-
-        Ok(())
+        Some(Ok(unwind_row))
     }
 }
 
@@ -255,8 +280,19 @@ impl<R: Read + Seek> Reader<R> {
         Ok(header)
     }
 
-    pub fn unwind_info_iter(&mut self) -> LeIter<&mut R> {
-        self.reader.seek(SeekFrom::Start(0)).unwrap();
+    pub fn check_digest(&mut self) -> Result<(), ReaderError> {
+        let mut iter = self.iter();
+        for row in &mut iter {
+            row?;
+        }
+        iter.check_digest()
+    }
+
+    pub fn iter(&mut self) -> LeIter<&mut R> {
+        // Skip header and point at the unwind information entries.
+        self.reader
+            .seek(SeekFrom::Start(std::mem::size_of::<Header>() as u64))
+            .unwrap();
 
         LeIter {
             context: Context::new(&SHA256),
@@ -272,10 +308,14 @@ impl<R: Read + Seek> Reader<R> {
 
     pub fn unwind_info(&mut self) -> Result<Vec<CompactUnwindRow>, ReaderError> {
         let mut unwind_info = Vec::with_capacity(self.header.unwind_info_len as usize);
-        let mut iter = self.unwind_info_iter();
-        while let Some(row) = iter.next()? {
-            unwind_info.push(row);
+        let mut iter = self.iter();
+        // WTF
+        for row in &mut iter {
+            unwind_info.push(row?);
         }
+
+        iter.check_digest()?;
+
         Ok(unwind_info)
     }
 }
@@ -294,10 +334,18 @@ mod tests {
         let writer = Writer::new(&path, None);
         assert!(writer.write(&mut buffer).is_ok());
 
-        let reader = Reader::new(buffer, true);
-        let unwind_info = reader.unwrap().unwind_info();
-        assert!(unwind_info.is_ok());
-        let unwind_info = unwind_info.unwrap();
+        buffer.seek(SeekFrom::Start(0)).unwrap();
+        let mut reader = Reader::new(buffer, true);
+        assert!(reader.is_ok());
+
+        let unwind_info = reader.as_mut().unwrap().unwind_info().unwrap();
+        assert_eq!(
+            unwind_info,
+            compact_unwind_info("/proc/self/exe", None).unwrap()
+        );
+
+        // Try again (exercises state-reset for the reader).
+        let unwind_info = reader.unwrap().unwind_info().unwrap();
         assert_eq!(
             unwind_info,
             compact_unwind_info("/proc/self/exe", None).unwrap()
@@ -352,8 +400,8 @@ mod tests {
         buffer.write_all(&[0, 0, 0, 0, 0, 0, 0]).unwrap();
         buffer.seek(SeekFrom::Start(0)).unwrap();
 
-        // let reader = Reader::new(buffer.clone(), true);
-        //assert!(matches!(reader, Err(ReaderError::Digest)));
+        let reader = Reader::new(buffer.clone(), true).unwrap().unwind_info();
+        assert!(matches!(reader, Err(ReaderError::Digest)));
 
         let reader = Reader::new(buffer, false);
         let unwind_info = reader.unwrap().unwind_info();

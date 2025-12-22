@@ -6,7 +6,7 @@
 #define MAX_TAIL_CALLS 19
 // Maximum number of frames.
 #define MAX_STACK_DEPTH 127
-_Static_assert(MAX_TAIL_CALLS *MAX_STACK_DEPTH_PER_PROGRAM >= MAX_STACK_DEPTH,
+_Static_assert(MAX_TAIL_CALLS * MAX_STACK_DEPTH_PER_PROGRAM >= MAX_STACK_DEPTH,
                "enough iterations to traverse the whole stack");
 // Number of unique stacks.
 #define MAX_STACK_TRACES_ENTRIES 64000
