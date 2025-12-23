@@ -2138,11 +2138,12 @@ impl Profiler {
         // Where "long enough" is 2 sessions worth
         let pending_duration = self.session_duration * 2;
 
-        let to_deletes = self
+        // Get the pending ToDelete enums off of the DeletionScheduler and construct a Vec of their
+        // PID and partial_write components
+        let mut pending_deletion: Vec<(i32, bool)> = self
             .deletion_scheduler
             .write()
-            .pop_pending(pending_duration);
-        let mut pending_deletion: Vec<(i32, bool)> = to_deletes
+            .pop_pending(pending_duration)
             .into_iter()
             .map(|to_delete| match to_delete {
                 ToDelete::Process(_, pid, partial_write) => (pid, partial_write),
@@ -2164,10 +2165,12 @@ impl Profiler {
                 "First pass of pending_deletions has {} exited processes",
                 procs_to_reap
             );
-            let procs = self.procs.read(); // read lock to start
+            // read lock to start
+            let procs = self.procs.read();
+            // Eliminate all PIDs we never tracked from the total list of exited processes
             pending_deletion.retain(|(pid, _)| procs.contains_key(pid));
-            // 2nd pass - Perform the actual final deletions
-            let pids_to_del = pending_deletion.iter().map(|(n, _)| n).collect::<Vec<_>>();
+            // 2nd pass - Delete ONLY PIDs we KNOW we tracked
+            let pids_to_del: Vec<Pid> = pending_deletion.iter().map(|(n, _)| *n).collect();
             debug!(
                 "Final deletion of {} exited processes we were actually tracking: {:?}",
                 pending_deletion.len(),
@@ -2176,10 +2179,11 @@ impl Profiler {
             // promote to a write lock - attempting in one step failed
             std::mem::drop(procs);
             let mut procs = self.procs.write();
+
             for (pid, partial_write) in pending_deletion {
                 match procs.remove(&pid) {
                     Some(mut proc_info) => {
-                        // Start by cleaning up all of the process mappings
+                        // Start by cleaning up all of the process mappings we know about
                         // Make a note of how many mappings we had recorded/stored for
                         // each PID, for comparison with how many actually exist for
                         // each PID when we check at the end
@@ -2205,7 +2209,7 @@ impl Profiler {
                             }
                         }
 
-                        // Now complete the job by cleaning up the process itself
+                        // Now clean up the process itself
                         let err = Self::delete_bpf_process(&self.native_unwinder, pid);
                         attempted_bpf_delete_process += 1;
                         if let Err(e) = err {
@@ -2214,81 +2218,19 @@ impl Profiler {
                                 .and_modify(|events| *events += 1)
                                 .or_insert(1);
                         }
-                        // Now check how many mappings still exist for the PID, after
-                        // all should have been obliterated, and print out the keys in
-                        // debug format
-                        // - How many mappings per PID (mappings_count_by_pid HashMap)
-                        let mut mappings_count_by_pid: HashMap<i32, u32> = HashMap::new();
-                        // - Mappings we're going to have to manually delete
-                        let mut mappings_to_delete = vec![];
-                        for key in self.native_unwinder.maps.exec_mappings.keys() {
-                            // Try to convert exec_mappings_key from bytes, error message and skip keys
-                            // where this doesn't work
-                            let key_from_bytes_result = exec_mappings_key::from_bytes(&key);
-                            let key_from_bytes = match key_from_bytes_result {
-                                Ok(val) => val,
-                                Err(err) => {
-                                    error!(
-                                        "Unable to convert exec_mappings_key from_bytes: {:?}",
-                                        err
-                                    );
-                                    continue;
-                                }
-                            };
-                            let exec_mappings_key {
-                                pid: found_pid,
-                                data: summarized_addr,
-                                prefix_len,
-                            } = key_from_bytes;
-                            // let found_pid = key_from_bytes.pid;
-                            // let summarized_addr = key_from_bytes.data;
-                            // let prefix_len = key_from_bytes.prefix_len;
-                            if found_pid == pid {
-                                mappings_to_delete.push(key);
-                                mappings_count_by_pid
-                                    .entry(pid)
-                                    .and_modify(|count| *count += 1)
-                                    .or_insert(1);
-                                // Print out mapping metadata
-                                debug!(
-                                    "PID: {:7} mapping addr: {:016X} prefix_len: {:08X}",
-                                    found_pid, summarized_addr, prefix_len
-                                );
-                            }
-                        }
-                        // How bad were things?
-                        for (key, value) in mappings_count_by_pid {
-                            warn!(
-                                "Dead PID {} still has {} mappings! (will remove)",
-                                key, value
-                            );
-                        }
-                        // Now, delete those mappings
-                        for key in mappings_to_delete.iter() {
-                            // Handle Result, reporting any Errors
-                            match self
-                                .native_unwinder
-                                .maps
-                                .exec_mappings
-                                // NOTE: *this* "key" is already in plain::as_bytes(...) format
-                                .delete(key)
-                            {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    error!("deleting mapping for PID {} failed with {:?}", pid, e);
-                                }
-                            }
-                        }
                     }
                     // Short lived processes may never have been registered - we just
                     // ignore or debug log the fact that they exit()ed without needing
                     // to be handled - ultimately we can dispense with doing anything here
+                    // NOTE: There shouldn't be any of these, as we should have detected and
+                    //       eliminated any untracked PIDs before attempting any deletions
                     None => {
                         debug!("PID {} was never detected - ignoring", pid);
                     }
                 }
             }
-            // Print out info on deletion issues
+
+            // Print out info on any deletion issues that may have occurred
             if !failed_bpf_delete_process.is_empty() {
                 for (failure, count) in failed_bpf_delete_process.into_iter() {
                     info!(
@@ -2299,6 +2241,73 @@ impl Profiler {
             }
             // Drop the write lock on procs
             std::mem::drop(procs);
+
+            // At this point:
+            // - We know the list of processes has been cleaned up
+            // - Even though we tried to clean up the mappings for those processes, we know there
+            //   are often mappings we weren't tracking the existence of - so we work to clean
+            //   those up here and report on them so we can figure out why we missed them
+            // So that we keep iteration over the keys of exec_mappings to a minimum, we build a
+            // HashMap where:
+            // - key:   is each PID that was deleted
+            // - value: a Vec of the keys for every mapping in exec_mappings that must be purged for
+            //          this PID - they can all be logged and then deleted
+            let mut dead_pids_to_mappings: HashMap<Pid, Vec<exec_mappings_key>> = HashMap::new();
+            let _ = self
+                .native_unwinder
+                .maps
+                .exec_mappings
+                .keys()
+                .filter_map(|key| match exec_mappings_key::from_bytes(&key) {
+                    Ok(map_key) => {
+                        // Keep the PID from the exec_mappings_key that converted
+                        let pid = map_key.pid;
+                        // Populate each map key (in original form) for a PID into a Vec, but only
+                        // if the PID is a member of pids_to_del
+                        if pids_to_del.contains(&pid) {
+                            dead_pids_to_mappings.entry(pid).or_default().push(map_key);
+                        }
+                        Some(())
+                    }
+                    Err(e) => {
+                        error!("exec_mappings_key::from_bytes failed: {:?}", e);
+                        None // Discard - we just wanted to log this event
+                    }
+                });
+
+            // Now we can finally iterate over the PIDs whose mappings should have already been
+            // eliminated, printing debug info about them, then actually purging them
+            for (dead_pid, exec_mapping_keys) in dead_pids_to_mappings.iter() {
+                // Describe how bad things were
+                // As in, how many mappings still exist for the PID?
+                warn!(
+                    "Dead PID {} still has {} mappings! (will remove)",
+                    dead_pid,
+                    exec_mapping_keys.len()
+                );
+                for key in exec_mapping_keys {
+                    // Print out the key's mapping metadata in debug format to see if we can glean
+                    // anything from its continued existence
+                    debug!(
+                        "PID: {:7} mapping addr: {:016X} prefix_len: {:08X}",
+                        key.pid, key.data, key.prefix_len
+                    );
+
+                    // Now, delete the mapping
+                    // - Handle Result, reporting any Errors
+                    match self
+                        .native_unwinder
+                        .maps
+                        .exec_mappings
+                        .delete(unsafe { plain::as_bytes(&key) })
+                    {
+                        Ok(_) => {}
+                        Err(e) => {
+                            error!("deleting mapping for PID {} failed with {:?}", dead_pid, e);
+                        }
+                    }
+                }
+            }
         } else {
             debug!("No processes scheduled for final deletion this session");
         }
