@@ -2252,32 +2252,31 @@ impl Profiler {
             // - key:   is each PID that was deleted
             // - value: a Vec of the keys for every mapping in exec_mappings that must be purged for
             //          this PID - they can all be logged and then deleted
-            let mut dead_pids_to_mappings: HashMap<Pid, Vec<exec_mappings_key>> = HashMap::new();
-            let _ = self
-                .native_unwinder
-                .maps
-                .exec_mappings
-                .keys()
-                .filter_map(|key| match exec_mappings_key::from_bytes(&key) {
+            let mut dead_pids_to_mappings: HashMap<Pid, Vec<_>> = HashMap::new();
+            for key in self.native_unwinder.maps.exec_mappings.keys() {
+                match exec_mappings_key::from_bytes(&key) {
                     Ok(map_key) => {
                         // Keep the PID from the exec_mappings_key that converted
-                        let pid = map_key.pid;
+                        let found_pid = map_key.pid;
                         // Populate each map key (in original form) for a PID into a Vec, but only
                         // if the PID is a member of pids_to_del
-                        if pids_to_del.contains(&pid) {
-                            dead_pids_to_mappings.entry(pid).or_default().push(map_key);
+                        if pids_to_del.contains(&found_pid) {
+                            dead_pids_to_mappings
+                                .entry(found_pid)
+                                .or_default()
+                                .push(map_key);
                         }
-                        Some(())
                     }
                     Err(e) => {
                         error!("exec_mappings_key::from_bytes failed: {:?}", e);
-                        None // Discard - we just wanted to log this event
                     }
-                });
+                }
+            }
 
             // Now we can finally iterate over the PIDs whose mappings should have already been
             // eliminated, printing debug info about them, then actually purging them
-            for (dead_pid, exec_mapping_keys) in dead_pids_to_mappings.iter() {
+            // NOTE: Consuming via into_iter()
+            for (dead_pid, exec_mapping_keys) in dead_pids_to_mappings.into_iter() {
                 // Describe how bad things were
                 // As in, how many mappings still exist for the PID?
                 warn!(
