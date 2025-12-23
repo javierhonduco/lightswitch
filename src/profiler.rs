@@ -2264,7 +2264,7 @@ impl Profiler {
                             dead_pids_to_mappings
                                 .entry(found_pid)
                                 .or_default()
-                                .push(map_key);
+                                .push(key);
                         }
                     }
                     Err(e) => {
@@ -2275,8 +2275,7 @@ impl Profiler {
 
             // Now we can finally iterate over the PIDs whose mappings should have already been
             // eliminated, printing debug info about them, then actually purging them
-            // NOTE: Consuming via into_iter()
-            for (dead_pid, exec_mapping_keys) in dead_pids_to_mappings.into_iter() {
+            for (dead_pid, exec_mapping_keys) in dead_pids_to_mappings.iter() {
                 // Describe how bad things were
                 // As in, how many mappings still exist for the PID?
                 warn!(
@@ -2285,12 +2284,19 @@ impl Profiler {
                     exec_mapping_keys.len()
                 );
                 for key in exec_mapping_keys {
-                    // Print out the key's mapping metadata in debug format to see if we can glean
-                    // anything from its continued existence
-                    debug!(
-                        "PID: {:7} mapping addr: {:016X} prefix_len: {:08X}",
-                        key.pid, key.data, key.prefix_len
-                    );
+                    match exec_mappings_key::from_bytes(key) {
+                        Ok(map_key) => {
+                            // Print out the key's mapping metadata in debug format to see if we can glean
+                            // anything from its continued existence
+                            debug!(
+                                "PID: {:7} mapping addr: {:016X} prefix_len: {:08X}",
+                                map_key.pid, map_key.data, map_key.prefix_len
+                            );
+                        }
+                        Err(e) => {
+                            error!("exec_mappings_key::from_bytes failed: {:?}", e);
+                        }
+                    }
 
                     // Now, delete the mapping
                     // - Handle Result, reporting any Errors
