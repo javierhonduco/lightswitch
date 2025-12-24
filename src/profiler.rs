@@ -2300,32 +2300,10 @@ impl Profiler {
                 // Describe how bad things were
                 // As in, how many mappings still exist for the PID?
                 warn!(
-                    "Dead PID {} still has {} mappings! (will remove)",
+                    "Dead PID {} still had {} mappings!",
                     dead_pid,
                     exec_mapping_keys.len()
                 );
-                for key in exec_mapping_keys {
-                    // Print out the key's mapping metadata in debug format to see if we can glean
-                    // anything from its continued existence
-                    debug!(
-                        "PID: {:7} mapping addr: {:016X} prefix_len: {:08X}",
-                        key.pid, key.data, key.prefix_len
-                    );
-
-                    // Now, delete the mapping
-                    // - Handle Result, reporting any Errors
-                    match self
-                        .native_unwinder
-                        .maps
-                        .exec_mappings
-                        .delete(unsafe { plain::as_bytes(&key) })
-                    {
-                        Ok(_) => {}
-                        Err(e) => {
-                            error!("deleting mapping for PID {} failed with {:?}", dead_pid, e);
-                        }
-                    }
-                }
             }
         } else {
             debug!("No processes scheduled for final deletion this session");
