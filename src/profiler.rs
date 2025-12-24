@@ -2267,7 +2267,7 @@ impl Profiler {
                             );
                             // Delete the mapping
                             // - Handle Result, reporting any Errors
-                            match self.native_unwinder.maps.exec_mappings.delete(key) {
+                            match self.native_unwinder.maps.exec_mappings.delete(&key) {
                                 Ok(_) => {}
                                 Err(e) => {
                                     error!(
