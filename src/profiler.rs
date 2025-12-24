@@ -2297,7 +2297,7 @@ impl Profiler {
                         .native_unwinder
                         .maps
                         .exec_mappings
-                        .delete(unsafe { plain::as_bytes(&key) })
+                        .delete(unsafe { plain::as_bytes(key) })
                     {
                         Ok(_) => {}
                         Err(e) => {
