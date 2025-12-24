@@ -2264,7 +2264,7 @@ impl Profiler {
                             dead_pids_to_mappings
                                 .entry(found_pid)
                                 .or_default()
-                                .push(key);
+                                .push(map_key);
                         }
                     }
                     Err(e) => {
@@ -2284,19 +2284,12 @@ impl Profiler {
                     exec_mapping_keys.len()
                 );
                 for key in exec_mapping_keys {
-                    match exec_mappings_key::from_bytes(key) {
-                        Ok(map_key) => {
-                            // Print out the key's mapping metadata in debug format to see if we can glean
-                            // anything from its continued existence
-                            debug!(
-                                "PID: {:7} mapping addr: {:016X} prefix_len: {:08X}",
-                                map_key.pid, map_key.data, map_key.prefix_len
-                            );
-                        }
-                        Err(e) => {
-                            error!("exec_mappings_key::from_bytes failed: {:?}", e);
-                        }
-                    }
+                    // Print out the key's mapping metadata in debug format to see if we can glean
+                    // anything from its continued existence
+                    debug!(
+                        "PID: {:7} mapping addr: {:016X} prefix_len: {:08X}",
+                        key.pid, key.data, key.prefix_len
+                    );
 
                     // Now, delete the mapping
                     // - Handle Result, reporting any Errors
