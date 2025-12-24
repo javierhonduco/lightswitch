@@ -2261,6 +2261,27 @@ impl Profiler {
                         // Populate each map key (in original form) for a PID into a Vec, but only
                         // if the PID is a member of pids_to_del
                         if pids_to_del.contains(&found_pid) {
+                            debug!(
+                                "PID: {:7} mapping addr: {:016X} prefix_len: {:08X}",
+                                map_key.pid, map_key.data, map_key.prefix_len
+                            );
+                            // Delete the mapping
+                            // - Handle Result, reporting any Errors
+                            match self
+                                .native_unwinder
+                                .maps
+                                .exec_mappings
+                                .delete(unsafe { plain::as_bytes(&key) })
+                            {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    error!(
+                                        "deleting mapping for PID {} failed with {:?}",
+                                        found_pid, e
+                                    );
+                                }
+                            }
+
                             dead_pids_to_mappings
                                 .entry(found_pid)
                                 .or_default()
@@ -2275,7 +2296,7 @@ impl Profiler {
 
             // Now we can finally iterate over the PIDs whose mappings should have already been
             // eliminated, printing debug info about them, then actually purging them
-            for (dead_pid, exec_mapping_keys) in dead_pids_to_mappings.iter() {
+            for (dead_pid, exec_mapping_keys) in dead_pids_to_mappings.into_iter() {
                 // Describe how bad things were
                 // As in, how many mappings still exist for the PID?
                 warn!(
@@ -2297,7 +2318,7 @@ impl Profiler {
                         .native_unwinder
                         .maps
                         .exec_mappings
-                        .delete(unsafe { plain::as_bytes(key) })
+                        .delete(unsafe { plain::as_bytes(&key) })
                     {
                         Ok(_) => {}
                         Err(e) => {
