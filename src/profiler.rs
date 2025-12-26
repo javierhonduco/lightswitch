@@ -2152,7 +2152,7 @@ impl Profiler {
         // Perform actual Profiler.procs deletion here
         let procs_to_reap = pending_deletion.len();
         if procs_to_reap > 0 {
-            // Metrics we track for deletions
+            // Metrics we track for deletions per session
             let mut attempted_bpf_delete_process = 0;
             let mut failed_bpf_delete_process = HashMap::new();
             // All process exit()s have been handled, whether we detected their existence or
@@ -2258,29 +2258,20 @@ impl Profiler {
                     Ok(map_key) => {
                         // Keep the PID from the exec_mappings_key that converted
                         let found_pid = map_key.pid;
-                        // Populate each map key (in original form) for a PID into a Vec, but only
-                        // if the PID is a member of pids_to_del
+                        // Populate each map key (in Vec<u8> form) for a PID into a Vec, but
+                        // only for PIDs that are members of pids_to_del
+                        // NOTE: Don't actually delete the keys here because iterating over a libbpf
+                        //       map with keys() isn't stable if the map is changed while iterating
+                        //       over it
                         if pids_to_del.contains(&found_pid) {
+                            dead_pids_to_mappings
+                                .entry(found_pid)
+                                .or_default()
+                                .push(key);
                             debug!(
                                 "PID: {:7} mapping addr: {:016X} prefix_len: {:08X}",
                                 map_key.pid, map_key.data, map_key.prefix_len
                             );
-                            // Delete the mapping
-                            // - Handle Result, reporting any Errors
-                            match self.native_unwinder.maps.exec_mappings.delete(&key) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    error!(
-                                        "deleting mapping for PID {} failed with {:?}",
-                                        found_pid, e
-                                    );
-                                }
-                            }
-
-                            dead_pids_to_mappings
-                                .entry(found_pid)
-                                .or_default()
-                                .push(map_key);
                         }
                     }
                     Err(e) => {
@@ -2299,6 +2290,16 @@ impl Profiler {
                     dead_pid,
                     exec_mapping_keys.len()
                 );
+                // Then delete the mappings that were found
+                for key in exec_mapping_keys.into_iter() {
+                    // - Handle Result, reporting any Errors
+                    match self.native_unwinder.maps.exec_mappings.delete(&key) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            error!("deleting mapping for PID {} failed with {:?}", dead_pid, e);
+                        }
+                    }
+                }
             }
         } else {
             debug!("No processes scheduled for final deletion this session");
