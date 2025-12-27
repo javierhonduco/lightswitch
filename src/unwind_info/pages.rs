@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::unwind_info::types::CompactUnwindRow;
+use crate::unwind_info::{persist::ReaderError, types::CompactUnwindRow};
 
 #[derive(PartialEq)]
 pub struct Page {
@@ -28,7 +28,10 @@ impl fmt::Debug for Page {
 /// unwind info in a given page in 16 iterations, and represent the program
 /// counters with 32 bits (32 bits for PC + 16 bits for page offset = 48 bits,
 /// which is enough as the upper 16 bits are unused).
-pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
+pub fn to_pages<'a>(
+    unwind_info: impl IntoIterator<Item = &'a Result<CompactUnwindRow, ReaderError>>,
+    unwind_info_len: usize,
+) -> Vec<Page> {
     let page_size_bits = 16;
     let page_size = 2_u64.pow(page_size_bits);
     let low_bits_mask = page_size - 1;
@@ -39,7 +42,8 @@ pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
     let mut prev_index = 0;
 
     // println!("==========");
-    for (i, row) in unwind_info.iter().enumerate() {
+    for (i, row) in unwind_info.into_iter().enumerate() {
+        let row = row.as_ref().unwrap();
         // println!("----- i {}/{}", i, unwind_info.len());
         let high_pc = row.pc & high_bits_mask;
         match prev_high_pc {
@@ -87,7 +91,7 @@ pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
         pages.push(Page {
             address: id,
             low_index: prev_index.try_into().unwrap(),
-            high_index: unwind_info.len().try_into().unwrap(),
+            high_index: unwind_info_len.try_into().unwrap(),
         });
     }
 

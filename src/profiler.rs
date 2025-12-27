@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use tracing_subscriber::fmt::format::Compact;
 
 use anyhow::Result;
 use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
@@ -54,9 +55,11 @@ use crate::process::{
     ProcessStatus,
 };
 use crate::profile::*;
+use crate::unwind_info::manager::FetchUnwindInfoError;
 use crate::unwind_info::manager::UnwindInfoManager;
 use crate::unwind_info::persist::LeIter;
 use crate::unwind_info::persist::Reader;
+use crate::unwind_info::persist::ReaderError;
 use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::executable_path;
 use crate::util::page_size;
@@ -284,6 +287,51 @@ enum AddUnwindInformationError {
     BpfUnwindInfo(String),
     #[error("failed to write to BPF map that stores pages: {0}")]
     BpfPages(String),
+}
+
+enum UnwindInfoSource<R: Read + Seek> {
+    Reader(Reader<R>),
+    Vector(Vec<Result<CompactUnwindRow, ReaderError>>),
+}
+
+impl<R: Read + Seek> UnwindInfoSource<R> {
+    fn len(&self) -> usize {
+        match self {
+            UnwindInfoSource::Vector(vec) => vec.len(),
+            UnwindInfoSource::Reader(reader) => reader.len(),
+        }
+    }
+
+    fn iter(&mut self) -> UnwindInfoIterator<'_, R> {
+        match self {
+            UnwindInfoSource::Vector(vec) => UnwindInfoIterator::Vector(vec.iter()),
+            UnwindInfoSource::Reader(reader) => UnwindInfoIterator::Reader(reader.iter()),
+        }
+    }
+}
+
+enum UnwindInfoIterator<'a, R: Read + Seek> {
+    Vector(std::slice::Iter<'a, Result<CompactUnwindRow, ReaderError>>),
+    Reader(LeIter<&'a mut R>),
+}
+
+impl<'a, R: Read + Seek> Iterator for UnwindInfoIterator<'a, R> {
+    type Item = &'a Result<CompactUnwindRow, ReaderError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            UnwindInfoIterator::Vector(iter) => iter.next(),
+            UnwindInfoIterator::Reader(iter) => {
+                // LeIter requires &mut to iterate
+                (&mut *iter).next().map(|result| {
+                    // SAFETY: We're extending the lifetime from the iterator's lifetime
+                    // to 'a, which is sound because the data comes from the Reader which
+                    // lives for 'a
+                    unsafe { std::mem::transmute::<&Result<CompactUnwindRow, ReaderError>, &'a Result<CompactUnwindRow, ReaderError>>(result) }
+                })
+            }
+        }
+    }
 }
 
 impl Profiler {
@@ -1093,11 +1141,12 @@ impl Profiler {
         self.procs.read().get(&pid).is_some()
     }
 
-    fn add_bpf_unwind_info(
+    fn add_bpf_unwind_info<'a>(
         inner: &MapHandle,
-        unwind_info: &mut Reader<impl Read + Seek>,
+        unwind_info: impl Iterator<Item = &'a Result<CompactUnwindRow, ReaderError>>,
+        unwind_info_len: usize,
     ) -> Result<(), anyhow::Error> {
-        let size = inner.value_size() as usize * unwind_info.len();
+        let size = inner.value_size() as usize * unwind_info_len;
         let mut mmap = unsafe {
             MmapOptions::new()
                 .len(roundup_page(size))
@@ -1109,23 +1158,26 @@ impl Profiler {
         assert_eq!(prefix.len(), 0);
         assert_eq!(suffix.len(), 0);
 
-        for (row, write) in unwind_info.iter().zip(middle) {
+        for (row, write) in unwind_info.zip(middle) {
             // @nocommit
-            *write = (&row?).into();
+            *write = (*row)
+                .as_ref()
+                .map_err(|e| anyhow::anyhow!("{:?}", e))?
+                .into();
         }
 
         Ok(())
     }
 
-    fn add_bpf_pages(
+    fn add_bpf_pages<'a>(
         bpf: &ProfilerSkel,
-        unwind_info: &mut Reader<impl Read + Seek>,
+        unwind_info: impl IntoIterator<Item = &'a Result<CompactUnwindRow, ReaderError>>,
+        unwind_info_len: usize,
         executable_id: u64,
     ) -> Result<(), libbpf_rs::Error> {
         // HACK
-        let unwind_info = unwind_info.unwind_info().unwrap();
         let span = span!(Level::ERROR, "to_pages").entered();
-        let pages = crate::unwind_info::pages::to_pages(&unwind_info);
+        let pages = crate::unwind_info::pages::to_pages(unwind_info, unwind_info_len);
         span.exit();
         for page in pages {
             let page_key = page_key_t {
@@ -1479,11 +1531,11 @@ impl Profiler {
         let object_files = self.object_files.read();
         let executable_info = object_files.get(&executable_id).unwrap();
         let executable_path = executable_info.path.clone();
-        let needs_synthesis = executable_info.is_vdso && architecture() == Architecture::Arm64;
+        let use_frame_pointers = executable_info.is_vdso && architecture() == Architecture::Arm64;
         let runtime = executable_info.runtime.clone();
         std::mem::drop(object_files);
 
-        let unwind_info = match runtime {
+        let mut unwind_info = match runtime {
             // Runtime::Go(stop_frames) => {
             //     let mut unwind_info = Vec::new();
 
@@ -1502,104 +1554,108 @@ impl Profiler {
             //     unwind_info.sort_by_key(|e| e.pc);
             //     Ok(unwind_info)
             // }
-            Runtime::Zig {
-                start_low_address,
-                start_high_address,
-            } => {
-                let _span = span!(
-                    Level::DEBUG,
-                    "calling in_memory_unwind_info",
-                    "{}",
-                    executable_path.display()
-                )
-                .entered();
-                self.unwind_info_manager.fetch_unwind_info(
-                    &executable_path,
-                    executable_id,
-                    Some((start_low_address, start_high_address)),
-                    false,
-                )
-            }
+            // Runtime::Zig {
+            //     start_low_address,
+            //     start_high_address,
+            // } => {
+            //     let _span = span!(
+            //         Level::DEBUG,
+            //         "calling in_memory_unwind_info",
+            //         "{}",
+            //         executable_path.display()
+            //     )
+            //     .entered();
+            //     self.unwind_info_manager.fetch_unwind_info(
+            //         &executable_path,
+            //         executable_id,
+            //         Some((start_low_address, start_high_address)),
+            //         false,
+            //     )
+            // }
             Runtime::CLike => {
-                // if needs_synthesis {
-                //     debug!("synthetising arm64 unwind information using frame pointers for vDSO");
-                //     Ok(vec![
-                //         CompactUnwindRow::frame_setup(start_address),
-                //         CompactUnwindRow::stop_unwinding(end_address),
-                //     ])
-                // } else {
-                let _span = span!(
-                    Level::DEBUG,
-                    "calling in_memory_unwind_info",
-                    "{}",
-                    executable_path.display()
-                )
-                .entered();
-                self.unwind_info_manager.fetch_unwind_info(
-                    &executable_path,
-                    executable_id,
-                    None,
-                    false,
-                )
-                // }
+                if use_frame_pointers {
+                    debug!("synthetising arm64 unwind information using frame pointers for vDSO");
+                    UnwindInfoSource::Vector(vec![
+                        Ok(CompactUnwindRow::frame_setup(start_address)),
+                        Ok(CompactUnwindRow::stop_unwinding(end_address)),
+                    ])
+                } else {
+                    let _span = span!(
+                        Level::DEBUG,
+                        "calling in_memory_unwind_info",
+                        "{}",
+                        executable_path.display()
+                    )
+                    .entered();
+                    UnwindInfoSource::Reader(
+                        self.unwind_info_manager
+                            .fetch_unwind_info(&executable_path, executable_id, None, false)
+                            .unwrap(),
+                    )
+                }
             }
             _ => {
                 todo!();
-                return Err(AddUnwindInformationError::Empty);
+                //return Err(AddUnwindInformationError::Empty);
             } // Runtime::V8 => Ok(vec![
               //     CompactUnwindRow::frame_setup(start_address),
               //     CompactUnwindRow::stop_unwinding(end_address),
               // ]),
         };
 
-        let mut unwind_info = match unwind_info {
-            Ok(unwind_info) => unwind_info,
-            Err(e) => {
-                let known_naughty = executable_path.to_string_lossy().contains("libicudata.so")
-                    || executable_path.to_string_lossy().contains("libnss_dns.so");
-                if known_naughty {
-                    return Err(AddUnwindInformationError::NoUnwindInfoKnownNaughty);
-                } else {
-                    return Err(AddUnwindInformationError::NoUnwindInfo(
-                        e.to_string(),
-                        executable_path.to_string_lossy().to_string(),
-                    ));
-                }
-            }
-        };
+        // let (mut unwind_info, unwind_info_len) = match unwind_info {
+        //     UnwindInfoSource::Vector(unwind_info) => (Box::new(unwind_info), unwind_info.len()),
+        //     UnwindInfoSource::Reader(Ok(mut unwind_info)) => {
+        //         (Box::new((&mut unwind_info).into_iter()), unwind_info.len())
+        //     }
+        //     UnwindInfoSource::Reader(Err(e)) => {
+        //         let known_naughty = executable_path.to_string_lossy().contains("libicudata.so")
+        //             || executable_path.to_string_lossy().contains("libnss_dns.so");
+        //         if known_naughty {
+        //             return Err(AddUnwindInformationError::NoUnwindInfoKnownNaughty);
+        //         } else {
+        //             return Err(AddUnwindInformationError::NoUnwindInfo(
+        //                 e.to_string(),
+        //                 executable_path.to_string_lossy().to_string(),
+        //             ));
+        //         }
+        //     }
+        // };
 
-        if !self.maybe_evict_executables(unwind_info.len(), self.max_native_unwind_info_size_mb) {
+        let unwind_info_len = unwind_info.len();
+        if !self.maybe_evict_executables(unwind_info_len, self.max_native_unwind_info_size_mb) {
             return Err(AddUnwindInformationError::Eviction);
         }
 
-        if unwind_info.is_empty() {
+        if unwind_info_len == 0 {
             return Err(AddUnwindInformationError::Empty);
         }
 
-        if unwind_info.len() > MAX_UNWIND_INFO_SIZE {
+        if unwind_info_len > MAX_UNWIND_INFO_SIZE {
             return Err(AddUnwindInformationError::TooLarge(
                 executable_path.to_string_lossy().to_string(),
-                unwind_info.len(),
+                unwind_info_len,
             ));
         }
 
         let inner_map = Self::create_and_insert_unwind_info_map(
             &mut self.native_unwinder,
             executable_id.into(),
-            unwind_info.len(),
+            unwind_info_len,
         );
 
         // Add all unwind information and its pages.
-        Self::add_bpf_unwind_info(&inner_map, &mut unwind_info)
+        Self::add_bpf_unwind_info(&inner_map, &mut unwind_info.iter_mut(), unwind_info_len)
             .map_err(|e| AddUnwindInformationError::BpfUnwindInfo(e.to_string()))?;
         Self::add_bpf_pages(
             &self.native_unwinder,
-            &mut unwind_info,
+            &mut unwind_info.iter_mut(),
+            unwind_info_len,
             executable_id.into(),
         )
         .map_err(|e| AddUnwindInformationError::BpfPages(e.to_string()))?;
         // HACK
-        let unwind_info = unwind_info.unwind_info().unwrap();
+        let unwind_info = unwind_info.iter_mut().collect::<Vec<_>>().unwrap();
         let unwind_info_start_address = unwind_info.first().unwrap().pc;
         let unwind_info_end_address = unwind_info.last().unwrap().pc;
         self.native_unwind_state.known_executables.insert(

@@ -234,7 +234,7 @@ mod tests {
                 true,
             );
             let mut manager_unwind_info = manager_unwind_info.unwrap();
-            assert_eq!(unwind_info, manager_unwind_info.unwind_info().unwrap());
+            assert_eq!(unwind_info, manager_unwind_info.as_vec().unwrap());
         }
     }
 
@@ -254,7 +254,7 @@ mod tests {
         );
         assert!(manager_unwind_info.is_ok());
         let mut manager_unwind_info = manager_unwind_info.unwrap();
-        assert_eq!(unwind_info, manager_unwind_info.unwind_info().unwrap());
+        assert_eq!(unwind_info, manager_unwind_info.as_vec().unwrap());
 
         // Corrupt it.
         let mut file = OpenOptions::new()
@@ -271,7 +271,7 @@ mod tests {
             None,
             true,
         );
-        let manager_unwind_info = manager_unwind_info.unwrap().unwind_info().unwrap();
+        let manager_unwind_info = manager_unwind_info.unwrap().as_vec().unwrap();
         assert_eq!(unwind_info, manager_unwind_info);
     }
 

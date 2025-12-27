@@ -140,7 +140,7 @@ pub enum ReaderError {
     #[error("digest does not match")]
     Digest,
 }
-
+// impl Reader for Vec<Result<CompactUnwindRow, ReaderError>> {}
 /// Reads compact information of a bytes slice.
 /// no
 pub struct Reader<R: Read + Seek> {
@@ -172,6 +172,10 @@ pub struct LeIter<R: Read> {
 impl<R: Read> LeIter<R> {
     pub fn len(&mut self) -> usize {
         self.size as usize
+    }
+
+    pub fn is_empty(&mut self) -> bool {
+        self.len() == 0
     }
 
     fn check_digest(&self) -> Result<(), ReaderError> {
@@ -306,7 +310,7 @@ impl<R: Read + Seek> Reader<R> {
         }
     }
 
-    pub fn unwind_info(&mut self) -> Result<Vec<CompactUnwindRow>, ReaderError> {
+    pub fn as_vec(&mut self) -> Result<Vec<CompactUnwindRow>, ReaderError> {
         let mut unwind_info = Vec::with_capacity(self.header.unwind_info_len as usize);
         let mut iter = self.iter();
         // WTF
@@ -338,14 +342,14 @@ mod tests {
         let mut reader = Reader::new(buffer, true);
         assert!(reader.is_ok());
 
-        let unwind_info = reader.as_mut().unwrap().unwind_info().unwrap();
+        let unwind_info = reader.as_mut().unwrap().as_vec().unwrap();
         assert_eq!(
             unwind_info,
             compact_unwind_info("/proc/self/exe", None).unwrap()
         );
 
         // Try again (exercises state-reset for the reader).
-        let unwind_info = reader.unwrap().unwind_info().unwrap();
+        let unwind_info = reader.unwrap().as_vec().unwrap();
         assert_eq!(
             unwind_info,
             compact_unwind_info("/proc/self/exe", None).unwrap()
@@ -400,11 +404,11 @@ mod tests {
         buffer.write_all(&[0, 0, 0, 0, 0, 0, 0]).unwrap();
         buffer.seek(SeekFrom::Start(0)).unwrap();
 
-        let reader = Reader::new(buffer.clone(), true).unwrap().unwind_info();
+        let reader = Reader::new(buffer.clone(), true).unwrap().as_vec();
         assert!(matches!(reader, Err(ReaderError::Digest)));
 
         let reader = Reader::new(buffer, false);
-        let unwind_info = reader.unwrap().unwind_info();
+        let unwind_info = reader.unwrap().as_vec();
         assert!(unwind_info.is_ok());
     }
 
@@ -431,7 +435,7 @@ mod tests {
             .unwrap();
         buffer.seek(SeekFrom::Start(0)).unwrap();
         assert!(matches!(
-            Reader::new(buffer, true).unwrap().unwind_info(),
+            Reader::new(buffer, true).unwrap().as_vec(),
             Err(ReaderError::OutOfRange)
         ));
     }
