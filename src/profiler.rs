@@ -17,6 +17,7 @@ use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -44,6 +45,7 @@ use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
 use crate::debug_info::DebugInfoBackendNull;
 use crate::debug_info::DebugInfoManager;
+use crate::deletion_scheduler::{DeletionScheduler, ToDelete};
 use crate::kernel::get_all_kernel_modules;
 use crate::kernel::KERNEL_PID;
 use crate::perf_events::setup_perf_event;
@@ -162,6 +164,11 @@ pub struct Profiler {
     // Baseline for calculating raw_sample collection wall clock time
     // as bpf currently only supports getting the offset since system boot.
     walltime_at_system_boot: u64,
+    deletion_scheduler: Arc<RwLock<DeletionScheduler>>,
+    new_proc_total: u64,
+    new_proc_per_session: u64,
+    exit_proc_total: u64,
+    exit_proc_per_session: u64,
 }
 
 pub struct ProfilerConfig {
@@ -536,6 +543,8 @@ impl Profiler {
         let walltime_at_system_boot =
             procfs::boot_time().unwrap().timestamp_nanos_opt().unwrap() as u64;
 
+        let deletion_scheduler = DeletionScheduler::new();
+
         Profiler {
             cache_dir,
             _links: Vec::new(),
@@ -569,6 +578,11 @@ impl Profiler {
             aggregator: Aggregator::default(),
             metadata_provider,
             walltime_at_system_boot,
+            deletion_scheduler: Arc::new(RwLock::new(deletion_scheduler)),
+            new_proc_total: 0,
+            new_proc_per_session: 0,
+            exit_proc_total: 0,
+            exit_proc_per_session: 0,
         }
     }
 
@@ -807,6 +821,9 @@ impl Profiler {
                     debug!("collecting profiles on schedule");
                     let profile = self.collect_profile();
                     self.send_profile(profile);
+                    // After each session, clean up any exited processes for
+                    // which cleanup is due
+                    self.cleanup_procs();
                 },
                 recv(self.raw_sample_receive) -> raw_sample => {
                     if let Ok(raw_sample) = raw_sample {
@@ -823,6 +840,8 @@ impl Profiler {
                         },
                         Ok(TracerEvent::ProcessExit(pid)) => {
                                 self.handle_process_exit(pid, false);
+                                self.exit_proc_total += 1;
+                                self.exit_proc_per_session += 1;
                         },
                         Err(_) => {}
                     }
@@ -852,41 +871,115 @@ impl Profiler {
         start.elapsed()
     }
 
+    fn get_exec_mappings_max_entries(&mut self) -> &'static u32 {
+        // Since the max entries for an eBPF map should be fixed, only grab it once
+        static VALUE: OnceLock<u32> = OnceLock::new();
+        VALUE.get_or_init(|| {
+            self.native_unwinder
+                .maps
+                .exec_mappings
+                .info()
+                .expect("Should be able to get info about exec_mappings map")
+                .info
+                .max_entries
+        })
+    }
+
+    fn report_resource_consumption(&mut self) {
+        let _span = span!(Level::INFO, "report_resource_consumption").entered();
+        // Static reference to exec_mappings max entries count
+        let exec_mappings_max_entries = *self.get_exec_mappings_max_entries();
+        let (mut exited_procs, mut running_procs) = (0, 0);
+        let procs_guard = self.procs.read();
+        for proc_info in procs_guard.values() {
+            match proc_info.status {
+                ProcessStatus::Exited => exited_procs += 1,
+                ProcessStatus::Running => running_procs += 1,
+            }
+        }
+        std::mem::drop(procs_guard);
+        let live_pid_count = self.live_pid_count();
+        info!(
+            "{} processes being tracked, {} total processes running",
+            running_procs, live_pid_count
+        );
+        info!(
+            "{} Processes have exited and are awaiting final deletion",
+            exited_procs
+        );
+        info!(
+            "{} new processes detected this session, {} new processes detected since profiler startup",
+            self.new_proc_per_session, self.new_proc_total
+        );
+        info!(
+            "{} process exits this session; {} process exits since profiler startup",
+            self.exit_proc_per_session, self.exit_proc_total
+        );
+        info!(
+            "exec_mappings usage: {}/{}",
+            self.native_unwinder.maps.exec_mappings.keys().count(),
+            exec_mappings_max_entries
+        );
+        // exec_mappings usage:
+        // - Total PIDs represented (pids_with_mappings Vec)
+        // - How many mappings per PID (mappings_count_by_pid HashMap)
+        let mut mappings_count_by_pid: HashMap<i32, u32> = HashMap::new();
+        let pids_with_mappings: Vec<_> = self
+            .native_unwinder
+            .maps
+            .exec_mappings
+            .keys()
+            .filter_map(|key| match exec_mappings_key::from_bytes(&key) {
+                Ok(map_key) => {
+                    // Keep the PID from the exec_mappings_key that converted
+                    let pid = map_key.pid;
+                    // Populate the number of mappings per PID opportunistically
+                    mappings_count_by_pid
+                        .entry(pid)
+                        .and_modify(|count| *count += 1)
+                        .or_insert(1);
+                    // Pass this on to the collection below
+                    Some(map_key.pid)
+                }
+                Err(e) => {
+                    error!("exec_mappings_key::from_bytes failed: {:?}", e);
+                    None // Discard this from the final collection
+                }
+            })
+            .unique()
+            .collect();
+        info!("There are {} PIDs with mappings", pids_with_mappings.len());
+        for (key, value) in mappings_count_by_pid {
+            debug!("PID {} has {} mappings", key, value);
+        }
+        // - Compare PIDs represented in exec_mappings with PIDs we're tracking, note differences
+        info!("object_files count: {}", self.object_files.read().len());
+        // Unwind Info Usage Metrics
+        let used_unwind_info_size_mb = self.unwind_info_memory_usage();
+        let max_unwind_info_size_mb = self.max_native_unwind_info_size_mb;
+        info!(
+            "unwind information usage: {} MB / {} MB",
+            used_unwind_info_size_mb, max_unwind_info_size_mb
+        );
+        // Reset per session metrics
+        self.new_proc_per_session = 0;
+        self.exit_proc_per_session = 0;
+    }
+
     pub fn handle_process_exit(&mut self, pid: Pid, partial_write: bool) {
         // TODO: remove ratelimits for this process.
+        // This handler can be called before we've had a chance to register the pid in the
+        // first place, so we should just put the PID in the deletion_scheduler, and do any
+        // work after a couple of sessions have elapsed.
+        self.deletion_scheduler
+            .write()
+            .add(ToDelete::Process(Instant::now(), pid, partial_write));
+        // If we know about this PID, mark it as having exited.  If it lived a short enough time
+        // that we didn't start tracking its exit is being handled, it won't matter
         let mut procs = self.procs.write();
-        match procs.get_mut(&pid) {
-            Some(proc_info) => {
-                debug!("marking process {} as exited", pid);
-                proc_info.status = ProcessStatus::Exited;
-
-                let err = Self::delete_bpf_process(&self.native_unwinder, pid);
-                if let Err(e) = err {
-                    debug!("could not remove bpf process due to {:?}", e);
-                }
-
-                for mapping in &mut proc_info.mappings.0 {
-                    let mut object_files = self.object_files.write();
-                    if mapping.mark_as_deleted(&mut object_files) {
-                        if let Entry::Occupied(entry) = self
-                            .native_unwind_state
-                            .known_executables
-                            .entry(mapping.executable_id)
-                        {
-                            Self::delete_bpf_native_unwind_all(
-                                pid,
-                                &mut self.native_unwinder,
-                                mapping,
-                                entry,
-                                partial_write,
-                            );
-                        }
-                    }
-                }
-            }
-            None => {
-                debug!("could not find process {} while marking as exited", pid);
-            }
+        if let Some(proc_info) = procs.get_mut(&pid) {
+            debug!("marking process {} as exited", pid);
+            proc_info.status = ProcessStatus::Exited;
         }
     }
 
@@ -1712,8 +1805,15 @@ impl Profiler {
             Ok(()) => {
                 self.add_unwind_info_for_process(pid);
             }
-            Err(_e) => {
-                // probabaly a procfs race
+            Err(e) => {
+                // probably a procfs race
+                // Could be other things too, like eviction failures
+                match e {
+                    AddProcessError::ProcfsRace => (),
+                    _ => {
+                        error!("Failed to add a process: {:?}", e);
+                    }
+                }
             }
         }
     }
@@ -1788,7 +1888,11 @@ impl Profiler {
     }
 
     pub fn add_proc(&mut self, pid: Pid) -> Result<(), AddProcessError> {
+        // NOTE: There are 3 places where AddProcessError::ProcfsRace can be returned from this
+        // function, and one of them is *after* the Pid ha been added to Profiler.procs
+        // ProcfsRace #1
         let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
+        // ProcfsRace #2
         let maps = proc.maps().map_err(|_| AddProcessError::ProcfsRace)?;
         if !self.maybe_evict_process(true) {
             return Err(AddProcessError::Eviction);
@@ -1895,7 +1999,7 @@ impl Profiler {
                             .add_if_not_present(&name, build_id, &exe_path);
                         match res {
                             Ok(_) => {
-                                debug!("debuginfo add_if_not_present succeded {:?}", res);
+                                debug!("debuginfo add_if_not_present succeeded {:?}", res);
                             }
                             Err(e) => {
                                 error!(
@@ -2000,6 +2104,14 @@ impl Profiler {
         };
         self.procs.clone().write().insert(pid, proc_info);
 
+        // NOTE: due to how ProcfsRace can be returned with different side effects on
+        // Profiler.procs, this is where we increment the number of processes that the
+        // Profiler is actually tracking
+        self.new_proc_total += 1;
+        self.new_proc_per_session += 1;
+
+        // ProcfsRace #3 - This Pid has already been added to self.procs just above, but this
+        // function will still return with an error if ProcfsRace is returned for any thread
         for thread in proc.tasks().map_err(|_| AddProcessError::ProcfsRace)? {
             match thread {
                 Ok(thread) => {
@@ -2018,6 +2130,184 @@ impl Profiler {
         }
 
         Ok(())
+    }
+
+    fn cleanup_procs(&mut self) {
+        let _span = span!(Level::INFO, "cleanup_procs").entered();
+        // Pop off any processes that we've kept around long enough after they've exited
+        // Where "long enough" is 2 sessions worth
+        let pending_duration = self.session_duration * 2;
+
+        // Get the pending ToDelete enums off of the DeletionScheduler and construct a Vec of their
+        // PID and partial_write components
+        let mut pending_deletion: Vec<(i32, bool)> = self
+            .deletion_scheduler
+            .write()
+            .pop_pending(pending_duration)
+            .into_iter()
+            .map(|to_delete| match to_delete {
+                ToDelete::Process(_, pid, partial_write) => (pid, partial_write),
+            })
+            .collect();
+        // Perform actual Profiler.procs deletion here
+        let procs_to_reap = pending_deletion.len();
+        if procs_to_reap > 0 {
+            // Metrics we track for deletions per session
+            let mut attempted_bpf_delete_process = 0;
+            let mut failed_bpf_delete_process = HashMap::new();
+            // All process exit()s have been handled, whether we detected their existence or
+            // not.
+            // We note which PIDs we're actually tracking by way of receiving stacks for them at
+            // any time and ignore the rest
+            //
+            // 1st pass - eliminate from consideration any exited PIDs we never got samples from
+            debug!(
+                "First pass of pending_deletions has {} exited processes",
+                procs_to_reap
+            );
+            // read lock to start
+            let procs = self.procs.read();
+            // Eliminate all PIDs we never tracked from the total list of exited processes
+            pending_deletion.retain(|(pid, _)| procs.contains_key(pid));
+            // 2nd pass - Delete ONLY PIDs we KNOW we tracked
+            let pids_to_del: Vec<Pid> = pending_deletion.iter().map(|(n, _)| *n).collect();
+            debug!(
+                "Final deletion of {} exited processes we were actually tracking: {:?}",
+                pending_deletion.len(),
+                pids_to_del
+            );
+            // promote to a write lock - attempting in one step failed
+            std::mem::drop(procs);
+            let mut procs = self.procs.write();
+
+            for (pid, partial_write) in pending_deletion {
+                match procs.remove(&pid) {
+                    Some(mut proc_info) => {
+                        // Start by cleaning up all of the process mappings we know about
+                        // Make a note of how many mappings we had recorded/stored for
+                        // each PID, for comparison with how many actually exist for
+                        // each PID when we check at the end
+                        let mapping_count = proc_info.mappings.0.len();
+                        // How many mappings for the PID we "know" about
+                        debug!("PID {} had {} known mappings", pid, mapping_count);
+                        for mapping in &mut proc_info.mappings.0 {
+                            let mut object_files = self.object_files.write();
+                            if mapping.mark_as_deleted(&mut object_files) {
+                                if let Entry::Occupied(entry) = self
+                                    .native_unwind_state
+                                    .known_executables
+                                    .entry(mapping.executable_id)
+                                {
+                                    Self::delete_bpf_native_unwind_all(
+                                        pid,
+                                        &mut self.native_unwinder,
+                                        mapping,
+                                        entry,
+                                        partial_write,
+                                    );
+                                }
+                            }
+                        }
+
+                        // Now clean up the process itself
+                        let err = Self::delete_bpf_process(&self.native_unwinder, pid);
+                        attempted_bpf_delete_process += 1;
+                        if let Err(e) = err {
+                            failed_bpf_delete_process
+                                .entry(e.to_string())
+                                .and_modify(|events| *events += 1)
+                                .or_insert(1);
+                        }
+                    }
+                    // Short lived processes may never have been registered - we just
+                    // ignore or debug log the fact that they exit()ed without needing
+                    // to be handled - ultimately we can dispense with doing anything here
+                    // NOTE: There shouldn't be any of these, as we should have detected and
+                    //       eliminated any untracked PIDs before attempting any deletions
+                    None => {
+                        debug!("PID {} was never detected - ignoring", pid);
+                    }
+                }
+            }
+
+            // Print out info on any deletion issues that may have occurred
+            if !failed_bpf_delete_process.is_empty() {
+                for (failure, count) in failed_bpf_delete_process.into_iter() {
+                    info!(
+                        "bpf_delete_process() attempted {} times, failed with err [{}] {} times",
+                        attempted_bpf_delete_process, failure, count
+                    );
+                }
+            }
+            // Drop the write lock on procs
+            std::mem::drop(procs);
+
+            // At this point:
+            // - We know the list of processes has been cleaned up
+            // - Even though we tried to clean up the mappings for those processes, we know there
+            //   are often mappings we weren't tracking the existence of - so we work to clean
+            //   those up here and report on them so we can figure out why we missed them
+            // So that we keep iteration over the keys of exec_mappings to a minimum, we build a
+            // HashMap where:
+            // - key:   is each PID that was deleted
+            // - value: a Vec of the keys for every mapping in exec_mappings that must be purged for
+            //          this PID - they can all be logged and then deleted
+            let mut dead_pids_to_mappings: HashMap<Pid, Vec<_>> = HashMap::new();
+            for key in self.native_unwinder.maps.exec_mappings.keys() {
+                match exec_mappings_key::from_bytes(&key) {
+                    Ok(map_key) => {
+                        // Keep the PID from the exec_mappings_key that converted
+                        let found_pid = map_key.pid;
+                        // Populate each map key (in Vec<u8> form) for a PID into a Vec, but
+                        // only for PIDs that are members of pids_to_del
+                        // NOTE: Don't actually delete the keys here because iterating over a libbpf
+                        //       map with keys() isn't stable if the map is changed while iterating
+                        //       over it
+                        if pids_to_del.contains(&found_pid) {
+                            dead_pids_to_mappings
+                                .entry(found_pid)
+                                .or_default()
+                                .push(key);
+                            debug!(
+                                "PID: {:7} mapping addr: {:016X} prefix_len: {:08X}",
+                                map_key.pid, map_key.data, map_key.prefix_len
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!("exec_mappings_key::from_bytes failed: {:?}", e);
+                    }
+                }
+            }
+
+            // Now we can finally iterate over the PIDs whose mappings should have already been
+            // eliminated, printing debug info about them, then actually purging them
+            for (dead_pid, exec_mapping_keys) in dead_pids_to_mappings.into_iter() {
+                // Describe how bad things were
+                // As in, how many mappings still exist for the PID?
+                warn!(
+                    "Dead PID {} still had {} mappings!",
+                    dead_pid,
+                    exec_mapping_keys.len()
+                );
+                // Then delete the mappings that were found
+                for key in exec_mapping_keys.into_iter() {
+                    // - Handle Result, reporting any Errors
+                    match self.native_unwinder.maps.exec_mappings.delete(&key) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            error!("deleting mapping for PID {} failed with {:?}", dead_pid, e);
+                        }
+                    }
+                }
+            }
+        } else {
+            debug!("No processes scheduled for final deletion this session");
+        }
+        _span.exit();
+
+        // End with a resource consumption report
+        self.report_resource_consumption();
     }
 
     fn handle_sample(
@@ -2088,6 +2378,24 @@ impl Profiler {
 
     pub fn teardown_perf_events(&mut self) {
         self._links = vec![];
+    }
+
+    fn live_pid_count(&mut self) -> usize {
+        let live_pids: Vec<Pid> = procfs::process::all_processes()
+            .expect("Cannot read proc")
+            .filter_map(|p| match p {
+                Ok(p) => Some(p.pid()),
+                Err(e) => match e {
+                    procfs::ProcError::NotFound(_) => None, // pid vanished, all is well
+                    procfs::ProcError::Io(_e, _path) => None, // match on path if you care
+                    x => {
+                        warn!("cannot read process due to error {x:?}");
+                        None
+                    }
+                },
+            })
+            .collect();
+        live_pids.len()
     }
 }
 
@@ -2165,19 +2473,19 @@ mod tests {
                 > 2
         );
         profiler.handle_process_exit(std::process::id() as i32, false);
-        assert_eq!(profiler.native_unwinder.maps.outer_map.keys().count(), 0);
-        assert_eq!(
-            profiler.native_unwinder.maps.exec_mappings.keys().count(),
-            0
-        );
-        assert_eq!(
+        assert!(profiler.native_unwinder.maps.outer_map.keys().count() > 0);
+        assert!(profiler.native_unwinder.maps.exec_mappings.keys().count() > 0);
+        // It's been marked as Exited, but hasn't been removed yet
+        assert!(profiler.procs.read().keys().count() == 1);
+        assert!(profiler.procs.read().values().next().unwrap().status == ProcessStatus::Exited);
+        assert!(
             profiler
                 .native_unwinder
                 .maps
                 .executable_to_page
                 .keys()
-                .count(),
-            0
+                .count()
+                > 0
         );
     }
 }

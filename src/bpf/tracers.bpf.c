@@ -49,10 +49,6 @@ int tracer_process_exit(void *ctx) {
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
     int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
 
-    if (!process_is_known(per_process_id)) {
-        return 0;
-    }
-
     // Only report main thread terminating.
     if (per_process_id != per_thread_id) {
         return 0;
