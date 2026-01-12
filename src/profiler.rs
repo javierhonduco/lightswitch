@@ -921,10 +921,10 @@ impl Profiler {
             exec_mappings_max_entries
         );
         // exec_mappings usage:
-        // - Total PIDs represented (pids_with_mappings Vec)
+        // - Total PIDs represented (pids_with_mappings)
         // - How many mappings per PID (mappings_count_by_pid HashMap)
         let mut mappings_count_by_pid: HashMap<i32, u32> = HashMap::new();
-        let pids_with_mappings: Vec<_> = self
+        let pids_with_mappings = self
             .native_unwinder
             .maps
             .exec_mappings
@@ -947,8 +947,8 @@ impl Profiler {
                 }
             })
             .unique()
-            .collect();
-        info!("There are {} PIDs with mappings", pids_with_mappings.len());
+            .count();
+        info!("There are {} PIDs with mappings", pids_with_mappings);
         for (key, value) in mappings_count_by_pid {
             debug!("PID {} has {} mappings", key, value);
         }
@@ -975,7 +975,8 @@ impl Profiler {
             .write()
             .add(ToDelete::Process(Instant::now(), pid, partial_write));
         // If we know about this PID, mark it as having exited.  If it lived a short enough time
-        // that we didn't start tracking its exit is being handled, it won't matter
+        // that we didn't start tracking its exit is being handled, it won't matter, as eliminating
+        // it from consideration for cleanup is a very fast operation now.
         let mut procs = self.procs.write();
         if let Some(proc_info) = procs.get_mut(&pid) {
             debug!("marking process {} as exited", pid);
@@ -1889,7 +1890,7 @@ impl Profiler {
 
     pub fn add_proc(&mut self, pid: Pid) -> Result<(), AddProcessError> {
         // NOTE: There are 3 places where AddProcessError::ProcfsRace can be returned from this
-        // function, and one of them is *after* the Pid ha been added to Profiler.procs
+        // function, and one of them is *after* the Pid has been added to Profiler.procs
         // ProcfsRace #1
         let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
         // ProcfsRace #2
@@ -2284,7 +2285,7 @@ impl Profiler {
             // eliminated, printing debug info about them, then actually purging them
             for (dead_pid, exec_mapping_keys) in dead_pids_to_mappings.into_iter() {
                 // Describe how bad things were
-                // As in, how many mappings still exist for the PID?
+                // As in, how many mappings still exist for the PID after we cleaned it up?
                 warn!(
                     "Dead PID {} still had {} mappings!",
                     dead_pid,
@@ -2381,7 +2382,7 @@ impl Profiler {
     }
 
     fn live_pid_count(&mut self) -> usize {
-        let live_pids: Vec<Pid> = procfs::process::all_processes()
+        procfs::process::all_processes()
             .expect("Cannot read proc")
             .filter_map(|p| match p {
                 Ok(p) => Some(p.pid()),
@@ -2394,8 +2395,7 @@ impl Profiler {
                     }
                 },
             })
-            .collect();
-        live_pids.len()
+            .count()
     }
 }
 
