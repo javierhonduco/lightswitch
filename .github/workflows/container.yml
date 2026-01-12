@@ -16,7 +16,7 @@ jobs:
     steps:
     - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
     - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
-    - uses: DeterminateSystems/flakehub-cache-action@398f9fd82f5d1a0ecd48454769649cd8cae1a5b7 # v2
+    - uses: DeterminateSystems/flakehub-cache-action@d39cfe6160f63a02c91cf19dcce0e905758c66c6 # v2
 
     - name: Show nix version
       run: nix --version
