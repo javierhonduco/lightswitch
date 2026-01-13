@@ -904,6 +904,9 @@ impl Profiler {
         }
         std::mem::drop(procs_guard);
         let live_pid_count = self.live_pid_count();
+        if live_pid_count == 0 {
+            warn!("Total Live PID Count cannot be determined this session");
+        }
         info!(
             "{} processes being tracked, {} total processes running",
             running_procs, live_pid_count
@@ -2389,8 +2392,15 @@ impl Profiler {
     }
 
     fn live_pid_count(&mut self) -> usize {
-        procfs::process::all_processes()
-            .expect("Cannot read proc")
+        let processes = match procfs::process::all_processes() {
+            Ok(processes) => processes,
+            Err(e) => {
+                error!("procfs Error: {e}");
+                return 0;
+            }
+        };
+
+        processes
             .filter_map(|p| match p {
                 Ok(p) => Some(p.pid()),
                 Err(e) => match e {
