@@ -151,6 +151,8 @@ pub struct Profiler {
     session_duration: Duration,
     /// Whether the profiler itself should be excluded from profiling.
     exclude_self: bool,
+    /// Whether we report resource consumption at the end of each session
+    report_resources: bool,
     /// Deals with debug information
     debug_info_manager: Box<dyn DebugInfoManager>,
     /// Maximum size of BPF unwind information maps. A higher value will result in
@@ -182,6 +184,7 @@ pub struct ProfilerConfig {
     pub mapsize_info: bool,
     pub mapsize_rate_limits: u32,
     pub exclude_self: bool,
+    pub report_resources: bool,
     pub debug_info_manager: Box<dyn DebugInfoManager>,
     pub max_native_unwind_info_size_mb: i32,
     pub use_ring_buffers: bool,
@@ -201,6 +204,7 @@ impl Default for ProfilerConfig {
             mapsize_info: false,
             mapsize_rate_limits: 5000,
             exclude_self: false,
+            report_resources: false,
             debug_info_manager: Box::new(DebugInfoBackendNull {}),
             max_native_unwind_info_size_mb: i32::MAX,
             use_ring_buffers: true,
@@ -571,6 +575,7 @@ impl Profiler {
             perf_buffer_bytes: profiler_config.perf_buffer_bytes,
             session_duration: profiler_config.session_duration,
             exclude_self: profiler_config.exclude_self,
+            report_resources: profiler_config.report_resources,
             debug_info_manager: profiler_config.debug_info_manager,
             max_native_unwind_info_size_mb: profiler_config.max_native_unwind_info_size_mb,
             unwind_info_manager: UnwindInfoManager::new(&unwind_cache_dir, None),
@@ -2308,7 +2313,9 @@ impl Profiler {
         _span.exit();
 
         // End with a resource consumption report
-        self.report_resource_consumption();
+        if self.report_resources {
+            self.report_resource_consumption();
+        }
     }
 
     fn handle_sample(

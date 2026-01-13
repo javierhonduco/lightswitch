@@ -150,6 +150,11 @@ pub(crate) struct CliArgs {
         help = "Force the profiler to start even if the system killswitch is enabled"
     )]
     pub(crate) unsafe_start: bool,
+    #[arg(
+        long,
+        help = "Report resource consumption details every session completion"
+    )]
+    pub(crate) report_resources: bool,
     #[arg(long, help = "force perf buffers even if ring buffers can be used")]
     pub(crate) force_perf_buffer: bool,
     #[command(subcommand)]
