@@ -103,7 +103,7 @@ int tracer_enter_munmap(struct munmap_entry_args *args) {
 }
 
 SEC("tracepoint/syscalls/sys_exit_munmap")
-int tracer_exit_munmap(struct trace_event_raw_sys_exit *ctx) {
+int tracer_exit_munmap(struct syscall_trace_exit *ctx) {
     mmap_data_key_t key = {
         .pid_tgid = bpf_get_current_pid_tgid(),
     };
