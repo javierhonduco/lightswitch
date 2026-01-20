@@ -1,3 +1,4 @@
+use libbpf_rs::AsRawLibbpf;
 use libbpf_rs::MapImpl;
 use libbpf_rs::OpenObject;
 use libbpf_rs::RingBufferBuilder;
@@ -7,6 +8,7 @@ use std::collections::hash_map::Entry;
 use std::collections::hash_map::OccupiedEntry;
 use std::collections::HashMap;
 use std::env::temp_dir;
+use std::ffi::CString;
 use std::fs;
 use std::fs::File;
 use std::io::ErrorKind;
@@ -183,6 +185,7 @@ pub struct ProfilerConfig {
     pub max_native_unwind_info_size_mb: i32,
     pub use_ring_buffers: bool,
     pub use_task_pt_regs_helper: bool,
+    pub btf_custom_path: Option<String>,
 }
 
 impl Default for ProfilerConfig {
@@ -202,6 +205,7 @@ impl Default for ProfilerConfig {
             max_native_unwind_info_size_mb: i32::MAX,
             use_ring_buffers: true,
             use_task_pt_regs_helper: true,
+            btf_custom_path: None,
         }
     }
 }
@@ -268,6 +272,54 @@ enum AddUnwindInformationResult {
     /// The unwind information information and its pages are already loaded in
     /// BPF maps.
     AlreadyLoaded,
+}
+
+/// Temporary hack while libbpf-rs gets fixed. Ideally this should be
+/// templatized.
+impl ProfilerSkelBuilder {
+    fn open_with_btf_path<'obj>(
+        self,
+        btf_custom_path: Option<String>,
+        object: &'obj mut std::mem::MaybeUninit<libbpf_rs::OpenObject>,
+    ) -> (libbpf_rs::Result<OpenProfilerSkel<'obj>>, Option<CString>) {
+        let mut c_string = None;
+
+        if let Some(btf_custom_path) = btf_custom_path {
+            let mut raw = self.obj_builder.as_libbpf_object();
+            let path = CString::new(btf_custom_path).ok().unwrap();
+            unsafe { raw.as_mut() }.btf_custom_path = path.as_ptr();
+            c_string = Some(path);
+        }
+
+        let opts = self.obj_builder.as_libbpf_object();
+        let open = self.open_opts(unsafe { *opts.as_ref() }, object);
+
+        (open, c_string)
+    }
+}
+
+/// Temporary hack while libbpf-rs gets fixed. Ideally this should be
+/// templatized.
+impl TracersSkelBuilder {
+    fn open_with_btf_path<'obj>(
+        self,
+        btf_custom_path: Option<String>,
+        object: &'obj mut std::mem::MaybeUninit<libbpf_rs::OpenObject>,
+    ) -> (libbpf_rs::Result<OpenTracersSkel<'obj>>, Option<CString>) {
+        let mut c_string = None;
+
+        if let Some(btf_custom_path) = btf_custom_path {
+            let mut raw = self.obj_builder.as_libbpf_object();
+            let path = CString::new(btf_custom_path).ok().unwrap();
+            unsafe { raw.as_mut() }.btf_custom_path = path.as_ptr();
+            c_string = Some(path);
+        }
+
+        let opts = self.obj_builder.as_libbpf_object();
+        let open = self.open_opts(unsafe { *opts.as_ref() }, object);
+
+        (open, c_string)
+    }
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -455,11 +507,12 @@ impl Profiler {
         let mut native_unwinder_open_object = ManuallyDrop::new(Box::new(MaybeUninit::uninit()));
         let mut tracers_open_object = ManuallyDrop::new(Box::new(MaybeUninit::uninit()));
 
-        let mut skel_builder = ProfilerSkelBuilder::default();
-        skel_builder.obj_builder.debug(profiler_config.libbpf_debug);
-        let mut open_skel = skel_builder
-            .open(&mut native_unwinder_open_object)
-            .expect("open skel");
+        let skel_builder = ProfilerSkelBuilder::default();
+        let (open_skel, _string) = skel_builder.open_with_btf_path(
+            profiler_config.btf_custom_path.clone(),
+            &mut native_unwinder_open_object,
+        );
+        let mut open_skel = open_skel.unwrap();
 
         let _map_handle = Self::create_unwind_info_maps(&mut open_skel);
         Self::setup_profiler_maps(&mut open_skel, &profiler_config);
@@ -487,9 +540,13 @@ impl Profiler {
         tracers_builder
             .obj_builder
             .debug(profiler_config.libbpf_debug);
-        let mut open_tracers = tracers_builder
-            .open(&mut tracers_open_object)
-            .expect("open skel");
+
+        let (open_tracers, _string) = tracers_builder.open_with_btf_path(
+            profiler_config.btf_custom_path.clone(),
+            &mut tracers_open_object,
+        );
+        let mut open_tracers = open_tracers.unwrap();
+
         open_tracers
             .maps
             .exec_mappings
@@ -2165,6 +2222,34 @@ mod tests {
         Profiler::delete_bpf_process_mapping(&native_unwinder, 0xBADFAD, 0, 0xFFFFF, false);
         assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
     }
+
+    #[test]
+    fn test_custom_btf_path() {
+        let config = ProfilerConfig {
+            btf_custom_path: Some("/sys/kernel/btf/vmlinux".into()),
+            ..Default::default()
+        };
+        let (_stop_signal_send, stop_signal_receive) = bounded(1);
+        let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+
+        let _profiler = Profiler::new(config, stop_signal_receive, metadata_provider);
+    }
+
+    // TODO: no way to turn off leak sanitizer?
+    // #[sanitize(address = "off")]
+    // #[test]
+    // #[should_panic(expected = "No such file or directory")]
+    // fn test_custom_btf_path_bad_path() {
+    //     let config = ProfilerConfig {
+    //         btf_custom_path: Some("/non/existant/path".into()),
+    //         ..Default::default()
+    //     };
+    //     let (_stop_signal_send, stop_signal_receive) = bounded(1);
+    //     let metadata_provider =
+    // Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+
+    //     let _profiler = Profiler::new(config, stop_signal_receive,
+    // metadata_provider); }
 
     #[test]
     fn test_bpf_cleanup() {

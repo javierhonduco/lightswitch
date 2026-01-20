@@ -1,3 +1,6 @@
+use crate::bpf::features_skel::FeaturesSkelBuilder;
+use crate::bpf::features_skel::OpenFeaturesSkel;
+use std::ffi::CString;
 use std::fs::read_to_string;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
@@ -8,10 +11,9 @@ use std::time::Duration;
 use thiserror::Error;
 use tracing::{error, warn};
 
-use crate::bpf::features_skel::FeaturesSkelBuilder;
-
 use anyhow::Result;
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
+use libbpf_rs::AsRawLibbpf;
 use libbpf_rs::MapType;
 use libbpf_rs::{MapCore, MapFlags, MapHandle};
 use libc::close;
@@ -230,13 +232,38 @@ fn has_variable_inner_map() -> bool {
     true
 }
 
-fn check_bpf_features() -> Result<BpfFeatures> {
-    let skel_builder = FeaturesSkelBuilder::default();
+/// Temporary hack while libbpf-rs gets fixed. Ideally this should be
+/// templatized.
+impl FeaturesSkelBuilder {
+    fn open_with_btf_path<'obj>(
+        self,
+        btf_custom_path: Option<String>,
+        object: &'obj mut std::mem::MaybeUninit<libbpf_rs::OpenObject>,
+    ) -> (libbpf_rs::Result<OpenFeaturesSkel<'obj>>, Option<CString>) {
+        let mut c_string = None;
+
+        if let Some(btf_custom_path) = btf_custom_path {
+            let mut raw = self.obj_builder.as_libbpf_object();
+            let path = CString::new(btf_custom_path).ok().unwrap();
+            unsafe { raw.as_mut() }.btf_custom_path = path.as_ptr();
+            c_string = Some(path);
+        }
+
+        let opts = self.obj_builder.as_libbpf_object();
+        let open = self.open_opts(unsafe { *opts.as_ref() }, object);
+
+        (open, c_string)
+    }
+}
+
+fn check_bpf_features(btf_custom_path: Option<String>) -> Result<BpfFeatures> {
+    let mut skel_builder = FeaturesSkelBuilder::default();
     let mut a = MaybeUninit::uninit();
 
-    let open_skel = skel_builder
-        .open(&mut a)
-        .map_err(|e| SystemInfoError::ErrorDetectingBpfFeatures(e.to_string()))?;
+    skel_builder.obj_builder.debug(true);
+
+    let (open_skel, _string) = skel_builder.open_with_btf_path(btf_custom_path, &mut a);
+    let open_skel = open_skel.unwrap();
 
     let mut bpf_features = open_skel
         .load()
@@ -275,8 +302,8 @@ fn check_bpf_features() -> Result<BpfFeatures> {
 }
 
 impl SystemInfo {
-    pub fn new() -> Result<SystemInfo> {
-        let available_bpf_features = match check_bpf_features() {
+    pub fn new(btf_custom_path: Option<String>) -> Result<SystemInfo> {
+        let available_bpf_features = match check_bpf_features(btf_custom_path) {
             Ok(features) => features,
             Err(err) => {
                 warn!("Failed to detect available BPF features {}", err);
@@ -315,7 +342,7 @@ mod tests {
 
     #[test]
     fn test_get_system_info() {
-        let result = SystemInfo::new();
+        let result = SystemInfo::new(None);
 
         assert!(result.is_ok());
 

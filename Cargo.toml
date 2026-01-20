@@ -19,6 +19,7 @@ memmap2 = "0.9.9"
 anyhow = "1.0.100"
 object = "0.38.0"
 libbpf-rs = { version = "0.26.0-beta.1", features = ["static"] }
+# libbpf-rs = { path = "../libbpf-rs/libbpf-rs", features = ["static"] }
 tracing = "0.1.43"
 thiserror = "2.0.17"
 perf-event-open-sys = "5.0.0"
