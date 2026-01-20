@@ -2,7 +2,6 @@
 // Copyright 2022 The Parca Authors
 // Copyright 2024 The Lightswitch Authors
 
-#include "constants.h"
 #include "vmlinux.h"
 #include "profiler.h"
 #include "shared_maps.h"
@@ -203,7 +202,7 @@ static __always_inline bool in_kernel(u64 ip) { return ip & (1UL << 63); }
 // We don't check for the return value of `retrieve_task_registers`, it's
 // caller due the verifier not liking that code.
 static __always_inline bool is_kthread() {
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    struct task_struct *task = current_task();
     if (task == NULL) {
         return false;
     }
@@ -229,27 +228,10 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u
         return false;
     }
 
-    struct pt_regs *regs;
-
-    if (lightswitch_config.use_task_pt_regs_helper) {
-        struct task_struct *task = bpf_get_current_task_btf();
-        if (task == NULL) {
-            return false;
-        }
-        regs = (struct pt_regs *)bpf_task_pt_regs(task);
-    } else {
-        struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-        if (task == NULL) {
-            return false;
-        }
-        void *stack;
-        int err = bpf_probe_read_kernel(&stack, 8, &task->stack);
-        if (err) {
-            LOG("[warn] bpf_probe_read_kernel failed with %d", err);
-            return false;
-        }
-        void *ptr = stack + THREAD_SIZE - TOP_OF_KERNEL_STACK_PADDING;
-        regs = ((struct pt_regs *)ptr) - 1;
+    struct task_struct *task = current_task();
+    struct pt_regs *regs = pt_regs(task);
+    if (regs == NULL) {
+        return false;
     }
 
     *ip = PT_REGS_IP_CORE(regs);
@@ -272,7 +254,7 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
         }
     }
 
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+    struct task_struct *task = current_task();
     unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
     int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
@@ -311,7 +293,7 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
 // The unwinding machinery lives here.
 SEC("perf_event")
 int dwarf_unwind(struct bpf_perf_event_data *ctx) {
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+    struct task_struct *task = current_task();
     unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
     int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
@@ -634,7 +616,7 @@ static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_
 
 SEC("perf_event")
 int on_event(struct bpf_perf_event_data *ctx) {
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+    struct task_struct *task = current_task();
     unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
 

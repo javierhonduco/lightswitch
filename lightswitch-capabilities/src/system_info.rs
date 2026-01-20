@@ -1,3 +1,4 @@
+use crate::bpf::features_skel::FeaturesSkelBuilder;
 use std::fs::read_to_string;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
@@ -7,8 +8,6 @@ use std::thread;
 use std::time::Duration;
 use thiserror::Error;
 use tracing::{error, warn};
-
-use crate::bpf::features_skel::FeaturesSkelBuilder;
 
 use anyhow::Result;
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
@@ -231,9 +230,13 @@ fn has_variable_inner_map() -> bool {
     true
 }
 
-fn check_bpf_features() -> Result<BpfFeatures> {
-    let skel_builder = FeaturesSkelBuilder::default();
+fn check_bpf_features(btf_custom_path: Option<String>) -> Result<BpfFeatures> {
+    let mut skel_builder = FeaturesSkelBuilder::default();
     let mut a = MaybeUninit::uninit();
+
+    if let Some(btf_custom_path) = btf_custom_path {
+        let _ = skel_builder.obj_builder.btf_custom_path(btf_custom_path);
+    }
 
     let open_skel = skel_builder
         .open(&mut a)
@@ -277,8 +280,8 @@ fn check_bpf_features() -> Result<BpfFeatures> {
 }
 
 impl SystemInfo {
-    pub fn new() -> Result<SystemInfo> {
-        let available_bpf_features = match check_bpf_features() {
+    pub fn new(btf_custom_path: Option<String>) -> Result<SystemInfo> {
+        let available_bpf_features = match check_bpf_features(btf_custom_path) {
             Ok(features) => features,
             Err(err) => {
                 warn!("Failed to detect available BPF features {}", err);
@@ -317,7 +320,7 @@ mod tests {
 
     #[test]
     fn test_get_system_info() {
-        let result = SystemInfo::new();
+        let result = SystemInfo::new(None);
 
         assert!(result.is_ok());
 
