@@ -2215,8 +2215,19 @@ impl Profiler {
                                         partial_write,
                                     );
                                 } else {
-                                    // TODO: The PID might not yet be known - don't let the mapping
-                                    //       lie around
+                                    // The PID might not yet be known - don't let the mapping
+                                    // lie around
+                                    // We didn't find an entry, so we can't call
+                                    // delete_bpf_native_unwind_all(), but we can call
+                                    // delete_bpf_mappings()
+                                    Self::delete_bpf_mappings(
+                                        &self.native_unwinder,
+                                        pid,
+                                        mapping.start_addr,
+                                        mapping.end_addr,
+                                        partial_write,
+                                    );
+
                                     //
                                     // DELETE AFTER DEBUG
                                     debug!(
@@ -2225,6 +2236,14 @@ impl Profiler {
                                     );
                                 }
                             } else {
+                                // TODO: mark_as_deleted() has returned false, but the fact remains
+                                // that the mapping needs to be cleaned up, and it needs to be done
+                                // now, since the necessary time has elapsed after the process
+                                // containing the mapping exit()'ed
+                                // AND, it's entirely possible that the mapping needs to be marked
+                                // as deleted too - is mark_as_deleted() doing the right thing in
+                                // all scenarios?
+
                                 // DELETE AFTER DEBUG
                                 debug!(
                                         "mapping mark_as_deleted not successful for PID: {:7} start_addr: {:016X} - end_addr: {:016X}",
