@@ -1342,6 +1342,18 @@ impl Profiler {
         mapping_end: u64,
         partial_write: bool,
     ) {
+        // DELETE AFTER DEBUG
+        let mut ranges = summarize_address_range(mapping_begin, mapping_end - 1)
+            .into_iter()
+            .peekable();
+
+        if ranges.peek().is_none() {
+            debug!(
+                "delete_bpf_mappings NO RANGES PID: {:7} begin: {:016X} - end: {:016X}",
+                pid, mapping_begin, mapping_end
+            );
+        }
+
         for address_range in summarize_address_range(mapping_begin, mapping_end - 1) {
             let key =
                 exec_mappings_key::new(pid, address_range.addr, 32 + address_range.prefix_len);
