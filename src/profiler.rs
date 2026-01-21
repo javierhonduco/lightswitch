@@ -1323,12 +1323,6 @@ impl Profiler {
                 let key =
                     exec_mappings_key::new(pid, address_range.addr, 32 + address_range.prefix_len);
 
-                // DELETE AFTER DEBUG
-                debug!(
-                "Add Mapping for key PID: {:7} mapping addr: {:016X} prefix_len: {:08X}, address_range addr: {:016X}, prefix_len: {:08X}",
-                pid, key.data, key.prefix_len, address_range.addr, address_range.prefix_len,
-            );
-
                 Self::add_bpf_mapping(bpf, &key, mapping)?
             }
         }
@@ -1342,21 +1336,9 @@ impl Profiler {
         mapping_end: u64,
         partial_write: bool,
     ) {
-        // DELETE AFTER DEBUG
-        debug!(
-            "delete_bpf_mappings RANGES PID: {:7} begin: {:016X} - end: {:016X}",
-            pid, mapping_begin, mapping_end
-        );
-
         for address_range in summarize_address_range(mapping_begin, mapping_end - 1) {
             let key =
                 exec_mappings_key::new(pid, address_range.addr, 32 + address_range.prefix_len);
-
-            // DELETE AFTER DEBUG
-            debug!(
-                "Delete Mapping for key PID: {:7} mapping addr: {:016X} prefix_len: {:08X}, address_range addr: {:016X}, prefix_len: {:08X}",
-                pid, key.data, key.prefix_len, address_range.addr, address_range.prefix_len,
-            );
 
             // TODO keep track of errors
             let res = bpf
@@ -2232,7 +2214,22 @@ impl Profiler {
                                         entry,
                                         partial_write,
                                     );
+                                } else {
+                                    // TODO: The PID might not yet be known - don't let the mapping
+                                    //       lie around
+                                    //
+                                    // DELETE AFTER DEBUG
+                                    debug!(
+                                        "Unknown executable mapping to delete for PID: {:7} start_addr: {:016X} - end_addr: {:016X}",
+                                        pid, mapping.start_addr, mapping.end_addr
+                                    );
                                 }
+                            } else {
+                                // DELETE AFTER DEBUG
+                                debug!(
+                                        "mapping mark_as_deleted not successful for PID: {:7} start_addr: {:016X} - end_addr: {:016X}",
+                                        pid, mapping.start_addr, mapping.end_addr
+                                    );
                             }
                         }
 
