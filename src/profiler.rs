@@ -1323,6 +1323,12 @@ impl Profiler {
                 let key =
                     exec_mappings_key::new(pid, address_range.addr, 32 + address_range.prefix_len);
 
+                // DELETE AFTER DEBUG
+                debug!(
+                "Add Mapping for key PID: {:7} mapping addr: {:016X} prefix_len: {:08X}, address_range: {:?}",
+                key.pid, key.data, key.prefix_len, address_range,
+            );
+
                 Self::add_bpf_mapping(bpf, &key, mapping)?
             }
         }
@@ -1339,6 +1345,12 @@ impl Profiler {
         for address_range in summarize_address_range(mapping_begin, mapping_end - 1) {
             let key =
                 exec_mappings_key::new(pid, address_range.addr, 32 + address_range.prefix_len);
+
+            // DELETE AFTER DEBUG
+            debug!(
+                "Delete Mapping for key PID: {:7} mapping addr: {:016X} prefix_len: {:08X}, address_range: {:?}",
+                key.pid, key.data, key.prefix_len, address_range,
+            );
 
             // TODO keep track of errors
             let res = bpf
@@ -2489,6 +2501,7 @@ mod tests {
                 .count()
                 > 2
         );
+        // TODO: Clean up mappings
         profiler.handle_process_exit(std::process::id() as i32, false);
         assert!(profiler.native_unwinder.maps.outer_map.keys().count() > 0);
         assert!(profiler.native_unwinder.maps.exec_mappings.keys().count() > 0);
