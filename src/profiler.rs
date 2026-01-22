@@ -72,7 +72,9 @@ pub enum TracerEvent {
     Munmap(Pid, u64),
 }
 
+#[derive(Debug)]
 pub struct KnownExecutableInfo {
+    ref_count: usize,
     unwind_info_len: usize,
     unwind_info_start_address: u64,
     unwind_info_end_address: u64,
@@ -867,20 +869,21 @@ impl Profiler {
 
                 for mapping in &mut proc_info.mappings.0 {
                     let mut object_files = self.object_files.write();
-                    if mapping.mark_as_deleted(&mut object_files) {
-                        if let Entry::Occupied(entry) = self
-                            .native_unwind_state
-                            .known_executables
-                            .entry(mapping.executable_id)
-                        {
-                            Self::delete_bpf_native_unwind_all(
-                                pid,
-                                &mut self.native_unwinder,
-                                mapping,
-                                entry,
-                                partial_write,
-                            );
-                        }
+                    mapping.mark_as_deleted(&mut object_files);
+                    if let Entry::Occupied(entry) = self
+                        .native_unwind_state
+                        .known_executables
+                        .entry(mapping.executable_id)
+                    {
+                        Self::delete_bpf_native_unwind_all(
+                            pid,
+                            &mut self.native_unwinder,
+                            mapping,
+                            entry,
+                            partial_write,
+                        );
+                    } else {
+                        debug!("executable_id not found");
                     }
                 }
             }
@@ -899,20 +902,21 @@ impl Profiler {
                     if mapping.start_addr <= start_address && start_address <= mapping.end_addr {
                         debug!("found memory mapping starting at {:x} for pid {} while handling munmap", start_address, pid);
                         let mut object_files = self.object_files.write();
-                        if mapping.mark_as_deleted(&mut object_files) {
-                            if let Entry::Occupied(entry) = self
-                                .native_unwind_state
-                                .known_executables
-                                .entry(mapping.executable_id)
-                            {
-                                Self::delete_bpf_native_unwind_all(
-                                    pid,
-                                    &mut self.native_unwinder,
-                                    mapping,
-                                    entry,
-                                    false,
-                                );
-                            }
+                        mapping.mark_as_deleted(&mut object_files);
+                        if let Entry::Occupied(entry) = self
+                            .native_unwind_state
+                            .known_executables
+                            .entry(mapping.executable_id)
+                        {
+                            Self::delete_bpf_native_unwind_all(
+                                pid,
+                                &mut self.native_unwinder,
+                                mapping,
+                                entry,
+                                false,
+                            );
+                        } else {
+                            debug!("exec id not found");
                         }
                     }
                 }
@@ -1274,6 +1278,36 @@ impl Profiler {
             .delete(&executable_id.to_le_bytes())
     }
 
+    fn delete_unwind_info(
+        mut entry: OccupiedEntry<ExecutableId, KnownExecutableInfo>,
+        native_unwinder: &mut ProfilerSkel,
+        executable_id: ExecutableId,
+    ) {
+        entry.get_mut().ref_count -= 1;
+        debug!(
+            "decreased refcount for {} to {}",
+            executable_id,
+            entry.get_mut().ref_count
+        );
+        if entry.get().ref_count == 0 {
+            Self::delete_bpf_pages(
+                native_unwinder,
+                entry.get().unwind_info_start_address,
+                entry.get().unwind_info_end_address,
+                executable_id,
+            );
+
+            let res = Self::delete_bpf_unwind_info_map(native_unwinder, executable_id.into());
+            if res.is_err() {
+                panic!("deleting the BPF unwind info array failed with {:?}", res);
+            }
+
+            // The object file (`object_files`) is not removed here as we still need it for
+            // normalization before sending the profiles.
+            entry.remove_entry();
+        }
+    }
+
     /// Called when a process exits or a mapping gets unmapped. Removing the
     /// process entry is the responsibility of the caller.
     fn delete_bpf_native_unwind_all(
@@ -1291,21 +1325,7 @@ impl Profiler {
             partial_write,
         );
 
-        Self::delete_bpf_pages(
-            native_unwinder,
-            entry.get().unwind_info_start_address,
-            entry.get().unwind_info_end_address,
-            mapping.executable_id,
-        );
-
-        let res = Self::delete_bpf_unwind_info_map(native_unwinder, mapping.executable_id.into());
-        if res.is_err() {
-            error!("deleting the BPF unwind info array failed with {:?}", res);
-        }
-
-        // The object file (`object_files`) is not removed here as we still need it for
-        // normalization before sending the profiles.
-        entry.remove_entry();
+        Self::delete_unwind_info(entry, native_unwinder, mapping.executable_id);
     }
 
     /// Returns the approximate size in megabytes of the BPF unwind maps.
@@ -1420,10 +1440,6 @@ impl Profiler {
                 if e == AddUnwindInformationError::NoUnwindInfoKnownNaughty {
                     return;
                 }
-                warn!(
-                    "error adding unwind information for executable 0x{} due to {:?}",
-                    mapping.executable_id, e
-                );
                 // TODO: cleanup unwind information map in case of a partial write.
                 return;
             }
@@ -1463,6 +1479,21 @@ impl Profiler {
         end_address: u64,
     ) -> Result<AddUnwindInformationResult, AddUnwindInformationError> {
         if self.native_unwind_state.is_known(executable_id) {
+            self.native_unwind_state
+                .known_executables
+                .get_mut(&executable_id)
+                .unwrap()
+                .ref_count += 1;
+            println!(
+                "increased refcount for {} to {}",
+                executable_id,
+                self.native_unwind_state
+                    .known_executables
+                    .get_mut(&executable_id)
+                    .unwrap()
+                    .ref_count
+            );
+
             return Ok(AddUnwindInformationResult::AlreadyLoaded);
         }
         let object_files = self.object_files.read();
@@ -1582,9 +1613,15 @@ impl Profiler {
             .map_err(|e| AddUnwindInformationError::BpfPages(e.to_string()))?;
         let unwind_info_start_address = unwind_info.first().unwrap().pc;
         let unwind_info_end_address = unwind_info.last().unwrap().pc;
+        debug!(
+            "set refcount of {} to 1 ({})",
+            executable_id,
+            executable_path.display()
+        );
         self.native_unwind_state.known_executables.insert(
             executable_id,
             KnownExecutableInfo {
+                ref_count: 1,
                 unwind_info_len: unwind_info.len(),
                 unwind_info_start_address,
                 unwind_info_end_address,
@@ -1662,21 +1699,7 @@ impl Profiler {
                 .known_executables
                 .entry(executable_id);
             if let Entry::Occupied(entry) = entry {
-                Self::delete_bpf_pages(
-                    &self.native_unwinder,
-                    entry.get().unwind_info_start_address,
-                    entry.get().unwind_info_end_address,
-                    executable_id,
-                );
-
-                let ret = Self::delete_bpf_unwind_info_map(
-                    &mut self.native_unwinder,
-                    executable_id.into(),
-                );
-                if ret.is_err() {
-                    error!("failed to evict unwind info map with {:?}", ret);
-                }
-                entry.remove_entry();
+                Self::delete_unwind_info(entry, &mut self.native_unwinder, executable_id);
             }
 
             self.native_unwind_state.last_executable_eviction = Instant::now();
@@ -1739,7 +1762,7 @@ impl Profiler {
                     return;
                 }
 
-                warn!(
+                panic!(
                     "error adding unwind information for executable 0x{} due to {:?}",
                     executable_id, e
                 );
@@ -2135,8 +2158,31 @@ mod tests {
         assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
     }
 
+    use std::process::Command;
+    use std::process::Stdio;
+
     #[test]
+    // @nocommit
+    #[allow(clippy::zombie_processes)]
     fn test_bpf_cleanup() {
+        // @nocommit: Kill the process upon test termination. Risk of leaving
+        // a zombie behind as we aren't waiting for it.
+        let mut bash1 = Command::new("/bin/bash")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let mut bash2 = Command::new("/bin/bash")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+
+        // @nocommit Wait for proceses to start an fully load all their mappings
+        // As this is racy
+        std::thread::sleep(Duration::from_secs(1));
+
         let mut profiler = Profiler::default();
         assert_eq!(
             profiler.native_unwinder.maps.exec_mappings.keys().count(),
@@ -2151,8 +2197,41 @@ mod tests {
                 .count(),
             0
         );
-        profiler.add_proc(std::process::id() as i32).unwrap();
-        profiler.add_unwind_info_for_process(std::process::id() as i32);
+        assert_eq!(
+            profiler
+                .native_unwind_state
+                .known_executables
+                .keys()
+                .count(),
+            0
+        );
+
+        // Add our own process
+        profiler.event_new_proc(std::process::id() as i32);
+        let known_executables_after_self = profiler
+            .native_unwind_state
+            .known_executables
+            .keys()
+            .count();
+        // Add bash1
+        profiler.event_new_proc(bash1.id() as i32);
+        let known_executables_after_bash = profiler
+            .native_unwind_state
+            .known_executables
+            .keys()
+            .count();
+
+        profiler.event_new_proc(bash2.id() as i32);
+        let known_executables_after_bash2 = profiler
+            .native_unwind_state
+            .known_executables
+            .keys()
+            .count();
+
+        assert!(known_executables_after_bash > known_executables_after_self);
+        // Same process was added, so known executables should not change
+        // TODO: assert that the refcount increased for the relevant executables?
+        assert_eq!(known_executables_after_bash, known_executables_after_bash2);
 
         assert!(profiler.native_unwinder.maps.exec_mappings.keys().count() > 2);
         assert!(
@@ -2164,19 +2243,40 @@ mod tests {
                 .count()
                 > 2
         );
+
+        // `self` exits
         profiler.handle_process_exit(std::process::id() as i32, false);
-        assert_eq!(profiler.native_unwinder.maps.outer_map.keys().count(), 0);
-        assert_eq!(
-            profiler.native_unwinder.maps.exec_mappings.keys().count(),
-            0
-        );
-        assert_eq!(
+        assert!(profiler.native_unwinder.maps.outer_map.keys().count() > 0);
+        assert!(profiler.native_unwinder.maps.exec_mappings.keys().count() > 0);
+        assert!(
             profiler
                 .native_unwinder
                 .maps
                 .executable_to_page
                 .keys()
+                .count()
+                > 0
+        );
+
+        // /bin/bash exits
+        // @nocommit: racy. Wait until we receive the event and process the exit.
+        profiler.handle_process_exit(bash1.id().try_into().unwrap(), false);
+        profiler.handle_process_exit(bash2.id().try_into().unwrap(), false);
+        bash1.kill().unwrap();
+        bash2.kill().unwrap();
+
+        assert_eq!(
+            profiler
+                .native_unwind_state
+                .known_executables
+                .keys()
                 .count(),
+            0
+        );
+
+        assert_eq!(profiler.native_unwinder.maps.outer_map.keys().count(), 0);
+        assert_eq!(
+            profiler.native_unwinder.maps.exec_mappings.keys().count(),
             0
         );
     }
