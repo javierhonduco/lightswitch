@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
-
 use tracing::debug;
 
 use lightswitch_object::BuildId;
@@ -86,10 +85,15 @@ impl ExecutableMapping {
             }
 
             object_file.references -= 1;
+            println!(
+                "DEL object file with path {} has {} references",
+                object_file.path.display(),
+                object_file.references
+            );
 
             if object_file.references == 0 {
                 debug!(
-                    "object file with path {} can be deleted",
+                    "DEL object file with path {} can be deleted",
                     object_file.path.display()
                 );
                 return true;
@@ -106,6 +110,7 @@ impl ExecutableMapping {
     }
 }
 
+#[derive(Debug)]
 pub struct ObjectFileInfo {
     pub path: PathBuf,
     pub elf_load_segments: Vec<ElfLoad>,

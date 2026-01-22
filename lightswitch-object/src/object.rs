@@ -28,7 +28,7 @@ pub struct ElfLoad {
     pub p_filesz: u64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Runtime {
     /// C, C++, Rust, Fortran
     CLike,
