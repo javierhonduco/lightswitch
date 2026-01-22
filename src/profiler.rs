@@ -866,6 +866,15 @@ impl Profiler {
                 }
 
                 for mapping in &mut proc_info.mappings.0 {
+                    // Always delete mappings.
+                    Self::delete_bpf_mapping(
+                        &self.native_unwinder,
+                        pid,
+                        mapping.start_addr,
+                        mapping.end_addr,
+                        partial_write,
+                    );
+
                     let mut object_files = self.object_files.write();
                     if mapping.mark_as_deleted(&mut object_files) {
                         if let Entry::Occupied(entry) = self
@@ -896,9 +905,19 @@ impl Profiler {
         match procs.get_mut(&pid) {
             Some(proc_info) => {
                 for mapping in &mut proc_info.mappings.0 {
+                    // Always delete mappings.
+                    Self::delete_bpf_mapping(
+                        &self.native_unwinder,
+                        pid,
+                        mapping.start_addr,
+                        mapping.end_addr,
+                        false,
+                    );
+
                     if mapping.start_addr <= start_address && start_address <= mapping.end_addr {
                         debug!("found memory mapping starting at {:x} for pid {} while handling munmap", start_address, pid);
                         let mut object_files = self.object_files.write();
+                        // @nocommit DELETE mapping from BPF.
                         if mapping.mark_as_deleted(&mut object_files) {
                             if let Entry::Occupied(entry) = self
                                 .native_unwind_state
@@ -1227,7 +1246,7 @@ impl Profiler {
         Ok(())
     }
 
-    fn delete_bpf_mappings(
+    fn delete_bpf_mapping(
         bpf: &ProfilerSkel,
         pid: Pid,
         mapping_begin: u64,
@@ -1274,23 +1293,14 @@ impl Profiler {
             .delete(&executable_id.to_le_bytes())
     }
 
-    /// Called when a process exits or a mapping gets unmapped. Removing the
-    /// process entry is the responsibility of the caller.
+    /// TODO: write docs.
     fn delete_bpf_native_unwind_all(
-        pid: Pid,
+        _pid: Pid,
         native_unwinder: &mut ProfilerSkel,
         mapping: &ExecutableMapping,
         entry: OccupiedEntry<ExecutableId, KnownExecutableInfo>,
-        partial_write: bool,
+        _partial_write: bool,
     ) {
-        Self::delete_bpf_mappings(
-            native_unwinder,
-            pid,
-            mapping.start_addr,
-            mapping.end_addr,
-            partial_write,
-        );
-
         Self::delete_bpf_pages(
             native_unwinder,
             entry.get().unwind_info_start_address,
@@ -1963,18 +1973,23 @@ impl Profiler {
                         };
                         let build_id = object_file.build_id().clone();
 
-                        object_files.insert(
-                            executable_id,
-                            ObjectFileInfo {
-                                path: vdso_path.clone(),
-                                elf_load_segments,
-                                is_dyn: object_file.is_dynamic(),
-                                references: 1,
-                                native_unwind_info_size: None,
-                                is_vdso: true,
-                                runtime: Runtime::CLike,
-                            },
-                        );
+                        match object_files.entry(executable_id) {
+                            Entry::Vacant(entry) => {
+                                entry.insert(ObjectFileInfo {
+                                    path: vdso_path.clone(),
+                                    elf_load_segments,
+                                    is_dyn: object_file.is_dynamic(),
+                                    references: 1,
+                                    native_unwind_info_size: None,
+                                    is_vdso: true,
+                                    runtime: Runtime::CLike,
+                                });
+                            }
+                            Entry::Occupied(mut entry) => {
+                                entry.get_mut().references += 1;
+                            }
+                        }
+
                         mappings.push(ExecutableMapping {
                             executable_id,
                             build_id: Some(build_id),
@@ -2093,6 +2108,7 @@ impl Profiler {
 
 #[cfg(test)]
 mod tests {
+    use crate::bpf::profiler_skel::ProfilerMaps;
     use crate::profiler::*;
 
     #[test]
@@ -2131,50 +2147,99 @@ mod tests {
         )
         .unwrap();
         assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 20);
-        Profiler::delete_bpf_mappings(&native_unwinder, 0xBADFAD, 0, 0xFFFFF, false);
+        Profiler::delete_bpf_mapping(&native_unwinder, 0xBADFAD, 0, 0xFFFFF, false);
         assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
     }
 
     #[test]
     fn test_bpf_cleanup() {
+        // Helper function to make code more succinct.
+        fn maps(profiler: &Profiler) -> &ProfilerMaps<'_> {
+            &profiler.native_unwinder.maps
+        }
+
         let mut profiler = Profiler::default();
-        assert_eq!(
-            profiler.native_unwinder.maps.exec_mappings.keys().count(),
-            0
-        );
+
+        // All BPF maps must be empty.
+        assert_eq!(maps(&profiler).exec_mappings.keys().count(), 0);
+        assert_eq!(maps(&profiler).outer_map.keys().count(), 0);
+        assert_eq!(maps(&profiler).executable_to_page.keys().count(), 0);
         assert_eq!(
             profiler
-                .native_unwinder
-                .maps
-                .executable_to_page
+                .native_unwind_state
+                .known_executables
                 .keys()
                 .count(),
             0
         );
-        profiler.add_proc(std::process::id() as i32).unwrap();
-        profiler.add_unwind_info_for_process(std::process::id() as i32);
 
-        assert!(profiler.native_unwinder.maps.exec_mappings.keys().count() > 2);
-        assert!(
-            profiler
-                .native_unwinder
-                .maps
-                .executable_to_page
-                .keys()
-                .count()
-                > 2
+        // Add our own process.
+        profiler.event_new_proc(std::process::id() as i32);
+        let self_exec_mappings_count = maps(&profiler).exec_mappings.keys().count();
+        let self_outer_map_count = maps(&profiler).outer_map.keys().count();
+        let self_executable_to_page_count = maps(&profiler).executable_to_page.keys().count();
+        let self_known_executables_count = profiler
+            .native_unwind_state
+            .known_executables
+            .keys()
+            .count();
+
+        // Add init process.
+        profiler.event_new_proc(1_i32);
+        let all_exec_mappings_count = maps(&profiler).exec_mappings.keys().count();
+        let all_outer_map_count = maps(&profiler).outer_map.keys().count();
+        let all_executable_to_page_count = maps(&profiler).executable_to_page.keys().count();
+        let all_known_executables_count = profiler
+            .native_unwind_state
+            .known_executables
+            .keys()
+            .count();
+
+        assert!(all_exec_mappings_count > self_exec_mappings_count);
+        assert!(all_outer_map_count > self_outer_map_count);
+        assert!(all_executable_to_page_count > self_executable_to_page_count);
+        assert!(all_known_executables_count > self_known_executables_count);
+
+        // init process exits
+        profiler.handle_process_exit(1, false);
+
+        // At this point all the BPF maps should be at how they were
+        // before the init process got added.
+        let after_init_exit_exec_mappings_count = maps(&profiler).exec_mappings.keys().count();
+        let after_init_exit_outer_map_count = maps(&profiler).outer_map.keys().count();
+        let after_init_exit_executable_to_page_count =
+            maps(&profiler).executable_to_page.keys().count();
+        let after_init_exit_known_executables_count = profiler
+            .native_unwind_state
+            .known_executables
+            .keys()
+            .count();
+
+        assert_eq!(
+            after_init_exit_exec_mappings_count,
+            self_exec_mappings_count
         );
+        assert_eq!(after_init_exit_outer_map_count, self_outer_map_count);
+        assert_eq!(
+            after_init_exit_executable_to_page_count,
+            self_executable_to_page_count
+        );
+        assert_eq!(
+            after_init_exit_known_executables_count,
+            self_known_executables_count
+        );
+
+        // Our own process exits.
         profiler.handle_process_exit(std::process::id() as i32, false);
-        assert_eq!(profiler.native_unwinder.maps.outer_map.keys().count(), 0);
-        assert_eq!(
-            profiler.native_unwinder.maps.exec_mappings.keys().count(),
-            0
-        );
+
+        // All BPF maps must be empty, since all process have exited.
+        assert_eq!(maps(&profiler).exec_mappings.keys().count(), 0);
+        assert_eq!(maps(&profiler).outer_map.keys().count(), 0);
+        assert_eq!(maps(&profiler).executable_to_page.keys().count(), 0);
         assert_eq!(
             profiler
-                .native_unwinder
-                .maps
-                .executable_to_page
+                .native_unwind_state
+                .known_executables
                 .keys()
                 .count(),
             0

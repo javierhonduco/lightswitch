@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
-
 use tracing::debug;
 
 use lightswitch_object::BuildId;
