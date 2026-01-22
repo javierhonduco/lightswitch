@@ -867,7 +867,7 @@ impl Profiler {
 
                 for mapping in &mut proc_info.mappings.0 {
                     // Always delete mappings.
-                    Self::delete_bpf_mappings(
+                    Self::delete_bpf_mapping(
                         &self.native_unwinder,
                         pid,
                         mapping.start_addr,
@@ -905,6 +905,15 @@ impl Profiler {
         match procs.get_mut(&pid) {
             Some(proc_info) => {
                 for mapping in &mut proc_info.mappings.0 {
+                    // Always delete mappings.
+                    Self::delete_bpf_mapping(
+                        &self.native_unwinder,
+                        pid,
+                        mapping.start_addr,
+                        mapping.end_addr,
+                        false,
+                    );
+
                     if mapping.start_addr <= start_address && start_address <= mapping.end_addr {
                         debug!("found memory mapping starting at {:x} for pid {} while handling munmap", start_address, pid);
                         let mut object_files = self.object_files.write();
@@ -1237,8 +1246,7 @@ impl Profiler {
         Ok(())
     }
 
-    // TODO: delete_bpf_mapping, not in plural.
-    fn delete_bpf_mappings(
+    fn delete_bpf_mapping(
         bpf: &ProfilerSkel,
         pid: Pid,
         mapping_begin: u64,
@@ -1915,8 +1923,6 @@ impl Profiler {
 
                     match object_files.entry(executable_id) {
                         Entry::Vacant(entry) => {
-                            println!("references for {} cést ~1", exe_path.display(),);
-
                             entry.insert(ObjectFileInfo {
                                 path: exe_path,
                                 elf_load_segments: elf_loads,
@@ -1929,11 +1935,6 @@ impl Profiler {
                         }
                         Entry::Occupied(mut entry) => {
                             entry.get_mut().references += 1;
-                            println!(
-                                "references for {} are {}",
-                                exe_path.display(),
-                                entry.get_mut().references
-                            );
                         }
                     }
                 }
@@ -2143,7 +2144,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 20);
-        Profiler::delete_bpf_mappings(&native_unwinder, 0xBADFAD, 0, 0xFFFFF, false);
+        Profiler::delete_bpf_mapping(&native_unwinder, 0xBADFAD, 0, 0xFFFFF, false);
         assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
     }
 
@@ -2167,7 +2168,7 @@ mod tests {
 
         // @nocommit Wait for proceses to start an fully load all their mappings
         // As this is racy
-        std::thread::sleep(Duration::from_secs(1));
+        std::thread::sleep(Duration::from_secs(5));
 
         let mut profiler = Profiler::default();
         assert_eq!(
