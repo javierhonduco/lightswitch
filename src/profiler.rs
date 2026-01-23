@@ -2579,7 +2579,8 @@ mod tests {
         bash2.kill().unwrap();
         //
         //panic!("{:?}", profiler.object_files);
-
+        // TODO: do the work that would be done after DeletionScheduler pending expiration
+        //       to make this pass
         assert_eq!(
             profiler
                 .native_unwind_state
