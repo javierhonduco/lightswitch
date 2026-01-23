@@ -989,39 +989,6 @@ impl Profiler {
         if let Some(proc_info) = procs.get_mut(&pid) {
             debug!("marking process {} as exited", pid);
             proc_info.status = ProcessStatus::Exited;
-
-            let err = Self::delete_bpf_process(&self.native_unwinder, pid);
-            if let Err(e) = err {
-                debug!("could not remove bpf process due to {:?}", e);
-            }
-
-            for mapping in &mut proc_info.mappings.0 {
-                // always delete mappings.
-                Self::delete_bpf_mapping(
-                    &self.native_unwinder,
-                    pid,
-                    mapping.start_addr,
-                    mapping.end_addr,
-                    partial_write,
-                );
-
-                let mut object_files = self.object_files.write();
-                if mapping.mark_as_deleted(&mut object_files) {
-                    if let Entry::Occupied(entry) = self
-                        .native_unwind_state
-                        .known_executables
-                        .entry(mapping.executable_id)
-                    {
-                        Self::delete_bpf_native_unwind_all(
-                            pid,
-                            &mut self.native_unwinder,
-                            mapping,
-                            entry,
-                            partial_write,
-                        );
-                    }
-                }
-            }
         }
     }
 
@@ -2224,9 +2191,9 @@ impl Profiler {
             std::mem::drop(procs);
             let mut procs = self.procs.write();
 
-            for (pid, _partial_write) in pending_deletion {
+            for (pid, partial_write) in pending_deletion {
                 match procs.remove(&pid) {
-                    Some(proc_info) => {
+                    Some(mut proc_info) => {
                         // Start by cleaning up all of the process mappings we know about
                         // Make a note of how many mappings we had recorded/stored for
                         // each PID, for comparison with how many actually exist for
@@ -2234,6 +2201,34 @@ impl Profiler {
                         let mapping_count = proc_info.mappings.0.len();
                         // How many mappings for the PID we "know" about
                         debug!("PID {} has {} known mappings in procs", pid, mapping_count);
+
+                        for mapping in &mut proc_info.mappings.0 {
+                            // always delete mappings.
+                            Profiler::delete_bpf_mapping(
+                                &self.native_unwinder,
+                                pid,
+                                mapping.start_addr,
+                                mapping.end_addr,
+                                partial_write,
+                            );
+
+                            let mut object_files = self.object_files.write();
+                            if mapping.mark_as_deleted(&mut object_files) {
+                                if let Entry::Occupied(entry) = self
+                                    .native_unwind_state
+                                    .known_executables
+                                    .entry(mapping.executable_id)
+                                {
+                                    Profiler::delete_bpf_native_unwind_all(
+                                        pid,
+                                        &mut self.native_unwinder,
+                                        mapping,
+                                        entry,
+                                        partial_write,
+                                    );
+                                }
+                            }
+                        }
 
                         // Now clean up the process itself
                         let err = Self::delete_bpf_process(&self.native_unwinder, pid);
