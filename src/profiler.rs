@@ -807,6 +807,26 @@ impl Profiler {
                     debug!("collecting profiles on schedule");
                     let profile = self.collect_profile();
                     self.send_profile(profile);
+
+                    // @nocommit Minimal resource consumption report to verify cleanup is working
+                    // as expected
+                    info!("procs usage: {}/{}", self.procs.read().keys().count(), MAX_PROCESSES);
+                    let exec_mappings_max_entries = self.native_unwinder
+                        .maps.exec_mappings
+                        .info()
+                        .expect("Should be able to get info about exec_mappings map")
+                        .info
+                        .max_entries;
+                    info!(
+                    "exec_mappings usage: {}/{}",
+                        self.native_unwinder.maps.exec_mappings.keys().count(),
+                        exec_mappings_max_entries,
+                    );
+                    info!("object_files count: {}", self.object_files.read().len());
+                    let used_unwind_info_size_mb = self.unwind_info_memory_usage();
+                    let max_unwind_info_size_mb = self.max_native_unwind_info_size_mb;
+                    info!("unwind information usage: {} MB / {} MB",
+                        used_unwind_info_size_mb, max_unwind_info_size_mb);
                 },
                 recv(self.raw_sample_receive) -> raw_sample => {
                     if let Ok(raw_sample) = raw_sample {
