@@ -2197,8 +2197,8 @@ impl Profiler {
         let procs_to_reap = pending_deletion.len();
         if procs_to_reap > 0 {
             // Metrics we track for deletions per session
-            let mut attempted_bpf_delete_process = 0;
-            let mut failed_bpf_delete_process = HashMap::new();
+            let mut attempted_delete_bpf_process = 0;
+            let mut failed_delete_bpf_process = HashMap::new();
             // All process exit()s have been handled, whether we detected their existence or
             // not.
             // We note which PIDs we're actually tracking by way of receiving stacks for them at
@@ -2233,13 +2233,13 @@ impl Profiler {
                         // each PID when we check at the end
                         let mapping_count = proc_info.mappings.0.len();
                         // How many mappings for the PID we "know" about
-                        debug!("PID {} had {} known mappings in procs", pid, mapping_count);
+                        debug!("PID {} has {} known mappings in procs", pid, mapping_count);
 
                         // Now clean up the process itself
                         let err = Self::delete_bpf_process(&self.native_unwinder, pid);
-                        attempted_bpf_delete_process += 1;
+                        attempted_delete_bpf_process += 1;
                         if let Err(e) = err {
-                            failed_bpf_delete_process
+                            failed_delete_bpf_process
                                 .entry(e.to_string())
                                 .and_modify(|events| *events += 1)
                                 .or_insert(1);
@@ -2260,11 +2260,11 @@ impl Profiler {
             }
 
             // Print out info on any deletion issues that may have occurred
-            if !failed_bpf_delete_process.is_empty() {
-                for (failure, count) in failed_bpf_delete_process.into_iter() {
+            if !failed_delete_bpf_process.is_empty() {
+                for (failure, count) in failed_delete_bpf_process.into_iter() {
                     info!(
-                        "bpf_delete_process() attempted {} times, failed with err [{}] {} times",
-                        attempted_bpf_delete_process, failure, count
+                        "delete_bpf_process() attempted {} times, failed with err [{}] {} times",
+                        attempted_delete_bpf_process, failure, count
                     );
                 }
             }
