@@ -97,8 +97,8 @@ pub fn benchark_bpf_array(c: &mut Criterion) {
     let mut group = c.benchmark_group("BPF array update");
     group.sample_size(10);
 
-    // Batched updates on map that's not mmapable (so that it's not necessarily page-aligned, as it could
-    // affect benchmarks).
+    // Batched updates on map that's not mmapable (so that it's not necessarily
+    // page-aligned, as it could affect benchmarks).
     group.bench_function("batch of 500k", |b: &mut criterion::Bencher| {
         b.iter(|| update_unwind_info(500_000, &inner_map, &unwind_info))
     });

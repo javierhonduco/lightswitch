@@ -66,21 +66,23 @@ impl ExecutableMappings {
 
 impl ExecutableMapping {
     /// Soft delete a mapping. We don't want to delete it straight away as we
-    /// might need it for a bit longer for normalization and / or local symbolization.
+    /// might need it for a bit longer for normalization and / or local
+    /// symbolization.
     pub fn mark_as_deleted(
         &mut self,
         object_files: &mut HashMap<ExecutableId, ObjectFileInfo>,
     ) -> bool {
-        // The executable mapping can be removed at a later time, and function might be called multiple
-        // times. To avoid this, we keep track of whether this mapping has been soft deleted.
+        // The executable mapping can be removed at a later time, and function might be
+        // called multiple times. To avoid this, we keep track of whether this
+        // mapping has been soft deleted.
         if self.soft_delete {
             return false;
         }
         self.soft_delete = true;
 
         if let Some(object_file) = object_files.get_mut(&self.executable_id) {
-            // Object files are also soft deleted, so do not try to decrease the reference count
-            // if it's already zero.
+            // Object files are also soft deleted, so do not try to decrease the reference
+            // count if it's already zero.
             if object_file.references == 0 {
                 return false;
             }
@@ -132,8 +134,8 @@ impl Clone for ObjectFileInfo {
 
 impl ObjectFileInfo {
     /// For a virtual address return the offset within the object file. This is
-    /// necessary for off-host symbolization. In order to do this we must check every
-    /// `PT_LOAD` segment.
+    /// necessary for off-host symbolization. In order to do this we must check
+    /// every `PT_LOAD` segment.
     pub fn normalized_address(
         &self,
         virtual_address: u64,

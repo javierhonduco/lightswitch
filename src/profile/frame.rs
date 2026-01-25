@@ -11,15 +11,16 @@ pub enum SymbolizationError {
 pub struct Frame {
     /// Address from the process, as collected from the BPF program.
     pub virtual_address: u64,
-    /// The offset in the object file after converting the virtual_address its relative position.
+    /// The offset in the object file after converting the virtual_address its
+    /// relative position.
     pub file_offset: Option<u64>,
-    /// If symbolized, the result will be present here with the function name and whether the function
-    /// was inlined.
+    /// If symbolized, the result will be present here with the function name
+    /// and whether the function was inlined.
     pub symbolization_result: Option<Result<SymbolizedFrame, SymbolizationError>>,
 }
 
-/// A symbolized frame, which might or might not the filename or line number, depending on the
-/// symbolization data source.
+/// A symbolized frame, which might or might not the filename or line number,
+/// depending on the symbolization data source.
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Default)]
 pub struct SymbolizedFrame {
     pub name: String,
@@ -40,8 +41,9 @@ impl SymbolizedFrame {
 }
 
 impl Frame {
-    /// Returns the formatted frame showing only the function names if `only_show_function_name`
-    /// is true otherwise it will show the file and line number if available.
+    /// Returns the formatted frame showing only the function names if
+    /// `only_show_function_name` is true otherwise it will show the file
+    /// and line number if available.
     pub fn format_all_info(&self, only_show_function_name: bool) -> String {
         match &self.symbolization_result {
             Some(Ok(SymbolizedFrame {

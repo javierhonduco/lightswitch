@@ -99,12 +99,14 @@ impl NativeUnwindState {
         self.known_executables.contains_key(&executable_id)
     }
 
-    /// Checks if the last eviction happened long ago enough to prevent excessive overhead.
+    /// Checks if the last eviction happened long ago enough to prevent
+    /// excessive overhead.
     fn can_evict_executable(&self) -> bool {
         self.last_executable_eviction.elapsed() >= Duration::from_millis(500)
     }
 
-    /// Checks if the last eviction happened long ago enough to prevent excessive overhead.
+    /// Checks if the last eviction happened long ago enough to prevent
+    /// excessive overhead.
     fn can_evict_process(&self) -> bool {
         self.last_process_eviction.elapsed() >= Duration::from_millis(500)
     }
@@ -126,7 +128,8 @@ pub struct Profiler {
     // Channel for tracer events such as munmaps and process exits.
     tracers_chan_send: Arc<Sender<TracerEvent>>,
     tracers_chan_receive: Arc<Receiver<TracerEvent>>,
-    /// Profiler stop channel. Used to receive signals from users to stop profiling.
+    /// Profiler stop channel. Used to receive signals from users to stop
+    /// profiling.
     stop_chan_receive: Receiver<()>,
     pub(crate) native_unwind_state: NativeUnwindState,
     /// Pids excluded from profiling.
@@ -145,15 +148,16 @@ pub struct Profiler {
     sample_freq: u64,
     /// Size of the perf buffer.
     perf_buffer_bytes: usize,
-    /// For how long to profile until the aggregated in-kernel profiles are read.
+    /// For how long to profile until the aggregated in-kernel profiles are
+    /// read.
     session_duration: Duration,
     /// Whether the profiler itself should be excluded from profiling.
     exclude_self: bool,
     /// Deals with debug information
     debug_info_manager: Box<dyn DebugInfoManager>,
-    /// Maximum size of BPF unwind information maps. A higher value will result in
-    /// evictions which might reduce the quality of the profiles and in more work
-    /// for the profiler.
+    /// Maximum size of BPF unwind information maps. A higher value will result
+    /// in evictions which might reduce the quality of the profiles and in
+    /// more work for the profiler.
     max_native_unwind_info_size_mb: i32,
     unwind_info_manager: UnwindInfoManager,
     use_ring_buffers: bool,
@@ -258,9 +262,11 @@ fn fetch_vdso_info(
 }
 
 enum AddUnwindInformationResult {
-    /// The unwind information information and its pages were correctly loaded in BPF maps.
+    /// The unwind information information and its pages were correctly loaded
+    /// in BPF maps.
     Success,
-    /// The unwind information information and its pages are already loaded in BPF maps.
+    /// The unwind information information and its pages are already loaded in
+    /// BPF maps.
     AlreadyLoaded,
 }
 
@@ -471,8 +477,8 @@ impl Profiler {
         let native_unwinder_maps = &native_unwinder.maps;
         let exec_mappings_fd = native_unwinder_maps.exec_mappings.as_fd();
 
-        // BPF map sizes can be overriden, this is a debugging option to print the actual size once
-        // the maps are created and the BPF program is loaded.
+        // BPF map sizes can be overriden, this is a debugging option to print the
+        // actual size once the maps are created and the BPF program is loaded.
         if profiler_config.mapsize_info {
             Self::show_actual_profiler_map_sizes(&native_unwinder);
         }
@@ -582,11 +588,11 @@ impl Profiler {
         self.profile_send.send(profile).expect("handle send");
     }
 
-    /// Starts a thread that polls the given ring or perf buffer, depending on the
-    /// configuration.
+    /// Starts a thread that polls the given ring or perf buffer, depending on
+    /// the configuration.
     ///
-    /// Note: `lost_callback` is only used for perf buffers as ring buffers only report
-    /// errors on the sender side.
+    /// Note: `lost_callback` is only used for perf buffers as ring buffers only
+    /// report errors on the sender side.
     pub fn start_poll_thread<Call: Fn(&[u8]) + 'static, Lost: FnMut(i32, u64) + 'static>(
         &self,
         name: &'static str,
@@ -978,7 +984,8 @@ impl Profiler {
         );
     }
 
-    /// Updates the last time processes and executables were seen. This is used during evictions.
+    /// Updates the last time processes and executables were seen. This is used
+    /// during evictions.
     pub fn bump_last_used(&mut self, raw_aggregated_samples: &[RawAggregatedSample]) {
         let now = Instant::now();
 
@@ -1066,9 +1073,9 @@ impl Profiler {
         let value = unsafe { plain::as_bytes(&default) };
 
         let mut values: Vec<Vec<u8>> = Vec::new();
-        // This is a place where you need to know the POSSIBLE, not ONLINE CPUs, because eBPF's
-        // internals require setting up certain buffers for all possible CPUs, even if the CPUs
-        // don't all exist.
+        // This is a place where you need to know the POSSIBLE, not ONLINE CPUs, because
+        // eBPF's internals require setting up certain buffers for all possible
+        // CPUs, even if the CPUs don't all exist.
         let num_cpus = num_possible_cpus().expect("get possible CPUs") as u64;
         for _ in 0..num_cpus {
             values.push(value.to_vec());
@@ -1379,8 +1386,9 @@ impl Profiler {
             .0
             .iter()
         {
-            // There is no unwind information for anonymous (JIT) mappings, so let's skip them.
-            // In the future we could either try to synthetise the unwind information.
+            // There is no unwind information for anonymous (JIT) mappings, so let's skip
+            // them. In the future we could either try to synthetise the unwind
+            // information.
             if mapping.kind == ExecutableMappingType::Anonymous {
                 bpf_mappings.push(mapping_t {
                     load_address: 0,
@@ -1456,8 +1464,8 @@ impl Profiler {
         }
     }
 
-    /// Returns the approximate size in megabytes of _n_ rows of unwind information
-    /// in a BPF map.
+    /// Returns the approximate size in megabytes of _n_ rows of unwind
+    /// information in a BPF map.
     fn unwind_info_size_mb(unwind_info_len: usize) -> u32 {
         let overhead = 1.02; // Account for internal overhead of the BPF maps
         ((unwind_info_len * 8 * 8) as f64 * overhead / 1e+6) as u32
@@ -1606,12 +1614,14 @@ impl Profiler {
         self.native_unwind_state.known_executables.len() >= MAX_OUTER_UNWIND_MAP_ENTRIES as usize
     }
 
-    /// Evict executables if the 'outer' map is full or if the max memory is exceeded. Note that
-    /// the memory accounting is approximate. It returns whether the unwind information can
-    /// be added to added BPF maps.
+    /// Evict executables if the 'outer' map is full or if the max memory is
+    /// exceeded. Note that the memory accounting is approximate. It returns
+    /// whether the unwind information can be added to added BPF maps.
     ///
-    ///  * `unwind_info_len`: The number of unwind information rows that will be added.
-    ///  * `max_memory_mb`: The maximum memory that all unwind information should account for in BPF maps.
+    ///  * `unwind_info_len`: The number of unwind information rows that will be
+    ///    added.
+    ///  * `max_memory_mb`: The maximum memory that all unwind information
+    ///    should account for in BPF maps.
     fn maybe_evict_executables(&mut self, unwind_info_len: usize, max_memory_mb: i32) -> bool {
         let mut executables_to_evict = Vec::new();
 
@@ -1627,7 +1637,8 @@ impl Profiler {
             executables_to_evict.push(*last_used_id);
         }
 
-        // Check if this executable unwind info would exceed the approximate memory limit.
+        // Check if this executable unwind info would exceed the approximate memory
+        // limit.
         let total_memory_used_mb = self.unwind_info_memory_usage();
         let this_unwind_info_mb = Self::unwind_info_size_mb(unwind_info_len);
         let total_memory_used_after_mb = total_memory_used_mb + this_unwind_info_mb;
@@ -1647,7 +1658,8 @@ impl Profiler {
             );
         }
 
-        // Figure out what are the unwind info we should evict to stay below the memory limit.
+        // Figure out what are the unwind info we should evict to stay below the memory
+        // limit.
         let mut could_be_freed_mb = 0;
         for (executable_id, executable_info) in self.last_used_executables() {
             let unwind_size_mb = Self::unwind_info_size_mb(executable_info.unwind_info_len);
@@ -1711,7 +1723,8 @@ impl Profiler {
         }
 
         if self.process_is_known(pid) {
-            // We hit this when we had to reset the state of the BPF maps but we know about this process.
+            // We hit this when we had to reset the state of the BPF maps but we know about
+            // this process.
             self.add_unwind_info_for_process(pid);
             return;
         }
@@ -1755,9 +1768,11 @@ impl Profiler {
         }
     }
 
-    /// Evicts a process. If *if_too_many_procs* is true, this will only be done if there are more
-    /// processes with  [`ProcessStatus::Running`] status than the maximum number of processes, [`MAX_PROCESSES`].
-    /// Returns false only if an eviction is necessary but not enough time has elapsed since the last one.
+    /// Evicts a process. If *if_too_many_procs* is true, this will only be done
+    /// if there are more processes with  [`ProcessStatus::Running`] status
+    /// than the maximum number of processes, [`MAX_PROCESSES`].
+    /// Returns false only if an eviction is necessary but not enough time has
+    /// elapsed since the last one.
     fn maybe_evict_process(&mut self, if_too_many_procs: bool) -> bool {
         let procs = self.procs.read();
         let running_procs = procs
@@ -1829,8 +1844,8 @@ impl Profiler {
                         );
                     }
 
-                    // We want to open the file as quickly as possible to minimise the chances of races
-                    // if the file is deleted.
+                    // We want to open the file as quickly as possible to minimise the chances of
+                    // races if the file is deleted.
                     let file = match File::open(&exe_path) {
                         Ok(f) => f,
                         Err(e) => {
@@ -1859,9 +1874,10 @@ impl Profiler {
 
                     debug!("Path {:?} executable_id 0x{}", path, executable_id);
 
-                    // mmap'ed data is always page aligned but the load segment information might not be.
-                    // As we need to account for any randomisation added by ASLR, by substracting the virtual
-                    // address from the first load segment once it's been page aligned we'll get the offset
+                    // mmap'ed data is always page aligned but the load segment information might
+                    // not be. As we need to account for any randomisation added
+                    // by ASLR, by substracting the virtual address from the
+                    // first load segment once it's been page aligned we'll get the offset
                     // at which the executable has been loaded.
                     //
                     // Note: this doesn't take into consideration the mmap'ed or load offsets.
@@ -1949,9 +1965,10 @@ impl Profiler {
                     });
                 }
                 procfs::process::MMapPath::Vdso | procfs::process::MMapPath::Vsyscall => {
-                    // This could be cached, but we are not doing it yet. If we want to add caching here we need to
-                    // be careful, the kernel might be upgraded since last time we ran, and that cache might not be
-                    // valid anymore.
+                    // This could be cached, but we are not doing it yet. If we want to add caching
+                    // here we need to be careful, the kernel might be upgraded
+                    // since last time we ran, and that cache might not be valid
+                    // anymore.
 
                     if let Ok((vdso_path, object_file)) = fetch_vdso_info(
                         pid,

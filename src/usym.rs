@@ -182,7 +182,8 @@ mod tests {
                 ],
                 vec![Frame {
                     virtual_address: 0x0,
-                    file_offset: Some(0x401040), // TODO investigate why this doesn't match the input value
+                    file_offset: Some(0x401040), /* TODO investigate why this doesn't match the
+                                                  * input value */
                     symbolization_result: Some(Ok(SymbolizedFrame::new(
                         "_start".to_string(),
                         false,

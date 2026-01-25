@@ -14,8 +14,9 @@ use lightswitch_object::BuildId;
 ///
 /// This currently experimental, not feature-complete and not used yet during
 /// symbolization. The end goal would be to keep track of every debug info
-/// that's either present locally or remotely (depending on configuration), while
-/// minimizing the number of open FDs, file copies, and race condition windows.
+/// that's either present locally or remotely (depending on configuration),
+/// while minimizing the number of open FDs, file copies, and race condition
+/// windows.
 pub trait DebugInfoManager {
     fn add_if_not_present(
         &self,

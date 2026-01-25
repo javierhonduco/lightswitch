@@ -156,7 +156,8 @@ impl PprofBuilder {
         Ok(())
     }
 
-    /// Returns the id for a string in the string table or None if it's not present.
+    /// Returns the id for a string in the string table or None if it's not
+    /// present.
     pub fn string_id(&self, string: &str) -> Option<i64> {
         self.known_strings.get(string).copied()
     }
@@ -244,8 +245,8 @@ impl PprofBuilder {
         }
     }
 
-    /// Adds a memory mapping. The id of the mapping is derived from the hash of the code region and should
-    /// be unique.
+    /// Adds a memory mapping. The id of the mapping is derived from the hash of
+    /// the code region and should be unique.
     pub fn add_mapping(
         &mut self,
         id: u64,
@@ -345,7 +346,8 @@ impl PprofBuilder {
 #[cfg(test)]
 mod tests {
     // Cheat sheet:
-    // - decode protobuf: `protoc --decode perftools.profiles.Profile src/proto/profile.proto < profile.pb`
+    // - decode protobuf: `protoc --decode perftools.profiles.Profile
+    //   src/proto/profile.proto < profile.pb`
     // - validate it: (in pprof's codebase) `go tool pprof profile.pb`
     // - print it: `go tool pprof -raw profile.pb`
     // - http server: `go tool pprof -http=:8080 profile.pb`
