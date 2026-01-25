@@ -2,9 +2,9 @@ use std::{fs::File, io::Read};
 
 use anyhow::{Context, Error};
 
-/// Parse a set of CPU ranges. They can be either a single number of a fully qualified range
-/// which is separated to one another with a comma (`,`) and use a dash (`-`) to indicate the
-/// start and (inclusive) end of the range.
+/// Parse a set of CPU ranges. They can be either a single number of a fully
+/// qualified range which is separated to one another with a comma (`,`) and use
+/// a dash (`-`) to indicate the start and (inclusive) end of the range.
 fn _read_cpu_range(ranges: &str) -> Result<Vec<u32>, Error> {
     let mut cpus = vec![];
 
@@ -34,7 +34,8 @@ fn _read_cpu_range(ranges: &str) -> Result<Vec<u32>, Error> {
     Ok(cpus)
 }
 
-/// Parses `/sys/devices/system/cpu/online` and returns the online CPUs in the system.
+/// Parses `/sys/devices/system/cpu/online` and returns the online CPUs in the
+/// system.
 pub fn get_online_cpus() -> Result<Vec<u32>, Error> {
     let mut file = File::open("/sys/devices/system/cpu/online")?;
     let mut ranges = String::new();

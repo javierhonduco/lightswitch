@@ -93,7 +93,8 @@ pub(crate) struct CliArgs {
     /// Output file for Flame Graph in SVG format
     #[arg(long, default_value_t, value_enum)]
     pub(crate) profile_format: ProfileFormat,
-    /// What information to show in the flamegraph. Won't do anything for other profile formats.
+    /// What information to show in the flamegraph. Won't do anything for other
+    /// profile formats.
     #[arg(long, default_value_t, value_enum)]
     pub(crate) flamegraph_aggregation: FlamegraphAggregation,
     /// Path for the generated profile.

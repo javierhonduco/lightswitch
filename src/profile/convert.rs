@@ -83,7 +83,8 @@ pub fn to_pprof(
                         mapping.start_addr,
                         mapping.end_addr,
                         0x0,
-                        obj.path.to_str().expect("will always be valid"), // should this be named name?,
+                        obj.path.to_str().expect("will always be valid"), /* should this be
+                                                                           * named name?, */
                         &mapping
                             .build_id
                             .as_ref()
@@ -208,14 +209,16 @@ pub fn to_pprof(
     pprof.build()
 }
 
-/// Converts a collection of symbolized aggregated profiles to their folded representation that most flamegraph renderers use.
-/// Folded stacks look like this:
+/// Converts a collection of symbolized aggregated profiles to their folded
+/// representation that most flamegraph renderers use. Folded stacks look like
+/// this:
 ///
 /// > base_frame;other_frame;top_frame 100
 /// > another_base_frame;other_frame;top_frame 300
 ///
-/// The frame names are separated by semicolons and the count is at the end separated with a space. We insert some synthetic
-/// frames to quickly identify the thread and process names and other pieces of metadata.
+/// The frame names are separated by semicolons and the count is at the end
+/// separated with a space. We insert some synthetic frames to quickly identify
+/// the thread and process names and other pieces of metadata.
 pub fn fold_profile(profile: AggregatedProfile, only_show_function_names: bool) -> String {
     let mut folded = String::new();
 
@@ -263,8 +266,8 @@ pub fn fold_profile(profile: AggregatedProfile, only_show_function_names: bool) 
     folded
 }
 
-/// Converts an `RawAggregatedProfile` into an unsymbolized `AggregatedProfile` that
-/// stores the object relative addresses used for symbolization.
+/// Converts an `RawAggregatedProfile` into an unsymbolized `AggregatedProfile`
+/// that stores the object relative addresses used for symbolization.
 pub fn raw_to_processed(
     raw_profile: &RawAggregatedProfile,
     procs: &HashMap<i32, ProcessInfo>,

@@ -101,7 +101,8 @@ impl BuildId {
         })
     }
 
-    /// Returns an identifier for the executable using the first 8 bytes of the build id.
+    /// Returns an identifier for the executable using the first 8 bytes of the
+    /// build id.
     pub fn id(&self) -> Result<ExecutableId> {
         // We want to interpret these bytes as big endian to have its hexadecimal
         // representation match.

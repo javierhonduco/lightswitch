@@ -32,8 +32,8 @@ pub struct ElfLoad {
 pub enum Runtime {
     /// C, C++, Rust, Fortran
     CLike,
-    /// Zig. Needs special handling because before [0] the top level frame (`start`) didn't have the
-    /// right unwind information
+    /// Zig. Needs special handling because before [0] the top level frame
+    /// (`start`) didn't have the right unwind information
     ///
     /// [0]: https://github.com/ziglang/zig/commit/130f7c2ed8e3358e24bb2fc7cca57f7a6f1f85c3
     Zig {
@@ -42,8 +42,9 @@ pub enum Runtime {
     },
     /// Golang
     Go(Vec<StopUnwindingFrames>),
-    /// V8, used by Node.js which is always compiled with frame pointers and has handwritten
-    /// code sections that aren't covered by the unwind information
+    /// V8, used by Node.js which is always compiled with frame pointers and has
+    /// handwritten code sections that aren't covered by the unwind
+    /// information
     V8,
 }
 
@@ -56,8 +57,9 @@ pub struct StopUnwindingFrames {
 
 #[derive(Debug)]
 pub struct ObjectFile {
-    /// Warning! `object` must always go above `mmap` to ensure it will be dropped
-    /// before. Rust guarantees that fields are dropped in the order they are defined.
+    /// Warning! `object` must always go above `mmap` to ensure it will be
+    /// dropped before. Rust guarantees that fields are dropped in the order
+    /// they are defined.
     object: object::File<'static>, // Its lifetime is tied to the `mmap` below.
     mmap: Box<Mmap>,
     build_id: BuildId,
@@ -65,13 +67,14 @@ pub struct ObjectFile {
 
 impl ObjectFile {
     pub fn new(file: &File) -> Result<Self> {
-        // Rust offers no guarantees on whether a "move" is done virtually or by memcpying,
-        // so to ensure that the memory value is valid we store it in the heap.
-        // Safety: Memory mapping files can cause issues if the file is modified or unmapped.
+        // Rust offers no guarantees on whether a "move" is done virtually or by
+        // memcpying, so to ensure that the memory value is valid we store it in
+        // the heap. Safety: Memory mapping files can cause issues if the file
+        // is modified or unmapped.
         let mmap = Box::new(unsafe { Mmap::map(file) }?);
         let object = object::File::parse(&**mmap)?;
-        // Safety: The lifetime of `object` will outlive `mmap`'s. We ensure `mmap` lives as long as
-        // `object` by defining `object` before.
+        // Safety: The lifetime of `object` will outlive `mmap`'s. We ensure `mmap`
+        // lives as long as `object` by defining `object` before.
         let object =
             unsafe { std::mem::transmute::<object::File<'_>, object::File<'static>>(object) };
         let build_id = Self::read_build_id(&object)?;
@@ -88,7 +91,8 @@ impl ObjectFile {
         Self::new(&file)
     }
 
-    /// Returns an identifier for the executable using the first 8 bytes of the build id.
+    /// Returns an identifier for the executable using the first 8 bytes of the
+    /// build id.
     pub fn id(&self) -> Result<ExecutableId> {
         self.build_id.id()
     }
@@ -98,8 +102,8 @@ impl ObjectFile {
         &self.build_id
     }
 
-    /// Returns the executable build ID if present. If no GNU build ID and no Go build ID
-    /// are found it returns the hash of the text section.
+    /// Returns the executable build ID if present. If no GNU build ID and no Go
+    /// build ID are found it returns the hash of the text section.
     pub fn read_build_id(object: &object::File<'static>) -> Result<BuildId> {
         let gnu_build_id = object.build_id()?;
 
@@ -151,9 +155,10 @@ impl ObjectFile {
                     zig_first_frame = Some((symbol.address(), symbol.address() + symbol.size()));
                 }
 
-                // Once we've found both Zig markers we are done. Not that this is a heuristic and it's
-                // possible that a Zig library is linked against code written in a C-like language. In this
-                // case we might be rewriting unwind information that's correct. This won't have a negative
+                // Once we've found both Zig markers we are done. Not that this is a heuristic
+                // and it's possible that a Zig library is linked against code
+                // written in a C-like language. In this case we might be
+                // rewriting unwind information that's correct. This won't have a negative
                 // effect as `_start` is always the first function.
                 if is_zig && let Some((low_address, high_address)) = zig_first_frame {
                     return Runtime::Zig {
@@ -190,7 +195,8 @@ impl ObjectFile {
                 "runtime.mstart",
                 "runtime.systemstack",
             ] {
-                // In some occasions functions might get some suffixes added to them like `runtime.mcall0`.
+                // In some occasions functions might get some suffixes added to them like
+                // `runtime.mcall0`.
                 if name.starts_with(func) {
                     r.push(StopUnwindingFrames {
                         name: name.to_string(),

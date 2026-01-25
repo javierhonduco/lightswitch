@@ -6,10 +6,10 @@ pub struct AddressBlockRange {
 
 /// Calculate addresses for longest prefix match.
 ///
-/// For a given address range, calculate all the prefix ranges to ensure searching
-/// with Longest Prefix Match algorithm returns the precise value we want. This is
-/// typically used in networking to select the right subnet but we use it to store
-/// memory mappings.
+/// For a given address range, calculate all the prefix ranges to ensure
+/// searching with Longest Prefix Match algorithm returns the precise value we
+/// want. This is typically used in networking to select the right subnet but we
+/// use it to store memory mappings.
 pub fn summarize_address_range(low: u64, high: u64) -> Vec<AddressBlockRange> {
     let mut res = Vec::new();
     let mut curr = low;

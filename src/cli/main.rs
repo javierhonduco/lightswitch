@@ -55,8 +55,8 @@ use crate::killswitch::KillSwitch;
 const DEFAULT_SERVER_URL: &str = "http://localhost:4567";
 static KILLSWITCH_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Exit the main thread if any thread panics. We prefer this behaviour because pretty much every
-/// thread is load bearing for the correct functioning.
+/// Exit the main thread if any thread panics. We prefer this behaviour because
+/// pretty much every thread is load bearing for the correct functioning.
 fn panic_thread_hook() {
     let orig_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {

@@ -82,9 +82,11 @@ pub fn kaslr_offset() -> anyhow::Result<u64> {
                             .map(|(_key, val)| val);
 
                         return Ok(
-                            // This entry is stored in hex-encoded ascii. It could be converted in one go
-                            // but this is not performance sensitive as it runs once. It's ok to take 2 hops
-                            // to convert it rather than hand rolling it or bringing another dependency.
+                            // This entry is stored in hex-encoded ascii. It could be converted in
+                            // one go but this is not performance
+                            // sensitive as it runs once. It's ok to take 2 hops
+                            // to convert it rather than hand rolling it or bringing another
+                            // dependency.
                             u64::from_str_radix(std::str::from_utf8(found.unwrap())?, 16)?,
                         );
                     }

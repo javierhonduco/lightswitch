@@ -12,7 +12,8 @@ use lightswitch::profile::AggregatedProfile;
 use lightswitch::profiler::{Profiler, ProfilerConfig};
 use lightswitch_metadata::metadata_provider::GlobalMetadataProvider;
 
-/// Find the `nix` binary either in the $PATH or in the below hardcoded location.
+/// Find the `nix` binary either in the $PATH or in the below hardcoded
+/// location.
 fn nix_bin() -> String {
     for path in ["nix", "/nix/var/nix/profiles/default/bin/nix"] {
         if Command::new(path).arg("--help").output().is_ok() {
@@ -23,8 +24,8 @@ fn nix_bin() -> String {
     panic!("`nix` could not be found in $PATH or /nix/var/nix/profiles/default/bin/nix");
 }
 
-/// Builds the given test program and writes the resulting binaries under `target/nix` to prevent
-/// clobbering artifacts from manual builds.
+/// Builds the given test program and writes the resulting binaries under
+/// `target/nix` to prevent clobbering artifacts from manual builds.
 fn build_test_binary(target: &str) {
     let output = Command::new(nix_bin())
         .args([

@@ -32,9 +32,11 @@ pub enum RawSampleParsingError {
     SampleTooLarge,
 }
 
-/// The unwound stack trace, [`crate::bpf::profiler_bindings::native_stack_t`], is stored in the last field of [`crate::bpf::profiler_bindings::sample_t`] and only the
-/// useful data is sent to userspace. This means that every sample might have a different number of frames.
-/// This is similar to C99's "Flexible Array Fields" and it is the reason why we need to manually parse it
+/// The unwound stack trace, [`crate::bpf::profiler_bindings::native_stack_t`],
+/// is stored in the last field of [`crate::bpf::profiler_bindings::sample_t`]
+/// and only the useful data is sent to userspace. This means that every sample
+/// might have a different number of frames. This is similar to C99's "Flexible
+/// Array Fields" and it is the reason why we need to manually parse it
 /// as `plain` doesn't correctly know how to deal with this.
 impl RawSample {
     pub fn from_bytes(data: &[u8]) -> Result<Self, RawSampleParsingError> {
@@ -113,10 +115,11 @@ pub struct RawAggregatedSample {
 }
 
 impl RawAggregatedSample {
-    /// Converts a `RawAggregatedSample` into a `AggregatedSample`, if succesful. The main changes
-    /// after processing are that the stacks for both kernel and userspace are converted from raw
-    /// addresses to unsymbolized `Frame`s and that the file offset needed for symbolization is
-    /// calculated here.
+    /// Converts a `RawAggregatedSample` into a `AggregatedSample`, if
+    /// succesful. The main changes after processing are that the stacks for
+    /// both kernel and userspace are converted from raw addresses to
+    /// unsymbolized `Frame`s and that the file offset needed for symbolization
+    /// is calculated here.
     pub fn process(
         &self,
         procs: &HashMap<Pid, ProcessInfo>,
@@ -202,7 +205,8 @@ impl fmt::Display for RawAggregatedSample {
 pub struct FrameAddress {
     /// Address from the process, as collected from the BPF program.
     pub virtual_address: u64,
-    /// The offset in the object file after converting the virtual_address its relative position.
+    /// The offset in the object file after converting the virtual_address its
+    /// relative position.
     pub file_offset: u64,
 }
 
