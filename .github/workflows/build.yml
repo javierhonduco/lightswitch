@@ -1,60 +1,62 @@
 name: ci
 on:
-  pull_request:
-  push:
-      branches:
-        - main
+    pull_request:
+    push:
+        branches:
+            - main
 
 jobs:
-  ci:
-    runs-on: ubuntu-22.04
-    permissions:
-        id-token: write
-        contents: read
-    steps:
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-    - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
-    - uses: DeterminateSystems/flakehub-cache-action@91ca310d06020a14c188943f8277d38678b576e5 # v2
-    - name: Show nix version
-      run: nix --version
-    - name: Set up nix dev env
-      run: nix develop --command echo 0
-    - name: Set nix rustc env var
-      run: echo "NIX_RUSTC_VERSION=$(nix develop --ignore-environment --command rustc --version --verbose | tr -d '\n')" >> $GITHUB_ENV
-    - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+    ci:
+        runs-on: ubuntu-22.04
+        permissions:
+            id-token: write
+            contents: read
+        steps:
+            - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+            - uses: DeterminateSystems/flakehub-cache-action@91ca310d06020a14c188943f8277d38678b576e5 # v2
+            - name: Show nix version
+              run: nix --version
+            - name: Set up nix dev env
+              run: nix develop --command echo 0
+            - name: Set nix rustc env var
+              run: echo "NIX_RUSTC_VERSION=$(nix develop --ignore-environment --command rustc --version --verbose | tr -d '\n')" >> $GITHUB_ENV
+            - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
 
-      with:
-        key: ${{ env.NIX_RUSTC_VERSION }}
-    - name: Run `cargo check`
-      run: nix develop --ignore-environment --command cargo check
-    - name: Run `cargo clippy`
-      run: nix develop --command cargo clippy --workspace --all-targets -- -D warnings
-    - name: Run `cargo test`
-      run: nix develop --command cargo test --workspace
-    - name: Run `cargo fmt`
-      run: nix develop --command cargo fmt --check
-    - name: Run `nix fmt`
-      run: nix fmt -- --check .
-    - name: Run `cargo shear`
-      run: nix develop --command cargo shear
+              with:
+                  key: ${{ env.NIX_RUSTC_VERSION }}
+            - name: Run `cargo check`
+              run: nix develop --ignore-environment --command cargo check
+            - name: Run `cargo clippy`
+              run: nix develop --command cargo clippy --workspace --all-targets -- -D warnings
+            - name: Run `cargo test`
+              run: nix develop --command cargo test --workspace
+            - name: Run `cargo fmt`
+              run: nix develop --command cargo fmt --check
+            - name: Run `cargo rustdoc`
+              run: nix develop --command cargo rustdoc --all-features -- -Zunstable-options --check -Dwarnings
+            - name: Run `nix fmt`
+              run: nix fmt -- --check .
+            - name: Run `cargo shear`
+              run: nix develop --command cargo shear
 
-  ci-arm:
-    runs-on: ubuntu-22.04-arm
-    permissions:
-        id-token: write
-        contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
-      - uses: DeterminateSystems/flakehub-cache-action@91ca310d06020a14c188943f8277d38678b576e5 # v2
-      - name: Set up nix dev env
-        run: nix develop --command echo 0
-      - name: Set nix rustc env var
-        run: echo "NIX_RUSTC_VERSION=$(nix develop --ignore-environment --command rustc --version --verbose | tr -d '\n')" >> $GITHUB_ENV
-      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
-        with:
-          key: ${{ env.NIX_RUSTC_VERSION }}
-      - name: Run `cargo check`
-        run: nix develop --ignore-environment --command cargo check
-      - name: Run `cargo test`
-        run: nix develop --command cargo test --workspace
+    ci-arm:
+        runs-on: ubuntu-22.04-arm
+        permissions:
+            id-token: write
+            contents: read
+        steps:
+            - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+            - uses: DeterminateSystems/flakehub-cache-action@91ca310d06020a14c188943f8277d38678b576e5 # v2
+            - name: Set up nix dev env
+              run: nix develop --command echo 0
+            - name: Set nix rustc env var
+              run: echo "NIX_RUSTC_VERSION=$(nix develop --ignore-environment --command rustc --version --verbose | tr -d '\n')" >> $GITHUB_ENV
+            - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+              with:
+                  key: ${{ env.NIX_RUSTC_VERSION }}
+            - name: Run `cargo check`
+              run: nix develop --ignore-environment --command cargo check
+            - name: Run `cargo test`
+              run: nix develop --command cargo test --workspace
