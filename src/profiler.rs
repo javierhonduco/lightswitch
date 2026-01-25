@@ -1963,18 +1963,23 @@ impl Profiler {
                         };
                         let build_id = object_file.build_id().clone();
 
-                        object_files.insert(
-                            executable_id,
-                            ObjectFileInfo {
-                                path: vdso_path.clone(),
-                                elf_load_segments,
-                                is_dyn: object_file.is_dynamic(),
-                                references: 1,
-                                native_unwind_info_size: None,
-                                is_vdso: true,
-                                runtime: Runtime::CLike,
-                            },
-                        );
+                        match object_files.entry(executable_id) {
+                            Entry::Vacant(entry) => {
+                                entry.insert(ObjectFileInfo {
+                                    path: vdso_path.clone(),
+                                    elf_load_segments,
+                                    is_dyn: object_file.is_dynamic(),
+                                    references: 1,
+                                    native_unwind_info_size: None,
+                                    is_vdso: true,
+                                    runtime: Runtime::CLike,
+                                });
+                            }
+                            Entry::Occupied(mut entry) => {
+                                entry.get_mut().references += 1;
+                            }
+                        }
+
                         mappings.push(ExecutableMapping {
                             executable_id,
                             build_id: Some(build_id),
