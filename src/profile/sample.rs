@@ -32,7 +32,7 @@ pub enum RawSampleParsingError {
     SampleTooLarge,
 }
 
-/// The unwound stack trace, [`native_stack_t`], is stored in the last field of [`sample_t`] and only the
+/// The unwound stack trace, [`crate::bpf::profiler_bindings::native_stack_t`], is stored in the last field of [`crate::bpf::profiler_bindings::sample_t`] and only the
 /// useful data is sent to userspace. This means that every sample might have a different number of frames.
 /// This is similar to C99's "Flexible Array Fields" and it is the reason why we need to manually parse it
 /// as `plain` doesn't correctly know how to deal with this.

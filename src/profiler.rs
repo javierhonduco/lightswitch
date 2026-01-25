@@ -585,7 +585,7 @@ impl Profiler {
     /// Starts a thread that polls the given ring or perf buffer, depending on the
     /// configuration.
     ///
-    /// Note: [`lost_callback`] is only used for perf buffers as ring buffers only report
+    /// Note: `lost_callback` is only used for perf buffers as ring buffers only report
     /// errors on the sender side.
     pub fn start_poll_thread<Call: Fn(&[u8]) + 'static, Lost: FnMut(i32, u64) + 'static>(
         &self,

@@ -40,7 +40,7 @@ impl SymbolizedFrame {
 }
 
 impl Frame {
-    /// Returns the formatted frame showing only the function names if [`only_show_function_name`]
+    /// Returns the formatted frame showing only the function names if `only_show_function_name`
     /// is true otherwise it will show the file and line number if available.
     pub fn format_all_info(&self, only_show_function_name: bool) -> String {
         match &self.symbolization_result {
