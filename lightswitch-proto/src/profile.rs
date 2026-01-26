@@ -5,6 +5,7 @@ pub mod pprof {
     include!(concat!(env!("OUT_DIR"), "/perftools.profiles.rs"));
 }
 
+use prost::bytes;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
@@ -343,6 +344,18 @@ impl PprofBuilder {
     }
 }
 
+impl pprof::Profile {
+    /// deserialize a protobuf encoded message into [`Self`]
+    pub fn decode(buf: impl bytes::Buf) -> Result<Self, prost::DecodeError> {
+        <Self as prost::Message>::decode(buf)
+    }
+
+    /// serialize [`Self`] as protobuf
+    pub fn encode(&self, buf: &mut impl bytes::BufMut) -> Result<(), prost::EncodeError> {
+        <Self as prost::Message>::encode(self, buf)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // Cheat sheet:
@@ -485,5 +498,23 @@ mod tests {
 
         assert!(pprof.validate().is_ok());
         pprof.build();
+    }
+
+    #[test]
+    fn test_encode_decode() {
+        let mut pprof = PprofBuilder::new(SystemTime::now(), Duration::from_secs(5), 27);
+        pprof.add_function("func1", None);
+        let mapping_id = pprof.add_mapping(2, 0x33, 0x66, 0x54, "prof.so", "fake-buildid");
+        let location_ids = vec![pprof.add_location(0x33, mapping_id, vec![])];
+        pprof.add_sample(location_ids, 1, &[]);
+
+        let profile = pprof.build();
+
+        let mut buff = bytes::BytesMut::new();
+        profile.encode(&mut buff).expect("Unable to encode profile");
+
+        let decoded_profile = pprof::Profile::decode(buff.freeze()).expect("unable to decode");
+
+        assert_eq!(decoded_profile, profile);
     }
 }

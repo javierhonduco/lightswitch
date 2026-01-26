@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::path::PathBuf;
 
 use blazesym::symbolize::source::Elf;
@@ -58,14 +59,15 @@ pub fn symbolize_native_stack_blaze(
                 inlined,
                 ..
             }) => {
-                let filename = |code_info: &Option<CodeInfo>| match code_info.clone() {
-                    Some(a) => Some(a.file.to_string_lossy().to_string()),
-                    None => None,
-                };
-                let line = |code_info: &Option<CodeInfo>| match code_info.clone() {
-                    Some(a) => a.line,
-                    None => None,
-                };
+                fn filename<'a, T: Borrow<CodeInfo<'a>>>(code_info: &Option<T>) -> Option<String> {
+                    code_info
+                        .as_ref()
+                        .map(|a| a.borrow().file.to_string_lossy().to_string())
+                }
+
+                fn line<'a, T: Borrow<CodeInfo<'a>>>(code_info: &Option<T>) -> Option<u32> {
+                    code_info.as_ref().map(|a| a.borrow().line)?
+                }
 
                 for frame in inlined.iter().rev() {
                     symbols.push(Frame {
