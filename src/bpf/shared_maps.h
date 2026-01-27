@@ -44,6 +44,7 @@ DEFINE_COUNTER(error_mapping_does_not_contain_pc);
 DEFINE_COUNTER(error_page_not_found);
 DEFINE_COUNTER(error_binary_search_exhausted_iterations);
 DEFINE_COUNTER(error_sending_new_process_event);
+DEFINE_COUNTER(error_sending_need_unwind_info_event);
 DEFINE_COUNTER(error_cfa_offset_did_not_fit);
 DEFINE_COUNTER(error_rbp_offset_did_not_fit);
 DEFINE_COUNTER(error_failure_sending_stack);

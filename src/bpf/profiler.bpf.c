@@ -150,7 +150,11 @@ static __always_inline void send_event(Event *event, struct bpf_perf_event_data 
         ret = bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, event, sizeof(Event));
     }
     if (ret < 0) {
-        bump_unwind_error_sending_new_process_event();
+        if (event->type == EVENT_NEW_PROCESS) {
+            bump_unwind_error_sending_new_process_event();
+        } else if (event->type == EVENT_NEED_UNWIND_INFO) {
+            bump_unwind_error_sending_need_unwind_info_event();
+        }
     }
 
     LOG("[debug] event type %d sent", event->type);
