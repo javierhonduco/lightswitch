@@ -212,6 +212,8 @@ pub enum AddProcessError {
     Eviction,
     #[error("procfs race")]
     ProcfsRace,
+    #[error("procfs race on a best effort operation")]
+    ProcfsRaceBestEffort,
 }
 
 impl Default for Profiler {
@@ -1738,9 +1740,12 @@ impl Profiler {
             Ok(()) => {
                 self.add_unwind_info_for_process(pid);
             }
-            Err(_e) => {
-                // probabaly a procfs race
+            Err(AddProcessError::Eviction) => {
+                warn!("could not evict a process to make room for process: {pid}");
             }
+            // Nothing to do in these two cases.
+            Err(AddProcessError::ProcfsRace) => {}
+            Err(AddProcessError::ProcfsRaceBestEffort) => {}
         }
     }
 
@@ -2035,7 +2040,11 @@ impl Profiler {
         };
         self.procs.clone().write().insert(pid, proc_info);
 
-        for thread in proc.tasks().map_err(|_| AddProcessError::ProcfsRace)? {
+        // Best effort, failing here won't be an issue for profiling.
+        for thread in proc
+            .tasks()
+            .map_err(|_| AddProcessError::ProcfsRaceBestEffort)?
+        {
             match thread {
                 Ok(thread) => {
                     self.metadata_provider
