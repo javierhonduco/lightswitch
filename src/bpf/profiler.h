@@ -95,6 +95,7 @@ struct unwinder_stats_t {
     u64 error_page_not_found;
     u64 error_binary_search_exhausted_iterations;
     u64 error_sending_new_process_event;
+    u64 error_sending_need_unwind_info_event;
     u64 error_cfa_offset_did_not_fit;
     u64 error_rbp_offset_did_not_fit;
     u64 error_failure_sending_stack;

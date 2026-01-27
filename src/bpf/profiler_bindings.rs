@@ -69,6 +69,8 @@ impl Add for unwinder_stats_t {
             error_mapping_not_found: self.error_mapping_not_found + other.error_mapping_not_found,
             error_sending_new_process_event: self.error_sending_new_process_event
                 + other.error_sending_new_process_event,
+            error_sending_need_unwind_info_event: self.error_sending_need_unwind_info_event
+                + other.error_sending_need_unwind_info_event,
             error_cfa_offset_did_not_fit: self.error_cfa_offset_did_not_fit
                 + other.error_cfa_offset_did_not_fit,
             error_rbp_offset_did_not_fit: self.error_rbp_offset_did_not_fit
