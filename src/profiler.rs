@@ -1322,15 +1322,15 @@ impl Profiler {
         entry.remove_entry();
     }
 
-    /// Returns the approximate size in megabytes of the BPF unwind maps.
-    fn unwind_info_memory_usage(&self) -> u32 {
-        let mut total_mb = 0;
+    /// Returns the approximate size of the BPF unwind maps in bytes.
+    fn unwind_info_memory_usage(&self) -> u64 {
+        let mut total_bytes = 0;
 
         for executable_info in self.native_unwind_state.known_executables.values() {
-            total_mb += Self::unwind_info_size_mb(executable_info.unwind_info_len);
+            total_bytes += Self::unwind_info_size_bytes(executable_info.unwind_info_len);
         }
 
-        total_mb
+        total_bytes
     }
 
     fn create_and_insert_unwind_info_map(
@@ -1464,11 +1464,11 @@ impl Profiler {
         }
     }
 
-    /// Returns the approximate size in megabytes of _n_ rows of unwind
-    /// information in a BPF map.
-    fn unwind_info_size_mb(unwind_info_len: usize) -> u32 {
+    /// Returns the approximate size of _n_ rows of unwind
+    /// information in a BPF map in bytes.
+    fn unwind_info_size_bytes(unwind_info_len: usize) -> u64 {
         let overhead = 1.02; // Account for internal overhead of the BPF maps
-        ((unwind_info_len * 8 * 8) as f64 * overhead / 1e+6) as u32
+        ((unwind_info_len * 8 * 8) as f64 * overhead) as u64
     }
 
     fn add_unwind_information_for_executable(
@@ -1639,11 +1639,13 @@ impl Profiler {
 
         // Check if this executable unwind info would exceed the approximate memory
         // limit.
-        let total_memory_used_mb = self.unwind_info_memory_usage();
-        let this_unwind_info_mb = Self::unwind_info_size_mb(unwind_info_len);
-        let total_memory_used_after_mb = total_memory_used_mb + this_unwind_info_mb;
-        let to_free_mb = std::cmp::max(0, total_memory_used_after_mb as i32 - max_memory_mb) as u32;
-        let should_evict = !executables_to_evict.is_empty() || to_free_mb != 0;
+        const MB_TO_BYTES: u64 = 1_000_000;
+        let max_memory_bytes = max_memory_mb as u64 * MB_TO_BYTES;
+        let total_memory_used_bytes = self.unwind_info_memory_usage();
+        let this_unwind_info_bytes = Self::unwind_info_size_bytes(unwind_info_len);
+        let total_memory_used_after_bytes = total_memory_used_bytes + this_unwind_info_bytes;
+        let to_free_bytes = total_memory_used_after_bytes.saturating_sub(max_memory_bytes);
+        let should_evict = !executables_to_evict.is_empty() || to_free_bytes != 0;
 
         // Do not evict unwind information too often.
         if should_evict && !self.native_unwind_state.can_evict_executable() {
@@ -1651,23 +1653,26 @@ impl Profiler {
         }
 
         // We should print info log if we're going to need to evict for now
-        if to_free_mb > 0 {
+        if to_free_bytes > 0 {
             info!(
-                "unwind information size to free {} MB (used {} MB / {} MB)",
-                to_free_mb, total_memory_used_mb, max_memory_mb
-            );
+            "want to add {:.2} MB of unwind information, need to free at least {:.2} MB (used {:.2} MB / {} MB)",
+            this_unwind_info_bytes as f64 / MB_TO_BYTES as f64,
+            to_free_bytes as f64 / MB_TO_BYTES as f64,
+            total_memory_used_bytes as f64 / MB_TO_BYTES as f64,
+            max_memory_mb
+        );
         }
 
         // Figure out what are the unwind info we should evict to stay below the memory
         // limit.
-        let mut could_be_freed_mb = 0;
+        let mut could_be_freed_bytes = 0;
         for (executable_id, executable_info) in self.last_used_executables() {
-            let unwind_size_mb = Self::unwind_info_size_mb(executable_info.unwind_info_len);
-            if could_be_freed_mb >= to_free_mb {
+            let unwind_size_bytes = Self::unwind_info_size_bytes(executable_info.unwind_info_len);
+            if could_be_freed_bytes >= to_free_bytes {
                 break;
             }
 
-            could_be_freed_mb += unwind_size_mb;
+            could_be_freed_bytes += unwind_size_bytes;
             executables_to_evict.push(executable_id);
         }
 
