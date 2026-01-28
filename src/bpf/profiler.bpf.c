@@ -478,7 +478,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
             return 1;
         } else if (found_cfa_type == CFA_TYPE_PLT1 || found_cfa_type == CFA_TYPE_PLT2) {
             LOG("CFA expression found with id %d", found_cfa_offset);
-            u64 threshold = 11 ? found_cfa_type == CFA_TYPE_PLT1 : 10;
+            u64 threshold = found_cfa_type == CFA_TYPE_PLT1 ? 11 : 10;
 
             if (threshold == 0) {
                 bump_unwind_error_should_never_happen();
