@@ -29,6 +29,9 @@ pub trait Collector {
         &HashMap<i32, ProcessInfo>,
         &HashMap<ExecutableId, ObjectFileInfo>,
     );
+    /// Allows downcasting to concrete collector types
+    fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
 pub type ThreadSafeCollector = Arc<Mutex<Box<dyn Collector + Send>>>;
@@ -63,6 +66,14 @@ impl Collector for NullCollector {
         &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
         (AggregatedProfile::new(), &self.procs, &self.objs)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 
@@ -146,6 +157,14 @@ impl Collector for StreamingCollector {
     ) {
         (AggregatedProfile::new(), &self.procs, &self.objs)
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 #[derive(Default)]
@@ -216,5 +235,13 @@ impl Collector for AggregatorCollector {
             .collect();
 
         (profile, &self.procs, &self.objs)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }

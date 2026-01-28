@@ -1,0 +1,22 @@
+[Unit]
+Description=Lightswitch CPU Profiler
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/lightswitch
+Restart=on-failure
+RestartSec=5
+
+# Run as root (required for BPF and perf events)
+User=root
+Group=root
+
+# Memory limit
+MemoryMax=500M
+
+# Security hardening (minimal due to BPF requirements)
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

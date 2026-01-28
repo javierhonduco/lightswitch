@@ -5,6 +5,7 @@ use std::io::IsTerminal;
 use std::io::Write;
 use std::panic;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -39,6 +40,7 @@ use lightswitch_object::ObjectFile;
 
 mod args;
 mod killswitch;
+mod tui;
 mod validators;
 
 use crate::args::CliArgs;
@@ -50,6 +52,7 @@ use crate::args::ProfileFormat;
 use crate::args::ProfileSender;
 use crate::args::Symbolizer;
 use crate::killswitch::KillSwitch;
+use crate::tui::{run_tui, App, LiveCollector, LiveStats};
 
 const DEFAULT_SERVER_URL: &str = "http://localhost:4567";
 static KILLSWITCH_POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -87,19 +90,29 @@ fn main() -> Result<(), Box<dyn Error>> {
         start_deadlock_detector();
     }
 
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(match args.logging {
-            LoggingLevel::Trace => Level::TRACE,
-            LoggingLevel::Debug => Level::DEBUG,
-            LoggingLevel::Info => Level::INFO,
-            LoggingLevel::Warn => Level::WARN,
-            LoggingLevel::Error => Level::ERROR,
-        })
-        .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE)
-        .with_ansi(std::io::stdout().is_terminal())
-        .finish();
-
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    // In live mode, suppress all logs to avoid interfering with the TUI
+    if args.live {
+        let subscriber = FmtSubscriber::builder()
+            .with_max_level(Level::ERROR)
+            .with_writer(std::io::sink)
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("setting default subscriber failed");
+    } else {
+        let subscriber = FmtSubscriber::builder()
+            .with_max_level(match args.logging {
+                LoggingLevel::Trace => Level::TRACE,
+                LoggingLevel::Debug => Level::DEBUG,
+                LoggingLevel::Info => Level::INFO,
+                LoggingLevel::Warn => Level::WARN,
+                LoggingLevel::Error => Level::ERROR,
+            })
+            .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE)
+            .with_ansi(std::io::stdout().is_terminal())
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("setting default subscriber failed");
+    }
 
     match args.command {
         None => {} // record profiles by default
@@ -154,7 +167,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let metadata_provider: ThreadSafeGlobalMetadataProvider =
         Arc::new(Mutex::new(GlobalMetadataProvider::default()));
 
-    let collector: Arc<Mutex<Box<dyn Collector + Send>>> =
+    // For live mode, we use a special collector and TUI
+    let live_stats = Arc::new(LiveStats::default());
+    let should_stop = Arc::new(AtomicBool::new(false));
+
+    let collector: Arc<Mutex<Box<dyn Collector + Send>>> = if args.live {
+        Arc::new(Mutex::new(Box::new(LiveCollector::new(
+            live_stats.clone(),
+            should_stop.clone(),
+        ))))
+    } else {
         Arc::new(Mutex::new(match args.sender {
             ProfileSender::None => Box::new(NullCollector::new()),
             ProfileSender::LocalDisk => Box::new(AggregatorCollector::new()),
@@ -166,7 +188,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 args.sample_freq,
                 metadata_provider.clone(),
             )),
-        }));
+        }))
+    };
 
     let debug_info_manager: Box<dyn DebugInfoManager> = match args.debug_info_backend {
         DebugInfoBackend::None => Box::new(DebugInfoBackendNull {}),
@@ -203,6 +226,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let (stop_signal_sender, stop_signal_receive) = bounded(1);
     let profiler_stop_signal_sender = stop_signal_sender.clone();
+    let killswitch_stop_signal_sender = stop_signal_sender.clone();
+
     ctrlc::set_handler(move || {
         info!("received Ctrl+C, stopping...");
         let _ = profiler_stop_signal_sender.send(());
@@ -215,7 +240,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let _ = killswitch_poll_thread.spawn(move || loop {
         if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
             info!("killswitch detected. Sending stop signal to profiler.");
-            let _ = stop_signal_sender.send(());
+            let _ = killswitch_stop_signal_sender.send(());
             break;
         }
     });
@@ -225,7 +250,46 @@ fn main() -> Result<(), Box<dyn Error>> {
         stop_signal_receive,
         metadata_provider.clone(),
     );
-    p.profile_pids(args.pids);
+    p.profile_pids(args.pids.clone());
+
+    // Live mode: run TUI in background thread and profiler in main thread
+    if args.live {
+        let collector_for_tui = collector.clone();
+        let should_stop_for_tui = should_stop.clone();
+        let sample_freq = args.sample_freq;
+        let tui_stop_signal = stop_signal_sender.clone();
+
+        // Run TUI in background thread
+        let tui_handle = thread::Builder::new()
+            .name("tui-thread".to_string())
+            .spawn(move || {
+                let mut app = App::new(
+                    collector_for_tui,
+                    live_stats,
+                    should_stop_for_tui.clone(),
+                    sample_freq,
+                );
+
+                if let Err(e) = run_tui(&mut app) {
+                    let _ = tui::restore_terminal();
+                    eprintln!("TUI error: {:?}", e);
+                }
+
+                // Signal profiler to stop when TUI exits
+                let _ = tui_stop_signal.send(());
+            })
+            .expect("Failed to spawn TUI thread");
+
+        // Run profiler in main thread
+        p.run(collector.clone());
+
+        // Wait for TUI to finish
+        let _ = tui_handle.join();
+
+        return Ok(());
+    }
+
+    // Normal (non-live) mode
     let profile_duration = p.run(collector.clone());
 
     let collector = collector.lock().unwrap();
@@ -355,7 +419,7 @@ mod tests {
         cmd.arg("--help");
         cmd.assert().success();
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
-        insta::assert_yaml_snapshot!(actual, @r#""Usage: lightswitch [OPTIONS] [COMMAND]\n\nCommands:\n  object-info  \n  show-unwind  \n  system-info  \n  help         Print this message or the help of the given subcommand(s)\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-debug\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --flamegraph-aggregation <FLAMEGRAPH_AGGREGATION>\n          What information to show in the flamegraph. Won't do anything for other profile formats\n          \n          [default: function]\n          [possible values: function, all]\n\n      --profile-path <PROFILE_PATH>\n          Path for the generated profile\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n          \n          [default: local-disk]\n\n      --server-url <SERVER_URL>\n          \n\n      --token <TOKEN>\n          \n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          max number of rate limit entries\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n      --symbolizer <SYMBOLIZER>\n          [default: local]\n          [possible values: local, none]\n\n      --debug-info-backend <DEBUG_INFO_BACKEND>\n          [default: none]\n          [possible values: none, copy, remote]\n\n      --max-native-unwind-info-size-mb <MAX_NATIVE_UNWIND_INFO_SIZE_MB>\n          approximate max size in megabytes used for the BPF maps that hold unwind information\n          \n          [default: 2147483647]\n\n      --enable-deadlock-detector\n          enable parking_lot's deadlock detector\n\n      --cache-dir-base <CACHE_DIR_BASE>\n          [default: /tmp]\n\n      --killswitch-path-override <KILLSWITCH_PATH_OVERRIDE>\n          Override the default path to the killswitch file (/tmp/lighswitch/killswitch) which prevents the profiler from starting\n\n      --unsafe-start\n          Force the profiler to start even if the system killswitch is enabled\n\n      --force-perf-buffer\n          force perf buffers even if ring buffers can be used\n\n  -h, --help\n          Print help (see a summary with '-h')\n""#);
+        insta::assert_yaml_snapshot!(actual, @r#""Usage: lightswitch [OPTIONS] [COMMAND]\n\nCommands:\n  object-info  \n  show-unwind  \n  system-info  \n  help         Print this message or the help of the given subcommand(s)\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-debug\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --flamegraph-aggregation <FLAMEGRAPH_AGGREGATION>\n          What information to show in the flamegraph. Won't do anything for other profile formats\n          \n          [default: function]\n          [possible values: function, all]\n\n      --profile-path <PROFILE_PATH>\n          Path for the generated profile\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n          \n          [default: local-disk]\n\n      --server-url <SERVER_URL>\n          \n\n      --token <TOKEN>\n          \n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          max number of rate limit entries\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n      --symbolizer <SYMBOLIZER>\n          [default: local]\n          [possible values: local, none]\n\n      --debug-info-backend <DEBUG_INFO_BACKEND>\n          [default: none]\n          [possible values: none, copy, remote]\n\n      --max-native-unwind-info-size-mb <MAX_NATIVE_UNWIND_INFO_SIZE_MB>\n          approximate max size in megabytes used for the BPF maps that hold unwind information\n          \n          [default: 2147483647]\n\n      --enable-deadlock-detector\n          enable parking_lot's deadlock detector\n\n      --cache-dir-base <CACHE_DIR_BASE>\n          [default: /tmp]\n\n      --killswitch-path-override <KILLSWITCH_PATH_OVERRIDE>\n          Override the default path to the killswitch file (/tmp/lighswitch/killswitch) which prevents the profiler from starting\n\n      --unsafe-start\n          Force the profiler to start even if the system killswitch is enabled\n\n      --force-perf-buffer\n          force perf buffers even if ring buffers can be used\n\n      --live\n          Live mode: show a top-like TUI with real-time profiling data\n\n  -h, --help\n          Print help (see a summary with '-h')\n""#);
     }
 
     #[rstest]

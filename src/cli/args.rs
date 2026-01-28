@@ -153,6 +153,11 @@ pub(crate) struct CliArgs {
     pub(crate) unsafe_start: bool,
     #[arg(long, help = "force perf buffers even if ring buffers can be used")]
     pub(crate) force_perf_buffer: bool,
+    #[arg(
+        long,
+        help = "Live mode: show a top-like TUI with real-time profiling data"
+    )]
+    pub(crate) live: bool,
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
 }

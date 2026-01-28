@@ -80,7 +80,7 @@ pub struct KnownExecutableInfo {
 }
 
 pub struct NativeUnwindState {
-    known_executables: HashMap<ExecutableId, KnownExecutableInfo>,
+    pub known_executables: HashMap<ExecutableId, KnownExecutableInfo>,
     last_executable_eviction: Instant,
     last_process_eviction: Instant,
 }
@@ -131,7 +131,7 @@ pub struct Profiler {
     /// Profiler stop channel. Used to receive signals from users to stop
     /// profiling.
     stop_chan_receive: Receiver<()>,
-    pub(crate) native_unwind_state: NativeUnwindState,
+    pub native_unwind_state: NativeUnwindState,
     /// Pids excluded from profiling.
     filter_pids: HashMap<Pid, bool>,
     // Profile channel
