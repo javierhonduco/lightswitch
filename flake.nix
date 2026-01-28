@@ -35,7 +35,6 @@
             zlib.dev
             glibc
             glibc.static
-            protobuf
           ];
           nativeBuildInputs = with pkgs; [
             pkg-config
