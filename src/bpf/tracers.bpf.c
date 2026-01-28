@@ -117,8 +117,8 @@ int tracer_exit_munmap(struct syscall_trace_exit *ctx) {
         return 0;
     }
 
-    int ret = ctx->ret;
-    if (ret != 0) {
+    if (ctx->ret != 0) {
+        bpf_map_delete_elem(&tracked_munmap, &key);
         return 0;
     }
 
@@ -130,6 +130,8 @@ int tracer_exit_munmap(struct syscall_trace_exit *ctx) {
         .start_address = *start_address,
     };
 
+    int ret;
+
     if (lightswitch_config.use_ring_buffers) {
         ret = bpf_ringbuf_output(&tracer_events_rb, &event, sizeof(tracer_event_t), 0);
     } else {
@@ -139,6 +141,7 @@ int tracer_exit_munmap(struct syscall_trace_exit *ctx) {
         LOG("[error] failed to send munmap tracer event");
     }
 
+    bpf_map_delete_elem(&tracked_munmap, &key);
     return 0;
 }
 
