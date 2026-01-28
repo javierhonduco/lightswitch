@@ -166,6 +166,9 @@ pub struct Profiler {
     // Baseline for calculating raw_sample collection wall clock time
     // as bpf currently only supports getting the offset since system boot.
     walltime_at_system_boot: u64,
+    // Whether to enable the `exec(2)` tracer to know when a process' memory
+    // image has been replaced.
+    enable_exec_tracer: bool,
 }
 
 pub struct ProfilerConfig {
@@ -183,6 +186,7 @@ pub struct ProfilerConfig {
     pub max_native_unwind_info_size_mb: i32,
     pub use_ring_buffers: bool,
     pub use_task_pt_regs_helper: bool,
+    pub enable_exec_tracer: bool,
 }
 
 impl Default for ProfilerConfig {
@@ -202,6 +206,7 @@ impl Default for ProfilerConfig {
             max_native_unwind_info_size_mb: i32::MAX,
             use_ring_buffers: true,
             use_task_pt_regs_helper: true,
+            enable_exec_tracer: true,
         }
     }
 }
@@ -577,6 +582,7 @@ impl Profiler {
             aggregator: Aggregator::default(),
             metadata_provider,
             walltime_at_system_boot,
+            enable_exec_tracer: profiler_config.enable_exec_tracer,
         }
     }
 
@@ -726,6 +732,15 @@ impl Profiler {
     }
 
     pub fn run(mut self, collector: ThreadSafeCollector) -> Duration {
+        if self.enable_exec_tracer {
+            self._links.push(
+                self.native_unwinder
+                    .progs
+                    .handle_exec
+                    .attach()
+                    .expect("attach exec tracer"),
+            );
+        }
         self.setup_perf_events();
         self.set_bpf_map_info();
         self.add_kernel_modules();
@@ -848,6 +863,18 @@ impl Profiler {
                                 //    .delete(unsafe { plain::as_bytes(&event) });
                             } else if event.type_ == event_type_EVENT_NEED_UNWIND_INFO {
                                 self.event_need_unwind_info(event.pid, event.address);
+                            } else if event.type_ == event_type_EVENT_EXEC {
+                                // See note in the BPF hook but as of now we aren't reloading the
+                                // information for this process since that would be more involved
+                                // as we need to keep the previous running executable's data. In the future
+                                // that's something we might want to change.
+                                //
+                                // As of now, just log the fact this happened, and mark the process for
+                                // deletion, and we'll get samples of the newer memory image later on.
+                                debug!("process {} just called exec(), marking it as exited", event.pid);
+                                // The process entry has already been deleted, hence considering the data
+                                // as partially written.
+                                self.handle_process_exit(event.pid, true);
                             } else {
                                 error!("unknown event type {}", event.type_);
                             }
@@ -870,7 +897,9 @@ impl Profiler {
 
                 let err = Self::delete_bpf_process(&self.native_unwinder, pid);
                 if let Err(e) = err {
-                    debug!("could not remove bpf process due to {:?}", e);
+                    if !partial_write {
+                        debug!("could not remove bpf process due to {:?}", e);
+                    }
                 }
 
                 for mapping in &mut proc_info.mappings.0 {
@@ -1258,6 +1287,7 @@ impl Profiler {
         mapping_end: u64,
         partial_write: bool,
     ) {
+        let mut error = None;
         for address_range in summarize_address_range(mapping_begin, mapping_end - 1) {
             let key =
                 exec_mappings_key::new(pid, address_range.addr, 32 + address_range.prefix_len);
@@ -1268,12 +1298,17 @@ impl Profiler {
                 .exec_mappings
                 .delete(unsafe { plain::as_bytes(&key) });
             if let Err(e) = res {
-                if !partial_write {
-                    error!(
-                        "failed to delete bpf mappings for process {} with {:?}",
-                        pid, e
-                    );
-                }
+                error = Some(e);
+                // must continue just in case
+            }
+        }
+
+        if let Some(e) = error {
+            if !partial_write {
+                error!(
+                    "failed to delete bpf mappings for process {} with {:?}",
+                    pid, e
+                );
             }
         }
     }
@@ -1441,6 +1476,7 @@ impl Profiler {
                     "error adding unwind information for executable 0x{} due to {:?}",
                     mapping.executable_id, e
                 );
+
                 // TODO: cleanup unwind information map in case of a partial write.
                 return;
             }

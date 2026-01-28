@@ -16,3 +16,12 @@ static __always_inline bool process_is_known(int per_process_id) {
 
     return bpf_map_lookup_elem(&exec_mappings, &key) != NULL;
 }
+
+static __always_inline void remove_process(int per_process_id) {
+    struct exec_mappings_key key = {};
+    key.prefix_len = PREFIX_LEN;
+    key.pid = __builtin_bswap32((u32)per_process_id);
+    key.data = 0;
+
+    bpf_map_delete_elem(&exec_mappings, &key);
+}

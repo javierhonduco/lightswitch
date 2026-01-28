@@ -136,7 +136,7 @@ find_page(mapping_t *mapping, u64 object_relative_pc, u64 *low_index, u64 *high_
     return NULL;
 }
 
-static __always_inline void send_event(Event *event, struct bpf_perf_event_data *ctx) {
+static __always_inline void send_event(Event *event, void *ctx) {
     bool *is_rate_limited = bpf_map_lookup_elem(&rate_limits, event);
     if (is_rate_limited != NULL && *is_rate_limited) {
         LOG("[debug] send_event was rate limited");
@@ -667,6 +667,31 @@ int on_event(struct bpf_perf_event_data *ctx) {
         .pid = per_process_id,
     };
     send_event(&event, ctx);
+    return 0;
+}
+
+SEC("tracepoint/sched/sched_process_exec")
+int handle_exec(struct trace_event_raw_sched_process_exec *ctx) {
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+    unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
+    int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
+
+    if (process_is_known(per_process_id)) {
+        LOG("process exec, stopping profiling pid %d", per_process_id);
+        // Stop profiling this process now since its memory has changed
+        // and all the information we have about it is likely wrong.
+        remove_process(per_process_id);
+        // Notify user space so it can handle it. Right now it won't reload
+        // structures since it's missing the logic to handle multiple
+        // "generations" of given pid, that is, every time `exec(2)` is called
+        // for the same process id and that would be necessary for normalization,
+        // symbolization, etc.
+        Event event = {
+            .type = EVENT_EXEC,
+            .pid = per_process_id,
+        };
+        send_event(&event, ctx);
+    }
     return 0;
 }
 
