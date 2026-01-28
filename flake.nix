@@ -81,6 +81,7 @@
               strace
               gdb
               bpftools
+              valgrind
               # Upload container image to registry
               skopeo
               # Cargo subcommand tools
@@ -92,6 +93,7 @@
               cargo-shear
               ## Release to crates.io
               cargo-release
+              cargo-valgrind
               # Commented out because this is typically not cached and it's rarely used
               # ocamlPackages.magic-trace
               just
