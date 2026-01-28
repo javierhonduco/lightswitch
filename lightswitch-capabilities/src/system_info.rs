@@ -1,6 +1,4 @@
 use crate::bpf::features_skel::FeaturesSkelBuilder;
-use crate::bpf::features_skel::OpenFeaturesSkel;
-use std::ffi::CString;
 use std::fs::read_to_string;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
@@ -13,7 +11,6 @@ use tracing::{error, warn};
 
 use anyhow::Result;
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
-use libbpf_rs::AsRawLibbpf;
 use libbpf_rs::MapType;
 use libbpf_rs::{MapCore, MapFlags, MapHandle};
 use libc::close;
@@ -232,38 +229,18 @@ fn has_variable_inner_map() -> bool {
     true
 }
 
-/// Temporary hack while libbpf-rs gets fixed. Ideally this should be
-/// templatized.
-impl FeaturesSkelBuilder {
-    fn open_with_btf_path<'obj>(
-        self,
-        btf_custom_path: Option<String>,
-        object: &'obj mut std::mem::MaybeUninit<libbpf_rs::OpenObject>,
-    ) -> (libbpf_rs::Result<OpenFeaturesSkel<'obj>>, Option<CString>) {
-        let mut c_string = None;
-
-        if let Some(btf_custom_path) = btf_custom_path {
-            let mut raw = self.obj_builder.as_libbpf_object();
-            let path = CString::new(btf_custom_path).ok().unwrap();
-            unsafe { raw.as_mut() }.btf_custom_path = path.as_ptr();
-            c_string = Some(path);
-        }
-
-        let opts = self.obj_builder.as_libbpf_object();
-        let open = self.open_opts(unsafe { *opts.as_ref() }, object);
-
-        (open, c_string)
-    }
-}
-
 fn check_bpf_features(btf_custom_path: Option<String>) -> Result<BpfFeatures> {
     let mut skel_builder = FeaturesSkelBuilder::default();
     let mut a = MaybeUninit::uninit();
 
     skel_builder.obj_builder.debug(true);
+    if let Some(btf_custom_path) = btf_custom_path {
+        let _ = skel_builder.obj_builder.btf_custom_path(btf_custom_path);
+    }
 
-    let (open_skel, _string) = skel_builder.open_with_btf_path(btf_custom_path, &mut a);
-    let open_skel = open_skel.unwrap();
+    let open_skel = skel_builder
+        .open(&mut a)
+        .map_err(|e| SystemInfoError::ErrorDetectingBpfFeatures(e.to_string()))?;
 
     let mut bpf_features = open_skel
         .load()

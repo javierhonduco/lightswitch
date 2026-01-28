@@ -1,4 +1,3 @@
-use libbpf_rs::AsRawLibbpf;
 use libbpf_rs::MapImpl;
 use libbpf_rs::OpenObject;
 use libbpf_rs::RingBufferBuilder;
@@ -8,7 +7,6 @@ use std::collections::hash_map::Entry;
 use std::collections::hash_map::OccupiedEntry;
 use std::collections::HashMap;
 use std::env::temp_dir;
-use std::ffi::CString;
 use std::fs;
 use std::fs::File;
 use std::io::ErrorKind;
@@ -274,54 +272,6 @@ enum AddUnwindInformationResult {
     AlreadyLoaded,
 }
 
-/// Temporary hack while libbpf-rs gets fixed. Ideally this should be
-/// templatized.
-impl ProfilerSkelBuilder {
-    fn open_with_btf_path<'obj>(
-        self,
-        btf_custom_path: Option<String>,
-        object: &'obj mut std::mem::MaybeUninit<libbpf_rs::OpenObject>,
-    ) -> (libbpf_rs::Result<OpenProfilerSkel<'obj>>, Option<CString>) {
-        let mut c_string = None;
-
-        if let Some(btf_custom_path) = btf_custom_path {
-            let mut raw = self.obj_builder.as_libbpf_object();
-            let path = CString::new(btf_custom_path).ok().unwrap();
-            unsafe { raw.as_mut() }.btf_custom_path = path.as_ptr();
-            c_string = Some(path);
-        }
-
-        let opts = self.obj_builder.as_libbpf_object();
-        let open = self.open_opts(unsafe { *opts.as_ref() }, object);
-
-        (open, c_string)
-    }
-}
-
-/// Temporary hack while libbpf-rs gets fixed. Ideally this should be
-/// templatized.
-impl TracersSkelBuilder {
-    fn open_with_btf_path<'obj>(
-        self,
-        btf_custom_path: Option<String>,
-        object: &'obj mut std::mem::MaybeUninit<libbpf_rs::OpenObject>,
-    ) -> (libbpf_rs::Result<OpenTracersSkel<'obj>>, Option<CString>) {
-        let mut c_string = None;
-
-        if let Some(btf_custom_path) = btf_custom_path {
-            let mut raw = self.obj_builder.as_libbpf_object();
-            let path = CString::new(btf_custom_path).ok().unwrap();
-            unsafe { raw.as_mut() }.btf_custom_path = path.as_ptr();
-            c_string = Some(path);
-        }
-
-        let opts = self.obj_builder.as_libbpf_object();
-        let open = self.open_opts(unsafe { *opts.as_ref() }, object);
-
-        (open, c_string)
-    }
-}
-
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 enum AddUnwindInformationError {
     #[error("could not evict unwind information")]
@@ -507,12 +457,17 @@ impl Profiler {
         let mut native_unwinder_open_object = ManuallyDrop::new(Box::new(MaybeUninit::uninit()));
         let mut tracers_open_object = ManuallyDrop::new(Box::new(MaybeUninit::uninit()));
 
-        let skel_builder = ProfilerSkelBuilder::default();
-        let (open_skel, _string) = skel_builder.open_with_btf_path(
-            profiler_config.btf_custom_path.clone(),
-            &mut native_unwinder_open_object,
-        );
-        let mut open_skel = open_skel.unwrap();
+        let mut skel_builder = ProfilerSkelBuilder::default();
+        skel_builder.obj_builder.debug(profiler_config.libbpf_debug);
+        if let Some(btf_custom_path) = &profiler_config.btf_custom_path {
+            skel_builder
+                .obj_builder
+                .btf_custom_path(btf_custom_path)
+                .expect("set btf custom path");
+        }
+        let mut open_skel = skel_builder
+            .open(&mut native_unwinder_open_object)
+            .expect("open skel");
 
         let _map_handle = Self::create_unwind_info_maps(&mut open_skel);
         Self::setup_profiler_maps(&mut open_skel, &profiler_config);
@@ -541,11 +496,15 @@ impl Profiler {
             .obj_builder
             .debug(profiler_config.libbpf_debug);
 
-        let (open_tracers, _string) = tracers_builder.open_with_btf_path(
-            profiler_config.btf_custom_path.clone(),
-            &mut tracers_open_object,
-        );
-        let mut open_tracers = open_tracers.unwrap();
+        if let Some(btf_custom_path) = &profiler_config.btf_custom_path {
+            tracers_builder
+                .obj_builder
+                .btf_custom_path(btf_custom_path)
+                .expect("set btf custom path");
+        }
+        let mut open_tracers = tracers_builder
+            .open(&mut tracers_open_object)
+            .expect("open skel");
 
         open_tracers
             .maps
