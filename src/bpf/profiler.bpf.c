@@ -150,7 +150,11 @@ static __always_inline void send_event(Event *event, struct bpf_perf_event_data 
         ret = bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, event, sizeof(Event));
     }
     if (ret < 0) {
-        bump_unwind_error_sending_new_process_event();
+        if (event->type == EVENT_NEW_PROCESS) {
+            bump_unwind_error_sending_new_process_event();
+        } else if (event->type == EVENT_NEED_UNWIND_INFO) {
+            bump_unwind_error_sending_need_unwind_info_event();
+        }
     }
 
     LOG("[debug] event type %d sent", event->type);
@@ -474,7 +478,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
             return 1;
         } else if (found_cfa_type == CFA_TYPE_PLT1 || found_cfa_type == CFA_TYPE_PLT2) {
             LOG("CFA expression found with id %d", found_cfa_offset);
-            u64 threshold = 11 ? found_cfa_type == CFA_TYPE_PLT1 : 10;
+            u64 threshold = found_cfa_type == CFA_TYPE_PLT1 ? 11 : 10;
 
             if (threshold == 0) {
                 bump_unwind_error_should_never_happen();
