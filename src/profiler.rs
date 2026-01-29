@@ -264,10 +264,10 @@ fn fetch_vdso_info(
 }
 
 enum AddUnwindInformationResult {
-    /// The unwind information information and its pages were correctly loaded
+    /// The unwind information and its pages were correctly loaded
     /// in BPF maps.
     Success,
-    /// The unwind information information and its pages are already loaded in
+    /// The unwind information and its pages are already loaded in
     /// BPF maps.
     AlreadyLoaded,
 }
@@ -328,8 +328,8 @@ impl Profiler {
         let sample_size_bytes = std::mem::size_of::<sample_t>() as u32;
         let max_entries_bytes: u32 = sample_size_bytes * num_expected_entries;
 
-        // max_entries for ringbuf is required to specified in bytes, be a multiple of
-        // the page size and a power of two
+        // max_entries for ringbuf is required to be specified in bytes, be a multiple
+        // of the page size and a power of two
         roundup_page(max_entries_bytes as usize) as u32
     }
 
@@ -479,7 +479,7 @@ impl Profiler {
         let native_unwinder_maps = &native_unwinder.maps;
         let exec_mappings_fd = native_unwinder_maps.exec_mappings.as_fd();
 
-        // BPF map sizes can be overriden, this is a debugging option to print the
+        // BPF map sizes can be overridden, this is a debugging option to print the
         // actual size once the maps are created and the BPF program is loaded.
         if profiler_config.mapsize_info {
             Self::show_actual_profiler_map_sizes(&native_unwinder);
@@ -950,7 +950,7 @@ impl Profiler {
         }
     }
 
-    /// Clears a BPF map in a iterator-stable way.
+    /// Clears a BPF map in an iterator-stable way.
     pub fn clear_map(&self, name: &str) {
         let map = self
             .native_unwinder
@@ -1389,7 +1389,7 @@ impl Profiler {
             .iter()
         {
             // There is no unwind information for anonymous (JIT) mappings, so let's skip
-            // them. In the future we could either try to synthetise the unwind
+            // them. In the future we could either try to synthesise the unwind
             // information.
             if mapping.kind == ExecutableMappingType::Anonymous {
                 bpf_mappings.push(mapping_t {
@@ -1611,7 +1611,8 @@ impl Profiler {
         Ok(AddUnwindInformationResult::Success)
     }
 
-    /// Returns whether the number of loaded executables that have gotten
+    /// Returns whether the BPF map that stores unwind information entries is
+    /// full.
     fn is_outer_map_full(&self) -> bool {
         self.native_unwind_state.known_executables.len() >= MAX_OUTER_UNWIND_MAP_ENTRIES as usize
     }
@@ -1886,7 +1887,7 @@ impl Profiler {
 
                     // mmap'ed data is always page aligned but the load segment information might
                     // not be. As we need to account for any randomisation added
-                    // by ASLR, by substracting the virtual address from the
+                    // by ASLR, by subtracting the virtual address from the
                     // first load segment once it's been page aligned we'll get the offset
                     // at which the executable has been loaded.
                     //
@@ -1929,7 +1930,7 @@ impl Profiler {
                             .add_if_not_present(&name, build_id, &exe_path);
                         match res {
                             Ok(_) => {
-                                debug!("debuginfo add_if_not_present succeded {:?}", res);
+                                debug!("debuginfo add_if_not_present succeeded {:?}", res);
                             }
                             Err(e) => {
                                 error!(

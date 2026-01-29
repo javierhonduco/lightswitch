@@ -273,7 +273,7 @@ mod tests {
         let tmpdir = tempfile::TempDir::new().unwrap();
         let path = tmpdir.path();
 
-        // Creaty dummy cache entries.
+        // Create dummy cache entries.
         for i in 0..20 {
             File::create(path.join(format!("{i:x}"))).unwrap();
         }

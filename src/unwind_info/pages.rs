@@ -23,7 +23,7 @@ impl fmt::Debug for Page {
 
 /// Splits a slice of unwind info in 16 bit pages.
 ///
-/// Splits a slice of continguous compact unwind info into pages of a fixed
+/// Splits a slice of contiguous compact unwind info into pages of a fixed
 /// size. Right now this size is hardcoded to 16 bits, to be able to find the
 /// unwind info in a given page in 16 iterations, and represent the program
 /// counters with 32 bits (32 bits for PC + 16 bits for page offset = 48 bits,

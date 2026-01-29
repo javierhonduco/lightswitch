@@ -19,8 +19,8 @@ pub struct Frame {
     pub symbolization_result: Option<Result<SymbolizedFrame, SymbolizationError>>,
 }
 
-/// A symbolized frame, which might or might not the filename or line number,
-/// depending on the symbolization data source.
+/// A symbolized frame, which might or might not have a filename or line number
+/// set depending on the symbolization data source.
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Default)]
 pub struct SymbolizedFrame {
     pub name: String,

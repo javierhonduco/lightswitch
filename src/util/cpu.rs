@@ -2,7 +2,7 @@ use std::{fs::File, io::Read};
 
 use anyhow::{Context, Error};
 
-/// Parse a set of CPU ranges. They can be either a single number of a fully
+/// Parse a set of CPU ranges. They can be either a single number or a fully
 /// qualified range which is separated to one another with a comma (`,`) and use
 /// a dash (`-`) to indicate the start and (inclusive) end of the range.
 fn _read_cpu_range(ranges: &str) -> Result<Vec<u32>, Error> {

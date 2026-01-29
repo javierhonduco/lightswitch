@@ -24,7 +24,7 @@ As a CLI, **lightswitch** can be run with:
 $ sudo lightswitch
 ```
 
-It can be stopped with <kbd>Ctrl</kbd>+<kbd>C</kbd>, or alternatively, by passing a `--duration` in seconds. A flamegraph in SVG will be written to disk. Pprof is also supported with `--profile-format=pprof`. By default the whole machine will be profiled, to profile invidual processes you can use `--pids`.
+It can be stopped with <kbd>Ctrl</kbd>+<kbd>C</kbd>, or alternatively, by passing a `--duration` in seconds. A flamegraph in SVG will be written to disk. Pprof is also supported with `--profile-format=pprof`. By default the whole machine will be profiled, to profile individual processes you can use `--pids`.
 
 Using Docker:
 

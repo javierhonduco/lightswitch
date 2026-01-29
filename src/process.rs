@@ -16,7 +16,7 @@ pub type Pid = i32;
 pub enum ExecutableMappingType {
     /// An object file that got loaded from disk.
     FileBacked,
-    /// Note file backed, typically produced by a JIT runtime.
+    /// Not file backed, typically produced by a JIT runtime.
     Anonymous,
     /// Special mapping to optimise certain system calls.
     Vdso,

@@ -116,7 +116,7 @@ pub struct RawAggregatedSample {
 
 impl RawAggregatedSample {
     /// Converts a `RawAggregatedSample` into a `AggregatedSample`, if
-    /// succesful. The main changes after processing are that the stacks for
+    /// successful. The main changes after processing are that the stacks for
     /// both kernel and userspace are converted from raw addresses to
     /// unsymbolized `Frame`s and that the file offset needed for symbolization
     /// is calculated here.
