@@ -9,7 +9,7 @@ const NOPREALLOC_TEST_BPF_SOURCE: &str = "./src/bpf/noprealloc_test.bpf.c";
 const NOPREALLOC_TEST_SKELETON: &str = "./src/bpf/noprealloc_test_skel.rs";
 
 fn main() {
-    // Inform cargo of when to re build
+    // Inform cargo of when to rebuild
     for path in glob("src/bpf/*[hc]").unwrap().flatten() {
         println!("cargo:rerun-if-changed={}", path.display());
     }

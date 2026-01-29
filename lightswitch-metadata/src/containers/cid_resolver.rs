@@ -130,7 +130,7 @@ fn extract_container_id(pathname: &str) -> Option<String> {
     }
     let last_path = pathname.rsplit('/').next()?;
     if last_path.is_empty() {
-        // whatever this is, it wasnt what we wanted, we need prefix-cid-suffix
+        // whatever this is, it wasn't what we wanted, we need prefix-cid-suffix
         return None;
     }
     // strip beginning and end should be 64 digit hex now...

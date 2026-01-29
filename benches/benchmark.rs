@@ -8,7 +8,7 @@ use lightswitch_unwind_info::types::CompactUnwindRow;
 use memmap2::MmapOptions;
 use std::os::fd::AsFd;
 
-pub fn benchmark_kysm_readallkysms(c: &mut Criterion) {
+pub fn benchmark_ksym_readallksyms(c: &mut Criterion) {
     let mut group = c.benchmark_group("Read /proc/kallsyms");
     group.warm_up_time(std::time::Duration::from_secs(5));
     group.bench_function("Measure read all ksyms", |b: &mut criterion::Bencher| {
@@ -55,7 +55,7 @@ pub fn update_unwind_info(chunk_size: usize, inner: &MapHandle, unwind_info: &[C
     }
 }
 
-pub fn benchark_bpf_array(c: &mut Criterion) {
+pub fn benchmark_bpf_array(c: &mut Criterion) {
     let opts = libbpf_sys::bpf_map_create_opts {
         sz: size_of::<libbpf_sys::bpf_map_create_opts>() as libbpf_sys::size_t,
         ..Default::default()
@@ -151,5 +151,5 @@ pub fn benchark_bpf_array(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchark_bpf_array, benchmark_kysm_readallkysms);
+criterion_group!(benches, benchmark_bpf_array, benchmark_ksym_readallksyms);
 criterion_main!(benches);

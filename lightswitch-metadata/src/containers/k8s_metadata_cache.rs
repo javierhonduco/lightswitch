@@ -327,7 +327,7 @@ fn handle_pod_event(
     // this should never be a massive array, hypothetically
     // most sane deploys would run 1x init container and 1x
     // container, maybe 1 more sidecar container depending?
-    // I dont have any sidecar workloads to test anymore because
+    // I don't have any sidecar workloads to test anymore because
     // I moved istio to ambient mesh.
     for cs in status
         .container_statuses
