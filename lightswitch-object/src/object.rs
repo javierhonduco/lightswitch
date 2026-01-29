@@ -19,8 +19,8 @@ use object::read::elf::ProgramHeader;
 
 use crate::{BuildId, ExecutableId};
 
-/// Elf load segments used during address normalization to find the segment
-/// for what an code address falls into.
+/// Elf load segments used during address normalization to find the ELF segment
+/// where an address falls into.
 #[derive(Debug, Clone)]
 pub struct ElfLoad {
     pub p_offset: u64,
@@ -155,7 +155,7 @@ impl ObjectFile {
                     zig_first_frame = Some((symbol.address(), symbol.address() + symbol.size()));
                 }
 
-                // Once we've found both Zig markers we are done. Not that this is a heuristic
+                // Once we've found both Zig markers we are done. Note that this is a heuristic
                 // and it's possible that a Zig library is linked against code
                 // written in a C-like language. In this case we might be
                 // rewriting unwind information that's correct. This won't have a negative
