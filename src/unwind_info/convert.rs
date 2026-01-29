@@ -13,7 +13,7 @@ use thiserror::Error;
 use tracing::{debug, span, Level};
 
 use crate::unwind_info::optimize::remove_redundant;
-use crate::unwind_info::optimize::remove_unnecesary_markers;
+use crate::unwind_info::optimize::remove_unnecessary_markers;
 use crate::unwind_info::types::*;
 
 #[derive(Debug, Error)]
@@ -316,7 +316,7 @@ pub fn compact_unwind_info(
     // Reduce the unwind information size
     let unwind_info_size_before = unwind_info.len();
     let span = span!(Level::DEBUG, "optimize unwind info").entered();
-    remove_unnecesary_markers(&mut unwind_info);
+    remove_unnecessary_markers(&mut unwind_info);
     remove_redundant(&mut unwind_info);
     span.exit();
     let unwind_info_size_after = unwind_info.len();

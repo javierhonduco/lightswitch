@@ -7,7 +7,7 @@ use crate::unwind_info::types::{CfaType, CompactUnwindRow};
 /// delete markers within a certain bytes of the closest instruction.
 ///
 /// The input *must* be sorted.
-pub fn remove_unnecesary_markers(unwind_info: &mut Vec<CompactUnwindRow>) {
+pub fn remove_unnecessary_markers(unwind_info: &mut Vec<CompactUnwindRow>) {
     let mut last_row: Option<CompactUnwindRow> = None;
     let mut new_i = 0;
 
@@ -83,7 +83,7 @@ mod tests {
             },
         ];
         let mut processed = unwind_info.clone();
-        remove_unnecesary_markers(&mut processed);
+        remove_unnecessary_markers(&mut processed);
 
         assert_eq!(
             processed,

@@ -82,7 +82,7 @@ static __always_inline u64 find_offset_for_pc(void *inner_map, u16 pc_low, u64 l
 // On kernels ~6.8 and greater the verifier fails with argument list too long. This did not use to
 // happen before and it's probably due to a regression in the way the verifier accounts for the explored
 // paths. I have tried many other things, such as two mid variables but that did not do it.
-// Perhaps unrolling the loop works is that the verifier doesn't have as many states to explore
+// Perhaps unrolling the loop works because the verifier doesn't have as many states to explore
 // per iteration.
 #pragma unroll
     for (int i = 0; i < MAX_BINARY_SEARCH_DEPTH; i++) {
@@ -111,7 +111,7 @@ static __always_inline u64 find_offset_for_pc(void *inner_map, u16 pc_low, u64 l
 }
 
 // Finds the shard information for a given pid and program counter. Optionally,
-// and offset can be passed that will be filled in with the mapping's load
+// an offset can be passed that will be filled in with the mapping's load
 // address.
 static __always_inline void *
 find_page(mapping_t *mapping, u64 object_relative_pc, u64 *low_index, u64 *high_index) {
@@ -163,14 +163,14 @@ static __always_inline void send_event(Event *event, struct bpf_perf_event_data 
     bpf_map_update_elem(&rate_limits, event, &rate_limited, BPF_ANY);
 }
 
-// The return address points as the the instruction at which execution
+// The return address points to the instruction at which execution
 // will resume after returning from a function call, we need to get the
 // previous instruction's address.
 static __always_inline u64 previous_instruction_addr(u64 addr) {
 #ifdef __TARGET_ARCH_x86
     // On x86 it's not possible to find the previous instruction address
     // without fully disassembling the whole executable from the start.
-    // By substracting 1 byte, we make sure to fall within the previous
+    // By subtracting 1 byte, we make sure to fall within the previous
     // instruction.
     return addr - 1;
 #elif __TARGET_ARCH_arm64
@@ -183,7 +183,7 @@ static __always_inline u64 remove_pac(u64 addr) {
     return addr;
 }
 #elif __TARGET_ARCH_arm64
-// Arm64 supports pointer authentication, we need to remove the signatured during
+// Arm64 supports pointer authentication, we need to remove the signature during
 // unwinding.
 static __always_inline u64 remove_pac(u64 addr) {
     // The signature is stored in the top 55 - virtual address size bits [0], which
@@ -202,6 +202,8 @@ static __always_inline bool in_kernel(u64 ip) { return ip & (1UL << 63); }
 //
 // We don't check for the return value of `retrieve_task_registers`, it's
 // caller due the verifier not liking that code.
+//
+// @nocommit: rework this.
 static __always_inline bool is_kthread() {
     struct task_struct *task = (struct task_struct *)bpf_get_current_task();
     if (task == NULL) {

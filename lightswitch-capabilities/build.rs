@@ -6,7 +6,7 @@ const FEATURES_BPF_SOURCE: &str = "./src/bpf/features.bpf.c";
 const FEATURES_SKELETON: &str = "./src/bpf/features_skel.rs";
 
 fn main() {
-    // Inform cargo of when to re build
+    // Inform cargo of when to rebuild
     for path in glob("src/bpf/*[hc]").unwrap().flatten() {
         println!("cargo:rerun-if-changed={}", path.display());
     }
