@@ -1778,17 +1778,17 @@ impl Profiler {
         }
     }
 
-    /// Evicts a process. If *if_too_many_procs* is true, this will only be done
-    /// if there are more processes with  [`ProcessStatus::Running`] status
-    /// than the maximum number of processes, [`MAX_PROCESSES`].
+    /// Evicts a process. If *only_when_exceeded* is true, this will only be
+    /// done if there are more processes with  [`ProcessStatus::Running`]
+    /// status than the maximum number of processes, [`MAX_PROCESSES`].
     /// Returns false only if an eviction is necessary but not enough time has
     /// elapsed since the last one.
-    fn maybe_evict_process(&mut self, if_too_many_procs: bool) -> bool {
+    fn maybe_evict_process(&mut self, only_when_exceeded: bool) -> bool {
         let procs = self.procs.read();
         let running_procs = procs
             .iter()
             .filter(|e| e.1.status == ProcessStatus::Running);
-        let should_evict = if if_too_many_procs {
+        let should_evict = if only_when_exceeded {
             running_procs.clone().count() >= MAX_PROCESSES as usize
         } else {
             true
