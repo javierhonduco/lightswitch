@@ -5,7 +5,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 
-/// Represents a unique file or directory on a Linux machine accross
+/// Represents a unique file or directory on a Linux machine across
 /// filesystems.
 ///
 /// Checking if two files or directories are the same requires byte-for-byte

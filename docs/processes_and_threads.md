@@ -5,8 +5,8 @@ particular thread, so we need to think in those terms. Although every thread
 is owned by a process, we need to have metadata about **both** the process and
 the thread any given stack comes from.
 
-In userspace, different there are different namespaces for processes and
-threads, which can make things confusing:
+In userspace, there are different namespaces for processes and threads, which
+can make things confusing:
 
 - In the `ps(1)` command:
 
