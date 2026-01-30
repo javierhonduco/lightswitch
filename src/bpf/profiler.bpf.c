@@ -228,7 +228,7 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u
     int err;
     void *stack;
 
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
     if (task == NULL) {
         return false;
     }
@@ -250,6 +250,8 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u
         void *ptr = stack + THREAD_SIZE - TOP_OF_KERNEL_STACK_PADDING;
         regs = ((struct pt_regs *)ptr) - 1;
     }
+
+    // @nocommit arm64 won't work wit this code...
 
     *ip = PT_REGS_IP_CORE(regs);
     *sp = PT_REGS_SP_CORE(regs);
@@ -618,10 +620,12 @@ static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_
         if (!retrieve_task_registers(&unwind_state->ip, &unwind_state->sp, &unwind_state->bp, &unwind_state->lr)) {
             // in kernelspace, but failed, probs a kworker
             // todo: bump counter
+            bpf_printk("failed task regs");
             return false;
         }
     } else {
         // Currently executing userspace code.
+        bpf_printk("!!!!!, setting unwind_state->ip to %llx", PT_REGS_IP(regs));
         unwind_state->ip = PT_REGS_IP(regs);
         unwind_state->sp = PT_REGS_SP(regs);
         unwind_state->bp = PT_REGS_FP(regs);

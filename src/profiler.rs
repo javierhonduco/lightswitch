@@ -360,6 +360,11 @@ impl Profiler {
             .use_ring_buffers
             .write(profiler_config.use_ring_buffers);
 
+        rodata
+            .lightswitch_config
+            .use_task_pt_regs_helper
+            .write(profiler_config.use_task_pt_regs_helper);
+
         if profiler_config.use_ring_buffers {
             // Set sample collecting ringbuf size based sampling frequency
             let profile_sample_max_entries =
