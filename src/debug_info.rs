@@ -28,6 +28,7 @@ pub trait DebugInfoManager {
 }
 
 pub struct DebugInfoBackendNull {}
+
 impl DebugInfoManager for DebugInfoBackendNull {
     fn add_if_not_present(
         &self,
@@ -180,5 +181,24 @@ impl DebugInfoBackendRemote {
             return Err(anyhow!("debuginfo upload failed with {:?}", response));
         }
         Ok(())
+    }
+}
+
+/// No-op debug info backend for devfiler. Devfiler handles symbolization
+/// independently so there is no debug info upload API.
+pub struct DebugInfoBackendDevfiler {}
+
+impl DebugInfoManager for DebugInfoBackendDevfiler {
+    fn add_if_not_present(
+        &self,
+        _name: &str,
+        _build_id: &BuildId,
+        _debug_info: &Path,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn debug_info_path(&self) -> Option<PathBuf> {
+        None
     }
 }

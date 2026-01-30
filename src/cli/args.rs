@@ -41,6 +41,8 @@ pub(crate) enum ProfileSender {
     #[default]
     LocalDisk,
     Remote,
+    /// Send profiles to devfiler via gRPC.
+    Devfiler,
 }
 
 #[derive(PartialEq, clap::ValueEnum, Debug, Clone, Default)]
@@ -56,6 +58,7 @@ pub(crate) enum DebugInfoBackend {
     None,
     Copy,
     Remote,
+    Devfiler,
 }
 
 #[derive(Subcommand, Debug)]

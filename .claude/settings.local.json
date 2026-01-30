@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /home/javierhonduco/src/lightswitch branch -a)",
+      "Bash(git -C /home/javierhonduco/src/lightswitch log --oneline remotes/origin/server-write-request-optional-bearer-token -10)",
+      "Bash(git -C /home/javierhonduco/src/lightswitch show remotes/origin/server-write-request-optional-bearer-token:src/cli/main.rs)",
+      "Bash(find:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(cargo build:*)",
+      "Bash(grep:*)",
+      "Bash(cargo search:*)",
+      "Bash(ls:*)",
+      "Bash(cargo test:*)",
+      "Bash(sudo -E cargo test:*)"
+    ]
+  }
+}
