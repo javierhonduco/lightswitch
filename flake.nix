@@ -84,7 +84,9 @@
               skopeo
               # Cargo subcommand tools
               ## To upgrade deps
+              cargo-deny
               cargo-edit
+              cargo-audit
               ## Snapshot testing
               cargo-insta
               ## Remove unused deps

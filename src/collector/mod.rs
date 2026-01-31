@@ -1,27 +1,66 @@
+pub mod perfetto;
+
 use prost::Message;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, span, Level};
 
+use crate::aggregator::Aggregator;
 use crate::process::ObjectFileInfo;
 use crate::process::ProcessInfo;
 use crate::profile::raw_to_processed;
 use crate::profile::AggregatedProfile;
 use crate::profile::AggregatedSample;
-use crate::profile::RawAggregatedProfile;
+use crate::profile::RawSample;
 use crate::profile::{symbolize_profile, to_pprof};
 use lightswitch_object::ExecutableId;
 
 use lightswitch_metadata::metadata_provider::ThreadSafeGlobalMetadataProvider;
 
+/// Events from the profiler that collectors can use for diagnostics.
+pub enum ProfilerEvent {
+    ProcessProfilingStarted { pid: i32, timestamp_ns: u64 },
+    ProcessProfilingEnded { pid: i32, timestamp_ns: u64 },
+    UnwinderStats {
+        total: u64,
+        success_dwarf: u64,
+        error_truncated: u64,
+        error_unsupported_expression: u64,
+        error_unsupported_frame_pointer_action: u64,
+        error_unsupported_cfa_register: u64,
+        error_previous_rsp_read: u64,
+        error_previous_rsp_zero: u64,
+        error_previous_rip_zero: u64,
+        error_previous_rbp_read: u64,
+        error_should_never_happen: u64,
+        error_binary_search_exhausted_iterations: u64,
+        error_page_not_found: u64,
+        error_mapping_does_not_contain_pc: u64,
+        error_mapping_not_found: u64,
+        error_sending_new_process_event: u64,
+        error_sending_need_unwind_info_event: u64,
+        error_cfa_offset_did_not_fit: u64,
+        error_rbp_offset_did_not_fit: u64,
+        error_failure_sending_stack: u64,
+        timestamp_ns: u64,
+    },
+}
+
+/// Message sent through the profiler->collector channel.
+pub enum ProfilerMessage {
+    Samples(Vec<RawSample>),
+    Event(ProfilerEvent),
+}
+
 pub trait Collector {
     fn collect(
         &mut self,
-        profile: RawAggregatedProfile,
+        raw_samples: &[RawSample],
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     );
+    fn on_event(&mut self, _event: &ProfilerEvent) {}
     fn finish(
         &self,
     ) -> (
@@ -49,7 +88,7 @@ impl NullCollector {
 impl Collector for NullCollector {
     fn collect(
         &mut self,
-        _profile: RawAggregatedProfile,
+        _raw_samples: &[RawSample],
         _procs: &HashMap<i32, ProcessInfo>,
         _objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
@@ -77,6 +116,7 @@ pub struct StreamingCollector {
     procs: HashMap<i32, ProcessInfo>,
     objs: HashMap<ExecutableId, ObjectFileInfo>,
     metadata_provider: ThreadSafeGlobalMetadataProvider,
+    aggregator: Aggregator,
 }
 
 impl StreamingCollector {
@@ -105,11 +145,13 @@ impl StreamingCollector {
 impl Collector for StreamingCollector {
     fn collect(
         &mut self,
-        profile: RawAggregatedProfile,
+        raw_samples: &[RawSample],
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
-        let _span = span!(Level::DEBUG, "StreamingCollector.finish").entered();
+        let _span = span!(Level::DEBUG, "StreamingCollector.collect").entered();
+
+        let profile = self.aggregator.aggregate(raw_samples);
 
         let mut profile = raw_to_processed(&profile, procs, objs);
         if self.local_symbolizer {
@@ -153,6 +195,7 @@ pub struct AggregatorCollector {
     profiles: Vec<AggregatedProfile>,
     procs: HashMap<i32, ProcessInfo>,
     objs: HashMap<ExecutableId, ObjectFileInfo>,
+    aggregator: Aggregator,
 }
 
 impl AggregatorCollector {
@@ -166,10 +209,11 @@ impl AggregatorCollector {
 impl Collector for AggregatorCollector {
     fn collect(
         &mut self,
-        raw_profile: RawAggregatedProfile,
+        raw_samples: &[RawSample],
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
+        let raw_profile = self.aggregator.aggregate(raw_samples);
         self.profiles
             .push(raw_to_processed(&raw_profile, procs, objs));
 

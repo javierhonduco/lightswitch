@@ -9,7 +9,7 @@ use crate::profile::{RawAggregatedProfile, RawAggregatedSample, RawSample};
 pub struct Aggregator {}
 
 impl Aggregator {
-    pub fn aggregate(&self, raw_samples: Vec<RawSample>) -> RawAggregatedProfile {
+    pub fn aggregate(&self, raw_samples: &[RawSample]) -> RawAggregatedProfile {
         if raw_samples.is_empty() {
             return Vec::new();
         }
@@ -31,7 +31,10 @@ impl Aggregator {
             sample_hash_to_aggregated
                 .entry(sample_hash)
                 .and_modify(|aggregated_sample| aggregated_sample.count += 1)
-                .or_insert(RawAggregatedSample { sample, count: 1 });
+                .or_insert(RawAggregatedSample {
+                    sample: sample.clone(),
+                    count: 1,
+                });
         }
         sample_hash_to_aggregated.into_values().collect()
     }
@@ -72,7 +75,7 @@ mod tests {
         let aggregator = Aggregator::default();
 
         // When
-        let raw_aggregated_profile = aggregator.aggregate(raw_samples);
+        let raw_aggregated_profile = aggregator.aggregate(&raw_samples);
 
         // Then
         assert_eq!(raw_aggregated_profile.len(), 2);
@@ -112,7 +115,7 @@ mod tests {
         let aggregator = Aggregator::default();
 
         // When
-        let raw_aggregated_profile = aggregator.aggregate(raw_samples);
+        let raw_aggregated_profile = aggregator.aggregate(&raw_samples);
 
         // Then
         assert_eq!(raw_aggregated_profile.len(), 2);
@@ -154,7 +157,7 @@ mod tests {
         let aggregator = Aggregator::default();
 
         // When
-        let raw_aggregated_profile = aggregator.aggregate(raw_samples);
+        let raw_aggregated_profile = aggregator.aggregate(&raw_samples);
 
         // Then
         assert_eq!(raw_aggregated_profile.len(), 2);
@@ -201,7 +204,7 @@ mod tests {
         let aggregator = Aggregator::default();
 
         // When
-        let raw_aggregated_profile = aggregator.aggregate(raw_samples);
+        let raw_aggregated_profile = aggregator.aggregate(&raw_samples);
 
         // Then
         assert_eq!(raw_aggregated_profile.len(), 3);

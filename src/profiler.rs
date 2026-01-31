@@ -135,8 +135,8 @@ pub struct Profiler {
     /// Pids excluded from profiling.
     filter_pids: HashMap<Pid, bool>,
     // Profile channel
-    profile_send: Arc<Sender<RawAggregatedProfile>>,
-    profile_receive: Arc<Receiver<RawAggregatedProfile>>,
+    profile_send: Arc<Sender<ProfilerMessage>>,
+    profile_receive: Arc<Receiver<ProfilerMessage>>,
     // A vector of raw samples received from bpf in the current profiling session
     raw_samples: Vec<RawSample>,
     // Raw samples channel. Used for receiving raw samples from the ringbuf/perfbuf poll thread
@@ -586,8 +586,16 @@ impl Profiler {
         }
     }
 
-    pub fn send_profile(&mut self, profile: RawAggregatedProfile) {
-        self.profile_send.send(profile).expect("handle send");
+    pub fn send_profile(&mut self, raw_samples: Vec<RawSample>) {
+        self.profile_send
+            .send(ProfilerMessage::Samples(raw_samples))
+            .expect("handle send");
+    }
+
+    pub fn send_event(&self, event: ProfilerEvent) {
+        self.profile_send
+            .send(ProfilerMessage::Event(event))
+            .expect("handle event send");
     }
 
     /// Starts a thread that polls the given ring or perf buffer, depending on
@@ -781,14 +789,18 @@ impl Profiler {
 
         thread::spawn(move || loop {
             match profile_receive.recv() {
-                Ok(profile) => {
-                    collector
-                        .lock()
-                        .unwrap()
-                        .collect(profile, &procs.read(), &object_files.read());
+                Ok(ProfilerMessage::Samples(raw_samples)) => {
+                    collector.lock().unwrap().collect(
+                        &raw_samples,
+                        &procs.read(),
+                        &object_files.read(),
+                    );
+                }
+                Ok(ProfilerMessage::Event(event)) => {
+                    collector.lock().unwrap().on_event(&event);
                 }
                 Err(_e) => {
-                    // println!("failed to receive event {:?}", e);
+                    break;
                 }
             }
         });
@@ -861,6 +873,11 @@ impl Profiler {
     }
 
     pub fn handle_process_exit(&mut self, pid: Pid, partial_write: bool) {
+        self.send_event(ProfilerEvent::ProcessProfilingEnded {
+            pid,
+            timestamp_ns: Self::current_timestamp_ns(self.walltime_at_system_boot),
+        });
+
         // TODO: remove ratelimits for this process.
         let mut procs = self.procs.write();
         match procs.get_mut(&pid) {
@@ -1066,6 +1083,33 @@ impl Profiler {
             } else {
                 debug!("unwinder stats: {:?}", total_value);
             }
+
+            self.send_event(ProfilerEvent::UnwinderStats {
+                total: total_value.total,
+                success_dwarf: total_value.success_dwarf,
+                error_truncated: total_value.error_truncated,
+                error_unsupported_expression: total_value.error_unsupported_expression,
+                error_unsupported_frame_pointer_action: total_value
+                    .error_unsupported_frame_pointer_action,
+                error_unsupported_cfa_register: total_value.error_unsupported_cfa_register,
+                error_previous_rsp_read: total_value.error_previous_rsp_read,
+                error_previous_rsp_zero: total_value.error_previous_rsp_zero,
+                error_previous_rip_zero: total_value.error_previous_rip_zero,
+                error_previous_rbp_read: total_value.error_previous_rbp_read,
+                error_should_never_happen: total_value.error_should_never_happen,
+                error_binary_search_exhausted_iterations: total_value
+                    .error_binary_search_exhausted_iterations,
+                error_page_not_found: total_value.error_page_not_found,
+                error_mapping_does_not_contain_pc: total_value.error_mapping_does_not_contain_pc,
+                error_mapping_not_found: total_value.error_mapping_not_found,
+                error_sending_new_process_event: total_value.error_sending_new_process_event,
+                error_sending_need_unwind_info_event: total_value
+                    .error_sending_need_unwind_info_event,
+                error_cfa_offset_did_not_fit: total_value.error_cfa_offset_did_not_fit,
+                error_rbp_offset_did_not_fit: total_value.error_rbp_offset_did_not_fit,
+                error_failure_sending_stack: total_value.error_failure_sending_stack,
+                timestamp_ns: Self::current_timestamp_ns(self.walltime_at_system_boot),
+            });
         }
     }
 
@@ -1097,15 +1141,16 @@ impl Profiler {
         self.clear_map("rate_limits");
     }
 
-    pub fn collect_profile(&mut self) -> RawAggregatedProfile {
+    pub fn collect_profile(&mut self) -> Vec<RawSample> {
         debug!("collecting profile");
-        let result = self.aggregator.aggregate(self.raw_samples.clone());
-        self.raw_samples.clear();
+        let raw_samples: Vec<RawSample> = std::mem::take(&mut self.raw_samples);
 
-        self.bump_last_used(&result);
+        // We still need aggregated samples for bump_last_used
+        let aggregated = self.aggregator.aggregate(&raw_samples);
+        self.bump_last_used(&aggregated);
         self.collect_unwinder_stats();
         self.clear_maps();
-        result
+        raw_samples
     }
 
     fn process_is_known(&self, pid: Pid) -> bool {
@@ -1739,6 +1784,10 @@ impl Profiler {
         match self.add_proc(pid) {
             Ok(()) => {
                 self.add_unwind_info_for_process(pid);
+                self.send_event(ProfilerEvent::ProcessProfilingStarted {
+                    pid,
+                    timestamp_ns: Self::current_timestamp_ns(self.walltime_at_system_boot),
+                });
             }
             Err(AddProcessError::Eviction) => {
                 warn!("could not evict a process to make room for process: {pid}");
@@ -2094,6 +2143,18 @@ impl Profiler {
 
     fn handle_lost_events(cpu: i32, count: u64) {
         error!("lost {count} events on cpu {cpu}");
+    }
+
+    fn current_timestamp_ns(_walltime_at_system_boot: u64) -> u64 {
+        let mut ts = nix::libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: We pass a valid pointer to a timespec struct.
+        unsafe {
+            nix::libc::clock_gettime(nix::libc::CLOCK_REALTIME, &mut ts);
+        }
+        ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
     }
 
     pub fn set_bpf_map_info(&mut self) {

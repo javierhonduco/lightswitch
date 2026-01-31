@@ -25,6 +25,7 @@ pub(crate) enum ProfileFormat {
     #[default]
     FlameGraph,
     Pprof,
+    Perfetto,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Default, PartialEq)]
