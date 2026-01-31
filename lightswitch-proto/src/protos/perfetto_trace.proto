@@ -15,6 +15,7 @@ message TracePacket {
   optional uint32 timestamp_clock_id = 58;
 
   oneof data {
+    ClockSnapshot clock_snapshot = 6;
     InternedData interned_data = 12;
     TrackDescriptor track_descriptor = 60;
     TrackEvent track_event = 11;
@@ -26,6 +27,14 @@ message TracePacket {
   }
 
   optional uint32 sequence_flags = 13;
+}
+
+message ClockSnapshot {
+  message Clock {
+    optional uint32 clock_id = 1;
+    optional uint64 timestamp = 2;
+  }
+  repeated Clock clocks = 1;
 }
 
 message InternedData {

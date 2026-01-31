@@ -16,8 +16,9 @@ use lightswitch_proto::perfetto::protos::{self as pb};
 const SEQ_INCREMENTAL_STATE_CLEARED: u32 = 1;
 const SEQ_NEEDS_INCREMENTAL_STATE: u32 = 2;
 
-// CLOCK_REALTIME in Perfetto's builtin clock IDs
+// Perfetto builtin clock IDs
 const BUILTIN_CLOCK_REALTIME: u32 = 1;
+const BUILTIN_CLOCK_BOOTTIME: u32 = 6;
 
 /// Key for deduplicating mappings in the interning table.
 #[derive(Hash, Eq, PartialEq, Clone)]
@@ -84,6 +85,10 @@ impl PerfettoCollector {
             objs: HashMap::new(),
         };
 
+        // Emit a ClockSnapshot so Perfetto can map CLOCK_REALTIME to
+        // its internal CLOCK_BOOTTIME reference.
+        collector.emit_clock_snapshot();
+
         // Emit the profiler events track descriptor
         collector.write_packet(&pb::TracePacket {
             data: Some(pb::trace_packet::Data::TrackDescriptor(
@@ -116,6 +121,45 @@ impl PerfettoCollector {
             .expect("write varint");
 
         self.writer.write_all(&serialized).expect("write packet");
+    }
+
+    /// Emit a ClockSnapshot packet with simultaneous readings of
+    /// CLOCK_REALTIME and CLOCK_BOOTTIME so Perfetto UI can convert
+    /// timestamps between the two.
+    fn emit_clock_snapshot(&mut self) {
+        let mut ts_realtime = nix::libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        let mut ts_boottime = nix::libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: We pass valid pointers to timespec structs.
+        unsafe {
+            nix::libc::clock_gettime(nix::libc::CLOCK_REALTIME, &mut ts_realtime);
+            nix::libc::clock_gettime(nix::libc::CLOCK_BOOTTIME, &mut ts_boottime);
+        }
+        let realtime_ns =
+            ts_realtime.tv_sec as u64 * 1_000_000_000 + ts_realtime.tv_nsec as u64;
+        let boottime_ns =
+            ts_boottime.tv_sec as u64 * 1_000_000_000 + ts_boottime.tv_nsec as u64;
+
+        self.write_packet(&pb::TracePacket {
+            data: Some(pb::trace_packet::Data::ClockSnapshot(pb::ClockSnapshot {
+                clocks: vec![
+                    pb::clock_snapshot::Clock {
+                        clock_id: Some(BUILTIN_CLOCK_REALTIME),
+                        timestamp: Some(realtime_ns),
+                    },
+                    pb::clock_snapshot::Clock {
+                        clock_id: Some(BUILTIN_CLOCK_BOOTTIME),
+                        timestamp: Some(boottime_ns),
+                    },
+                ],
+            })),
+            ..Default::default()
+        });
     }
 
     fn alloc_intern_id(&mut self) -> u64 {
@@ -497,6 +541,11 @@ impl PerfettoCollector {
                 counter_value: Some(value),
                 ..Default::default()
             })),
+            optional_trusted_packet_sequence_id: Some(
+                pb::trace_packet::OptionalTrustedPacketSequenceId::TrustedPacketSequenceId(
+                    self.sequence_id,
+                ),
+            ),
             ..Default::default()
         });
     }
@@ -511,6 +560,11 @@ impl PerfettoCollector {
                 name_field: Some(pb::track_event::NameField::Name(name.to_string())),
                 ..Default::default()
             })),
+            optional_trusted_packet_sequence_id: Some(
+                pb::trace_packet::OptionalTrustedPacketSequenceId::TrustedPacketSequenceId(
+                    self.sequence_id,
+                ),
+            ),
             ..Default::default()
         });
     }
