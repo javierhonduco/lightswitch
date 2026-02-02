@@ -360,6 +360,61 @@ impl<R: Read + Seek> Reader<R> {
 
         Ok(unwind_info)
     }
+
+    // DEPRECATED: Please use as_vec() or the iterator directly.
+    pub fn as_vec_no_iter(self) -> Result<Vec<CompactUnwindRow>, ReaderError> {
+        let header_size = std::mem::size_of::<Header>();
+        let mut data = Vec::new();
+        // Reader points past the header
+        self.reader
+            .borrow_mut()
+            .seek(SeekFrom::Start(header_size.try_into().unwrap()))
+            .unwrap();
+        self.reader
+            .borrow_mut()
+            .read_to_end(&mut data)
+            .expect("should not happen");
+        let unwind_row_size = std::mem::size_of::<CompactUnwindRow>();
+        let unwind_info_len: usize = self
+            .header
+            .unwind_info_len
+            .try_into()
+            .map_err(|_| ReaderError::SizeConversion)?;
+
+        let mut unwind_info = Vec::with_capacity(unwind_info_len);
+        let mut unwind_row = CompactUnwindRow::default();
+
+        let unwind_info_data = &data[..];
+        let mut context = Context::new(&SHA256);
+        for i in 0..unwind_info_len {
+            let step = i * unwind_row_size;
+            let unwind_row_data = unwind_info_data
+                .get(step..step + unwind_row_size)
+                .ok_or(ReaderError::OutOfRange)?;
+            if self.check_digest {
+                context.update(unwind_row_data);
+            }
+            plain::copy_from_bytes(&mut unwind_row, unwind_row_data)
+                .map_err(|e| ReaderError::Generic(format!("{e:?}")))?;
+            unwind_info.push(unwind_row);
+        }
+
+        if self.check_digest {
+            let mut buffer = [0; 8];
+            let _ = context
+                .finish()
+                .as_ref()
+                .read(&mut buffer)
+                .map_err(|e| ReaderError::Generic(e.to_string()));
+            let digest = u64::from_ne_bytes(buffer);
+
+            if self.header.unwind_info_digest != digest {
+                return Err(ReaderError::Digest);
+            }
+        }
+
+        Ok(unwind_info)
+    }
 }
 
 #[cfg(test)]
