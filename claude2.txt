@@ -1,0 +1,5 @@
+       1. CFA offsets > 65,535 bytes: Acknowledged as common but unhandled. Suggestion in e318d4b: "could be done in another
+       commit, perhaps with some special larger unwind row for these cases"
+       2. DerefAndAdd offset/addition > 255 bytes: Currently assumed to fit in u8, but comment states "would be good to test
+       against larger ones"
+       3. ARM64 vDSO: Special handling needed - typical vDSOs don't contain unwind information

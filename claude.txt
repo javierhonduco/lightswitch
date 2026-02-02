@@ -1,0 +1,526 @@
+● Let me also look at the optimization code and the conversion code for more detail.
+
+● Read 3 files (ctrl+o to expand)
+
+● Let me look at the page management and memory budget code.
+
+● Explore(Find pages and memory code)
+  ⎿  Done (41 tool uses · 38.4k tokens · 57s)
+
+● Let me read the pages code and check for any benchmarks that show typical data distributions.
+
+● Searched for 1 pattern, read 2 files (ctrl+o to expand)
+
+● Now I have a thorough understanding of the entire system. Let me organize my analysis and creative ideas.
+
+  ---
+  Current Memory Layout Summary
+
+  stack_unwind_row_t — 8 bytes per row, packed:
+  u16 pc_low      — 16 bits (low 16 bits of PC within 64KB page)
+  u8  cfa_type    —  8 bits (only 10 values → 4 bits needed)
+  u8  rbp_type    —  8 bits (only 6 values  → 3 bits needed)
+  u16 cfa_offset  — 16 bits
+  s16 rbp_offset  — 16 bits
+
+  Memory cost formula (profiler.rs:1471):
+  rows × 8 bytes × 8 (BPF allocation factor) × 1.02
+
+  Supporting maps:
+  - executable_to_page — 500K entries × 24 bytes ≈ 12 MB (hash map)
+  - outer_map — 3K entries (negligible)
+  - exec_mappings — LPM trie, 1M entries
+
+  ---
+  Ideas — Ordered by Impact
+
+  1. Pattern Dictionary (deterministic, ~50% reduction in inner maps)
+
+  The key observation: the non-PC fields (cfa_type, rbp_type, cfa_offset, rbp_offset) have a very small number of distinct
+  combinations per executable. Real-world binaries compiled by a given compiler produce perhaps 20-200 unique unwind "patterns." The
+  classic frame-pointer setup alone (RBP, CfaOffset, 16, -16) often covers 30%+ of rows, and (RSP, Unchanged, 8, 0) covers another
+  large chunk.
+
+  Scheme: Replace the 8-byte row with a 4-byte row:
+
+  typedef struct __attribute__((packed)) {
+      u16 pc_low;          // 2 bytes — same as today
+      u16 pattern_index;   // 2 bytes — index into per-executable pattern table
+  } stack_unwind_row_compact_t;
+  // Total: 4 bytes (50% of current)
+
+  Add a small per-executable "pattern table" as a second BPF array map:
+
+  typedef struct __attribute__((packed)) {
+      u8  cfa_type;
+      u8  rbp_type;
+      u16 cfa_offset;
+      s16 rbp_offset;
+  } unwind_pattern_t;  // 6 bytes
+
+  Typical executable: ~100-300 unique patterns → pattern table ≈ 1.8 KB. Negligible compared to the main table which can be megabytes.
+
+  BPF lookup cost: One extra bpf_map_lookup_elem for the pattern table (O(1) array lookup). The verifier can handle this since it's a
+  simple array access.
+
+  Implementation:
+  - Userspace: after computing CompactUnwindRow[], extract unique (cfa_type, rbp_type, cfa_offset, rbp_offset) tuples, assign indices,
+   replace each row with (pc_low, pattern_index).
+  - Use a HASH_OF_MAPS for pattern tables, keyed by executable_id, or pack the pattern table at the start of the existing inner map
+  (first N entries are patterns, rest are rows).
+
+  Savings: Main inner maps shrink by 50%. The 7 MB budget now effectively holds 2x the rows.
+
+  ---
+  2. Combined Type Byte + Scaled Offsets (deterministic, ~25-37% reduction, simpler)
+
+  Even without the dictionary, we can pack more tightly:
+
+  - cfa_type needs 4 bits (10 values), rbp_type needs 3 bits (6 values). Combined: 7 bits → fits in 1 byte instead of 2.
+  - cfa_offset is almost always a multiple of 8 (stack alignment on x86-64). Store cfa_offset / 8 in a u8 → covers offsets up to 2040,
+   which handles the vast majority. Use a sentinel value (e.g., 255) to mean "overflow — use separate lookup."
+  - rbp_offset is almost always -16 (-2 × 8). Store rbp_offset / 8 as an i8 → covers -1024 to +1016.
+
+  typedef struct __attribute__((packed)) {
+      u16 pc_low;           // 2 bytes
+      u8  types;            // 1 byte (cfa_type: 4 bits | rbp_type: 4 bits)
+      u8  cfa_offset_div8;  // 1 byte (offset / 8, up to 2040)
+      i8  rbp_offset_div8;  // 1 byte (offset / 8, -1024..+1016)
+  } stack_unwind_row_t;
+  // Total: 5 bytes
+
+  With alignment to 6 bytes (next power-of-two-friendly size): still a 25% reduction. With 5-byte values in a BPF array: the kernel
+  may internally pad to 8, so this needs testing. If the kernel truly respects value_size=5, this saves ~37%.
+
+  Overflow handling: For the rare rows where offsets don't fit in scaled u8/i8, set a "did not fit" flag in the types byte and fall
+  back to a secondary map.
+
+  ---
+  3. Function-Level Compression (deterministic, ~60-80% row reduction)
+
+  Most functions have only 2-3 distinct unwind states:
+  1. Prologue (first few bytes): CFA = RSP + 8 transitioning to CFA = RSP + 16 etc.
+  2. Body (the bulk): CFA = RBP + 16, rbp @ CFA-16 or CFA = RSP + N, rbp unchanged
+  3. Epilogue (last few bytes): reverting to CFA = RSP + 8
+
+  Instead of N rows per function, store a compact per-function descriptor:
+
+  function_start_pc (implicit from page)
+  prologue_len:  u8  (bytes of prologue, typically 1-8)
+  body_pattern:  u16 (pattern_index from dictionary)
+  epilogue_len:  u8  (bytes of epilogue)
+  epilogue_pattern: u16 (pattern_index)
+
+  For a function with 50 unwind rows today, this collapses to a single entry. Combined with Idea 1's dictionary, a typical
+  executable's unwind table might shrink 5-10x.
+
+  Trade-off: More complex BPF unwinding logic — must compute "am I in prologue, body, or epilogue?" at unwind time. But this is just a
+   comparison of the PC against function_start + prologue_len and function_end - epilogue_len.
+
+  Risk: Some functions (especially hand-written assembly, or heavy alloca usage) don't follow the prologue/body/epilogue pattern.
+  These would need a fallback to the current per-row scheme. A hybrid approach: function-level for well-behaved functions, row-level
+  for the rest.
+
+  ---
+  4. Larger Pages + Direct-Mapped Slots (deterministic, eliminates binary search, trades flexibility)
+
+  Instead of binary search within 64KB pages, switch to direct-mapped indexing:
+
+  - Divide each 64KB page into 256 slots of 256 bytes each
+  - For a given PC: slot = (pc_low >> 8) — direct O(1) index, no binary search
+  - Each slot is 2 bytes: a u16 pattern_index into the dictionary from Idea 1
+
+  This gives a fixed 512 bytes per page (256 × 2 bytes). For pages with dense code, this may use more memory than today. For pages
+  with sparse code, the slots for empty regions just inherit the last valid pattern.
+
+  Combined with Idea 1:
+  - Eliminates pc_low field entirely (position is the PC)
+  - Eliminates binary search (direct index)
+  - No MAX_BINARY_SEARCH_DEPTH = 17 loop unrolling
+  - Each page is exactly 512 bytes
+
+  Whether this saves or costs memory depends on density: if a page has < 256 rows, it saves (currently 8 bytes/row × 256 rows = 2 KB
+  vs. 512 bytes). If a page has > 256 rows, the 256-byte granularity loses precision.
+
+  Hybrid: Use direct-mapped for dense pages, binary-search for sparse ones. A single bit in the page_value_t distinguishes them.
+
+  ---
+  5. Frame-Pointer Fast Path (non-deterministic, reduces lookups by ~30-60%)
+
+  Many production binaries are compiled with -fno-omit-frame-pointer (becoming more common — Fedora, Ubuntu 24.04+, many cloud
+  workloads). For these, frame-pointer unwinding doesn't need the table at all.
+
+  Scheme: Before consulting the unwind table, try a frame-pointer heuristic:
+
+  // In BPF:
+  u64 candidate_bp = 0;
+  bpf_probe_read_user(&candidate_bp, 8, (void *)unwind_state->bp);
+
+  // Heuristic: if *(rbp) looks like a valid frame pointer
+  // (points to stack, is greater than current rbp, within reasonable range)
+  if (candidate_bp > unwind_state->bp &&
+      candidate_bp < unwind_state->bp + MAX_FRAME_SIZE &&
+      candidate_bp > unwind_state->sp) {
+      // Frame pointer unwinding — skip table lookup
+      u64 candidate_rip = 0;
+      bpf_probe_read_user(&candidate_rip, 8, (void *)(unwind_state->bp + 8));
+      if (candidate_rip != 0 && !in_kernel(candidate_rip)) {
+          // Use frame-pointer result
+          unwind_state->ip = previous_instruction_addr(remove_pac(candidate_rip));
+          unwind_state->sp = unwind_state->bp + 16;
+          unwind_state->bp = candidate_bp;
+          continue;
+      }
+  }
+  // Fall back to table lookup
+
+  Impact on memory: If 50% of frames can use the fast path, we can afford much sparser unwind tables for frame-pointer-enabled
+  binaries. We could store only every Nth row (or skip them entirely) for executables known to be compiled with frame pointers.
+
+  Detection: Userspace can detect frame-pointer code during DWARF parsing — if every function's body pattern is (CFA = RBP+16, rbp @
+  CFA-16), mark the executable as "frame-pointer-enabled" and either skip uploading its unwind info entirely or upload a very sparse
+  subset.
+
+  ---
+  6. Delta-Encoded PC + VByte Offsets (deterministic, ~30-40% reduction)
+
+  Within a page, PCs tend to be close together. Instead of storing absolute pc_low (16 bits), store deltas from the previous row:
+
+  - First row: full pc_low (16 bits)
+  - Subsequent rows: delta from previous (often fits in 4-8 bits)
+
+  Similarly, cfa_offset values within a function tend to be constant or change by small amounts.
+
+  Challenge: BPF verifier needs constant-time indexed access for binary search. Variable-length encoding breaks random access.
+
+  Solution: Use fixed-size 4-byte "chunks" that encode multiple rows:
+
+  Chunk header (1 byte): number of rows in chunk (1-4)
+  Row 0: full pc_low (16 bits) + pattern (8 bits) = 3 bytes
+  Rows 1-3: pc_delta (8 bits each) + pattern delta or same-as-previous flag
+
+  Total: 4 bytes for up to 4 rows → 1 byte/row average
+
+  With 4 bytes per chunk and ~3 rows per chunk average, that's ~1.3 bytes/row vs. 8 bytes/row current = ~6x reduction.
+
+  The binary search operates on chunks rather than individual rows, then does a linear scan within each chunk. Since
+  MAX_BINARY_SEARCH_DEPTH = 17 iterations already limits to ~128K rows, using chunks of 4 means the binary search needs at most 2
+  extra iterations.
+
+  ---
+  7. Bloom Filter Pre-Filter (non-deterministic, reduces active table size)
+
+  Use BPF_MAP_TYPE_BLOOM_FILTER (available since kernel 5.16) to quickly test: "does this 64KB page have any non-trivial unwind info?"
+
+  For pages where all functions use frame pointers, the Bloom filter returns "no" and we use the fast path from Idea 5. Only pages
+  with non-frame-pointer code consult the full table.
+
+  Sizing: A Bloom filter with 500K entries and 1% false positive rate needs ~600 KB. Compare that to the 12 MB executable_to_page map
+  — the Bloom filter lets us avoid uploading page entries for frame-pointer-only pages.
+
+  ---
+  8. Shared Unwind Tables Across Executables (deterministic, system-level dedup)
+
+  Many processes load the same shared libraries (libc, libstdc++, libpthread). Currently, each process gets its own mapping, but the
+  unwind tables could be shared.
+
+  The system already deduplicates by executable_id (based on build ID / inode). But the executable_to_page map is per-(executable_id,
+  page) which means the page table is already deduplicated.
+
+  However, if we went further: binaries compiled with the same compiler flags and similar code will have nearly identical unwind
+  patterns. A global pattern dictionary (Idea 1 + global scope) could be shared across all executables, reducing per-executable
+  overhead to just (pc_low, global_pattern_index) pairs.
+
+  ---
+  My Recommendation: Combine Ideas 1 + 2 + 5
+
+  The most practical path to a 50%+ reduction:
+
+  1. Pattern Dictionary (Idea 1): Replace 8-byte rows with 4-byte (pc_low, pattern_index). This is the single biggest win — a clean
+  50% reduction in inner map memory with straightforward implementation. The BPF change is just one extra array lookup per unwind
+  step.
+  2. Combined type byte (Idea 2): Even if you keep 8-byte rows, packing types into 1 byte and scaling offsets saves ~25% and requires
+  minimal BPF changes (just bit-shifting).
+  3. Frame-pointer fast path (Idea 5): For the increasing number of binaries with frame pointers, skip the table entirely. This
+  doesn't reduce the table size directly, but dramatically reduces the amount of unwind info that needs to be uploaded, effectively
+  multiplying the 7 MB budget.
+
+  The combination of Ideas 1 and 5 can realistically achieve 50-70% memory reduction: 50% from the dictionary encoding on all
+  executables, plus avoided uploads for frame-pointer executables.
+
+✻ Worked for 8m 49s
+
+❯ I mostly want to reduce memory, a bit more CPU is fine. The issue I see with approach 1 is that it's another data structure to
+  update, and keeping it in sync might mean keeping a copy of it in userspace, using valuable memory...
+
+● Good point. The pattern dictionary adds operational complexity — you need a second map per executable, the outer map count doubles
+  (or you need a second HASH_OF_MAPS), and userspace needs to track which patterns are loaded where. The sync burden is real.
+
+  Let me reconsider with your constraint in mind: reduce memory in the BPF maps themselves, minimize new data structures, accept more
+  CPU.
+
+  Let me look more carefully at real-world offset distributions to see how aggressively we can pack into a single row.
+
+● Explore(Analyze offset value distributions)
+  ⎿  Done (40 tool uses · 60.9k tokens · 1m 8s)
+
+● That's a fair concern. Let me reframe around a critical constraint I should have surfaced upfront.
+
+  The 8-byte alignment wall
+
+  BPF array maps round element size up to 8 bytes internally:
+
+  // kernel/bpf/arraymap.c — applies to ALL BPF arrays, mmapable or not
+  elem_size = round_up(attr->value_size, 8);
+
+  This means shrinking the row struct from 8 bytes to 5 or 6 bytes saves zero actual kernel memory. A value_size=4 row and a
+  value_size=8 row both consume 8 bytes per element. This kills all the "just pack tighter into fewer bytes" approaches — unless we
+  change how we use the elements.
+
+  Given that, there are really only three levers:
+
+  1. Pack multiple rows per 8-byte element (same element count → fewer logical elements needed)
+  2. Reduce the number of rows (fewer elements in the array)
+  3. Skip entire executables (no map at all)
+
+  Here are three approaches that work within these constraints, composable with each other, and none requiring a second synchronized
+  data structure.
+
+  ---
+  Approach 1: Row-Pair Packing (deterministic, 50% inner map reduction)
+
+  Pack two 4-byte compact rows into each 8-byte BPF array element. No new maps — same outer_map, same executable_to_page, just a
+  different value interpretation.
+
+  Compact 4-byte row encoding
+
+  The insight: rbp_offset is only meaningful when rbp_type == CfaOffset, and in that case it's almost always -16. Bake common
+  rbp_offset values into an extended rbp_type:
+
+  // Extended rbp_type — 4 bits (16 values)
+  #define RBP_TYPE_UNCHANGED            0  // rbp_offset irrelevant
+  #define RBP_TYPE_CFA_MINUS_16         1  // rbp_offset = -16 (overwhelmingly common)
+  #define RBP_TYPE_CFA_MINUS_8          2  // rbp_offset = -8
+  #define RBP_TYPE_CFA_MINUS_24         3
+  #define RBP_TYPE_CFA_MINUS_32         4
+  #define RBP_TYPE_CFA_MINUS_48         5
+  #define RBP_TYPE_CFA_MINUS_64         6
+  #define RBP_TYPE_CFA_OTHER            7  // rare — approximate as -16
+  #define RBP_TYPE_REGISTER             8  // unsupported, bail
+  #define RBP_TYPE_EXPRESSION           9  // unsupported, bail
+  #define RBP_TYPE_UNDEFINED_RET_ADDR  10
+  #define RBP_TYPE_OFFSET_DID_NOT_FIT  11
+  // 12-15: reserved for future use
+
+  And encode cfa_offset scaled by 8 in a single byte (covers 0–2040, handles the vast majority of stack frames):
+
+  // cfa_offset encoding: actual_offset = stored_value * 8
+  // Range: 0 to 255*8 = 2040
+  // Value 255 could mean "did not fit" if you want deterministic handling
+
+  The packed pair element:
+
+  typedef struct __attribute__((packed)) {
+      u16 pc_low_0;       // Row 0: low 16 bits of PC
+      u8  types_0;        // Row 0: cfa_type (4 bits) | rbp_type_ext (4 bits)
+      u8  cfa_off_div8_0; // Row 0: cfa_offset / 8
+
+      u16 pc_low_1;       // Row 1
+      u8  types_1;
+      u8  cfa_off_div8_1;
+  } stack_unwind_row_pair_t;  // 8 bytes = 2 rows
+  _Static_assert(sizeof(stack_unwind_row_pair_t) == 8, "pair fits one element");
+
+  Modified binary search
+
+  The binary search is almost unchanged. It still operates on logical row indices, but translates to pair indices for the map lookup:
+
+  static __always_inline u64 find_offset_for_pc(void *inner_map, u16 pc_low,
+                                                 u64 left, u64 right) {
+      u64 found = BINARY_SEARCH_DEFAULT;
+
+  #pragma unroll
+      for (int i = 0; i < MAX_BINARY_SEARCH_DEPTH; i++) {
+          if (left >= right) return found;
+
+          u32 mid = (left + right) / 2;
+          u32 pair_idx = mid >> 1;
+          u32 slot = mid & 1;
+
+          stack_unwind_row_pair_t *pair = bpf_map_lookup_elem(inner_map, &pair_idx);
+          if (pair == NULL) return BINARY_SEARCH_DEFAULT;
+
+          // Extract pc_low for the target slot
+          u16 row_pc = slot ? pair->pc_low_1 : pair->pc_low_0;
+
+          if (row_pc <= pc_low) {
+              found = mid;
+              left = mid + 1;
+          } else {
+              right = mid;
+          }
+      }
+      return BINARY_SEARCH_EXHAUSTED_ITERATIONS;
+  }
+
+  After finding the row, decode the pattern:
+
+  u32 pair_idx = table_idx >> 1;
+  u32 slot = table_idx & 1;
+  stack_unwind_row_pair_t *pair = bpf_map_lookup_elem(inner, &pair_idx);
+
+  u8 types = slot ? pair->types_1 : pair->types_0;
+  u8 cfa_off_raw = slot ? pair->cfa_off_div8_1 : pair->cfa_off_div8_0;
+
+  u8 found_cfa_type = types >> 4;
+  u8 found_rbp_type_ext = types & 0xF;
+  u16 found_cfa_offset = (u16)cfa_off_raw * 8;
+
+  // Decode rbp_offset from extended rbp_type
+  s16 found_rbp_offset = 0;
+  if (found_rbp_type_ext == RBP_TYPE_CFA_MINUS_16) found_rbp_offset = -16;
+  else if (found_rbp_type_ext == RBP_TYPE_CFA_MINUS_8) found_rbp_offset = -8;
+  else if (found_rbp_type_ext == RBP_TYPE_CFA_MINUS_24) found_rbp_offset = -24;
+  // ... etc
+
+  What's lost
+
+  - cfa_offset > 2040: ~0.5-2% of rows in large binaries. Options: (a) mark as CFA_TYPE_OFFSET_DID_NOT_FIT and bail on that frame
+  (same as the current behavior for offsets > 65535, just with a lower threshold), or (b) cap at 2040 (lossy — frame is off by a few
+  bytes, usually still unwinds).
+  - Unusual rbp_offset values (not in the common set of -8/-16/-24/-32/-48/-64): Extremely rare. Approximate as -16, or bail.
+  - Odd number of rows: Pad last pair with pc_low_1 = 0xFFFF (sentinel, never matches in binary search).
+
+  Memory impact
+
+  Inner map elements: ceil(N/2) instead of N. Each still 8 bytes. 50% reduction in inner map memory. The executable_to_page map is
+  unchanged. No new maps to synchronize.
+
+  Userspace changes
+
+  The conversion in profiler_bindings.rs changes from:
+
+  impl From<&CompactUnwindRow> for stack_unwind_row_t { ... }
+
+  to a function that takes pairs of rows and produces stack_unwind_row_pair_t. The mmap upload loop processes rows in chunks of 2.
+
+  ---
+  Approach 2: Frame-Pointer Bypass (deterministic, eliminates entire executables)
+
+  Many modern binaries are compiled with frame pointers (Fedora, Ubuntu 24.04+, many cloud workloads). For these, the unwind table is
+  redundant — we can follow the frame pointer chain directly.
+
+  Detection
+
+  During DWARF parsing in convert.rs, track whether every function body uses the frame-pointer pattern (CFA=RBP+16, rbp@CFA-16). If
+  yes, tag the executable as FP-enabled. This is a conservative check — only mark it if all functions match (or perhaps 99%+, if you
+  want a slight lossy variant).
+
+  BPF side
+
+  Add a flag to mapping_t:
+
+  typedef struct {
+      u64 executable_id;
+      u64 load_address;
+      u64 begin;
+      u64 end;
+      u32 type;
+      u32 flags;  // bit 0: uses_frame_pointers
+  } mapping_t;
+
+  In the unwinder, before the page lookup:
+
+  if (mapping->flags & MAPPING_FLAG_FRAME_POINTER) {
+      u64 previous_rsp = unwind_state->bp + 16;
+      u64 previous_rbp = 0;
+      u64 previous_rip = 0;
+      bpf_probe_read_user(&previous_rbp, 8, (void *)unwind_state->bp);
+      bpf_probe_read_user(&previous_rip, 8, (void *)(unwind_state->bp + 8));
+      if (previous_rip != 0) {
+          unwind_state->ip = previous_instruction_addr(remove_pac(previous_rip));
+          unwind_state->sp = previous_rsp;
+          unwind_state->bp = previous_rbp;
+          // Skip entire table lookup — add frame and continue
+          goto next_frame;
+      }
+  }
+
+  Memory impact
+
+  For FP-enabled executables: zero inner map entries, zero page entries. No create_and_insert_unwind_info_map call, no add_bpf_pages
+  call. The executable still appears in exec_mappings (for mapping lookup) but consumes no unwind table memory.
+
+  On a system where 50% of loaded code is FP-enabled, this halves the unwind memory independently of Approach 1.
+
+  ---
+  Approach 3: Lossy Row Thinning (non-deterministic, further reduces row count)
+
+  After the existing remove_redundant() pass, add a "thinning" pass that drops low-value rows to hit a target row count.
+
+  Scoring
+
+  For each row i, compute its "coverage cost" — the number of PC bytes that would use the wrong unwind pattern if this row were
+  dropped:
+
+  cost(i) = (row[i+1].pc - row[i].pc)  ×  (pattern_changed(i) ? 1 : 0)
+
+  If pattern_changed(i) is false (same pattern as predecessor), dropping is lossless — this is already handled by remove_redundant.
+  For the remaining rows, cost is the PC range that would be incorrectly attributed to the previous row's pattern.
+
+  Algorithm
+
+  fn thin_unwind_info(rows: &mut Vec<CompactUnwindRow>, target_ratio: f64) {
+      let target = (rows.len() as f64 * target_ratio) as usize;
+
+      // Compute cost for each row
+      let mut costs: Vec<(usize, u64)> = rows.windows(2).enumerate()
+          .filter(|(_, w)| w[0].pattern() != w[1].pattern())  // skip lossless drops
+          .map(|(i, w)| (i + 1, w[1].pc.saturating_sub(w[0].pc)))
+          .collect();
+
+      // Sort by cost ascending — drop cheapest rows first
+      costs.sort_by_key(|&(_, cost)| cost);
+
+      // Mark rows for removal until we hit target
+      let mut remove = HashSet::new();
+      for (idx, _) in costs {
+          if rows.len() - remove.len() <= target { break; }
+          remove.insert(idx);
+      }
+
+      // Compact
+      rows.retain_index(|i| !remove.contains(&i));
+  }
+
+  Rows with cost of 1–16 bytes (prologue/epilogue transitions) are dropped first. Body rows (cost in hundreds or thousands) are
+  preserved. In practice, most functions contribute 2-3 "cheap" rows (prologue transitions) and 1 "expensive" row (the body).
+  Targeting 50% reduction drops almost exclusively prologue/epilogue rows.
+
+  Accuracy impact
+
+  For profiling at 99 Hz on a 3 GHz CPU, a sample lands on a specific instruction with probability ~1/(30M instructions/sec). The
+  probability of hitting a "wrong" region is proportional to total wrong PC bytes / total code bytes. With thinning targeting the
+  smallest-coverage rows, the wrong bytes are typically < 1% of total code, so < 1% of samples get a slightly wrong frame.
+
+  ---
+  Combined Impact
+  ┌──────────────────┬───────────────────────────┬──────────────────────────┬───────────────────────────┐
+  │     Approach     │         Reduction         │      Deterministic?      │      New structures?      │
+  ├──────────────────┼───────────────────────────┼──────────────────────────┼───────────────────────────┤
+  │ Row-pair packing │ 50% of inner maps         │ Mostly (tiny lossy edge) │ None                      │
+  ├──────────────────┼───────────────────────────┼──────────────────────────┼───────────────────────────┤
+  │ FP bypass        │ 0-80% of executables      │ Yes                      │ 1 flag in existing struct │
+  ├──────────────────┼───────────────────────────┼──────────────────────────┼───────────────────────────┤
+  │ Lossy thinning   │ Additional 30-50% of rows │ No                       │ None                      │
+  └──────────────────┴───────────────────────────┴──────────────────────────┴───────────────────────────┘
+  Worst case (no FP binaries, packing only): 50% reduction from approach 1 alone.
+
+  Typical case (mix of FP and non-FP): Packing halves the inner maps, FP bypass eliminates some executables entirely. 60-70%
+  reduction.
+
+  Aggressive (all three): Packing + thinning on non-FP executables + FP bypass. 75-85% reduction.
+
+  All three share the same outer_map, same executable_to_page, same exec_mappings. No new synchronized data structures. The cost is
+  slightly more BPF instructions per frame (pair indexing, FP heuristic branch) and occasional loss of a prologue frame in stack
+  traces.

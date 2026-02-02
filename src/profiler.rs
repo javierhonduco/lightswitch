@@ -217,6 +217,8 @@ pub enum AddProcessError {
     ProcfsRace,
 }
 
+use std::sync::Mutex;
+
 impl Default for Profiler {
     fn default() -> Self {
         let (_stop_signal_send, stop_signal_receive) = bounded(1);
