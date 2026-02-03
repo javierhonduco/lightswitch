@@ -77,3 +77,15 @@ jobs:
             renamed/lightswitch-static-glibc-x86_64-unknown-linux-gnu
             renamed/lightswitch-container-aarch64-unknown-linux-gnu
             renamed/lightswitch-static-glibc-aarch64-unknown-linux-gnu
+
+  publish:
+    runs-on: ubuntu-22.04
+    needs: [build]
+    permissions:
+      contents: write
+    steps:  
+      - name: Publish workspace dependencies
+        run:  nix develop --command cargo publish --workspace --exclude lightswitch --no-verify --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Publish main crate
+        run:  nix develop --command cargo publish --package lightswitch --no-verify --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        
