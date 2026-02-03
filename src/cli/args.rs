@@ -80,6 +80,9 @@ pub(crate) struct CliArgs {
     /// Enable BPF programs logging
     #[arg(long)]
     pub(crate) bpf_logging: bool,
+    /// Alternative BTF file.
+    #[arg(long)]
+    pub(crate) btf_custom_path: Option<String>,
     /// Set lightswitch's logging level
     #[arg(long, default_value_t, value_enum)]
     pub(crate) logging: LoggingLevel,

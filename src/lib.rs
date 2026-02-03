@@ -1,3 +1,4 @@
+#![feature(sanitize)]
 pub mod aggregator;
 pub mod bpf;
 pub mod collector;

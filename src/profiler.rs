@@ -183,6 +183,7 @@ pub struct ProfilerConfig {
     pub max_native_unwind_info_size_mb: i32,
     pub use_ring_buffers: bool,
     pub use_task_pt_regs_helper: bool,
+    pub btf_custom_path: Option<String>,
 }
 
 impl Default for ProfilerConfig {
@@ -202,6 +203,7 @@ impl Default for ProfilerConfig {
             max_native_unwind_info_size_mb: i32::MAX,
             use_ring_buffers: true,
             use_task_pt_regs_helper: true,
+            btf_custom_path: None,
         }
     }
 }
@@ -459,6 +461,12 @@ impl Profiler {
 
         let mut skel_builder = ProfilerSkelBuilder::default();
         skel_builder.obj_builder.debug(profiler_config.libbpf_debug);
+        if let Some(btf_custom_path) = &profiler_config.btf_custom_path {
+            skel_builder
+                .obj_builder
+                .btf_custom_path(btf_custom_path)
+                .expect("set btf custom path");
+        }
         let mut open_skel = skel_builder
             .open(&mut native_unwinder_open_object)
             .expect("open skel");
@@ -489,9 +497,17 @@ impl Profiler {
         tracers_builder
             .obj_builder
             .debug(profiler_config.libbpf_debug);
+
+        if let Some(btf_custom_path) = &profiler_config.btf_custom_path {
+            tracers_builder
+                .obj_builder
+                .btf_custom_path(btf_custom_path)
+                .expect("set btf custom path");
+        }
         let mut open_tracers = tracers_builder
             .open(&mut tracers_open_object)
             .expect("open skel");
+
         open_tracers
             .maps
             .exec_mappings
@@ -2179,6 +2195,34 @@ mod tests {
         Profiler::delete_bpf_process_mapping(&native_unwinder, 0xBADFAD, 0, 0xFFFFF, false);
         assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
     }
+
+    #[test]
+    fn test_custom_btf_path() {
+        let config = ProfilerConfig {
+            btf_custom_path: Some("/sys/kernel/btf/vmlinux".into()),
+            ..Default::default()
+        };
+        let (_stop_signal_send, stop_signal_receive) = bounded(1);
+        let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+
+        let _profiler = Profiler::new(config, stop_signal_receive, metadata_provider);
+    }
+
+    // TODO: no way to turn off leak sanitizer?
+    // #[sanitize(address = "off")]
+    // #[test]
+    // #[should_panic(expected = "No such file or directory")]
+    // fn test_custom_btf_path_bad_path() {
+    //     let config = ProfilerConfig {
+    //         btf_custom_path: Some("/non/existant/path".into()),
+    //         ..Default::default()
+    //     };
+    //     let (_stop_signal_send, stop_signal_receive) = bounded(1);
+    //     let metadata_provider =
+    // Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+
+    //     let _profiler = Profiler::new(config, stop_signal_receive,
+    // metadata_provider); }
 
     #[test]
     fn test_bpf_cleanup() {
