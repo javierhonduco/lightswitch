@@ -1272,7 +1272,7 @@ dependencies = [
 
 [[package]]
 name = "lightswitch"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1315,7 +1315,7 @@ dependencies = [
 
 [[package]]
 name = "lightswitch-capabilities"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "glob",
@@ -1331,7 +1331,7 @@ dependencies = [
 
 [[package]]
 name = "lightswitch-metadata"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "lru",
@@ -1343,7 +1343,7 @@ dependencies = [
 
 [[package]]
 name = "lightswitch-object"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "data-encoding",
