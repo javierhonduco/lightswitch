@@ -225,14 +225,6 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u
         return false;
     }
 
-    int err;
-    void *stack;
-
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-    if (task == NULL) {
-        return false;
-    }
-
     if (is_kthread()) {
         return false;
     }
@@ -240,9 +232,18 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u
     struct pt_regs *regs;
 
     if (lightswitch_config.use_task_pt_regs_helper) {
+        struct task_struct *task = bpf_get_current_task_btf();
+        if (task == NULL) {
+            return false;
+        }
         regs = (struct pt_regs *)bpf_task_pt_regs(task);
     } else {
-        err = bpf_probe_read_kernel(&stack, 8, &task->stack);
+        struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+        if (task == NULL) {
+            return false;
+        }
+        void *stack;
+        int err = bpf_probe_read_kernel(&stack, 8, &task->stack);
         if (err) {
             LOG("[warn] bpf_probe_read_kernel failed with %d", err);
             return false;

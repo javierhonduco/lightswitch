@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crossbeam_channel::bounded;
 
-use lightswitch::collector::{AggregatorCollector, Collector};
+use lightswitch::collector::{AggregatorCollector, Collector, NullCollector};
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::AggregatedProfile;
 use lightswitch::profiler::{Profiler, ProfilerConfig};
@@ -129,4 +129,48 @@ fn test_integration() {
             "__libc_start_call_main",
         ],
     ));
+}
+
+#[test]
+fn test_use_pt_regs_helper() {
+    let bpf_test_debug = std::env::var("TEST_DEBUG_BPF").is_ok();
+
+    let collector = Arc::new(Mutex::new(
+        Box::new(NullCollector::new()) as Box<dyn Collector + Send>
+    ));
+
+    let profiler_config = ProfilerConfig {
+        libbpf_debug: bpf_test_debug,
+        bpf_logging: bpf_test_debug,
+        duration: Duration::from_millis(100),
+        use_task_pt_regs_helper: true,
+        ..Default::default()
+    };
+
+    let (_stop_signal_send, stop_signal_receive) = bounded(1);
+    let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+    let p = Profiler::new(profiler_config, stop_signal_receive, metadata_provider);
+    p.run(collector.clone());
+}
+
+#[test]
+fn test_do_not_use_pt_regs_helper() {
+    let bpf_test_debug = std::env::var("TEST_DEBUG_BPF").is_ok();
+
+    let collector = Arc::new(Mutex::new(
+        Box::new(NullCollector::new()) as Box<dyn Collector + Send>
+    ));
+
+    let profiler_config = ProfilerConfig {
+        libbpf_debug: bpf_test_debug,
+        bpf_logging: bpf_test_debug,
+        duration: Duration::from_millis(100),
+        use_task_pt_regs_helper: true,
+        ..Default::default()
+    };
+
+    let (_stop_signal_send, stop_signal_receive) = bounded(1);
+    let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+    let p = Profiler::new(profiler_config, stop_signal_receive, metadata_provider);
+    p.run(collector.clone());
 }

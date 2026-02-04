@@ -31,6 +31,7 @@ pub struct BpfFeatures {
     pub has_batch_map_operations: bool,
     pub has_mmapable_bpf_array: bool,
     pub has_task_pt_regs_helper: bool,
+    pub has_get_current_task_btf: bool,
     pub has_variable_inner_map: bool,
 }
 
@@ -268,6 +269,7 @@ fn check_bpf_features() -> Result<BpfFeatures> {
         has_batch_map_operations: bpf_features_bss.has_batch_map_operations,
         has_mmapable_bpf_array: has_mmapable_bpf_array(),
         has_task_pt_regs_helper: bpf_features_bss.has_task_pt_regs_helper,
+        has_get_current_task_btf: bpf_features_bss.has_get_current_task_btf,
         has_variable_inner_map: has_variable_inner_map(),
     };
 
