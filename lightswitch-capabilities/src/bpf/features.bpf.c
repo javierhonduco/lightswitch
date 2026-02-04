@@ -12,6 +12,7 @@ bool has_ringbuf = false;
 bool has_map_of_maps = false;
 bool has_batch_map_operations = false;
 bool has_task_pt_regs_helper = false;
+bool has_get_current_task_btf = false;
 
 SEC("tracepoint/sched/sched_switch")
 int detect_bpf_features(void *ctx) {
@@ -29,6 +30,9 @@ int detect_bpf_features(void *ctx) {
 
     has_task_pt_regs_helper = bpf_core_enum_value_exists(
         enum bpf_func_id, BPF_FUNC_task_pt_regs);
+
+    has_get_current_task_btf = bpf_core_enum_value_exists(
+        enum bpf_func_id, BPF_FUNC_get_current_task_btf );
 
     feature_check_done = true;
 
