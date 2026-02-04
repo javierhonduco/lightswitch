@@ -361,9 +361,9 @@ mod tests {
     // Cheat sheet:
     // - decode protobuf: `protoc --decode perftools.profiles.Profile
     //   src/proto/profile.proto < profile.pb`
-    // - validate it: (in pprof's codebase) `go tool pprof profile.pb`
-    // - print it: `go tool pprof -raw profile.pb`
-    // - http server: `go tool pprof -http=:8080 profile.pb`
+    // - validate it: (in pprof's codebase) `pprof profile.pb`
+    // - print it: `pprof -raw profile.pb`
+    // - http server: `pprof -http=:8080 profile.pb`
     use super::*;
 
     #[test]

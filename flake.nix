@@ -94,6 +94,9 @@
               # Commented out because this is typically not cached and it's rarely used
               # ocamlPackages.magic-trace
               just
+              ## Analise and deal with profiles in the pprof format
+              pprof
+              graphviz
             ];
             hardeningDisable = [ "all" ];
             LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_19.libclang ];
