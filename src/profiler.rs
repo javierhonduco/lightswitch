@@ -1693,6 +1693,12 @@ impl Profiler {
                 .known_executables
                 .entry(executable_id);
             if let Entry::Occupied(entry) = entry {
+                debug!(
+                    "evicting executable_id {} last seen {:?} ago",
+                    executable_id,
+                    entry.get().last_used.elapsed()
+                );
+
                 Self::delete_bpf_pages(
                     &self.native_unwinder,
                     entry.get().unwind_info_start_address,
@@ -1810,7 +1816,12 @@ impl Profiler {
                 .sorted_by(|a, b| a.1.last_used.cmp(&b.1.last_used))
                 .find(|e| *e.0 != KERNEL_PID);
 
-            if let Some((pid, _)) = victim {
+            if let Some((pid, proc)) = victim {
+                debug!(
+                    "evicting process {} last seen {:?} ago",
+                    pid,
+                    proc.last_used.elapsed()
+                );
                 to_evict = Some(*pid);
             }
         }
