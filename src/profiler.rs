@@ -1032,7 +1032,7 @@ impl Profiler {
             last_used_executable_ids.push((*executable_id, executable_info));
         }
 
-        last_used_executable_ids.sort_by(|a, b| a.1.last_used.cmp(&b.1.last_used));
+        last_used_executable_ids.sort_by_key(|e| e.1.last_used);
         last_used_executable_ids
     }
 
