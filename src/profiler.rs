@@ -591,7 +591,9 @@ impl Profiler {
     }
 
     pub fn send_profile(&mut self, profile: RawAggregatedProfile) {
-        self.profile_send.send(profile).expect("handle send");
+        if let Err(e) = self.profile_send.send(profile) {
+            debug!("failed to send profile with: `{:?}`", e);
+        }
     }
 
     /// Starts a thread that polls the given ring or perf buffer, depending on
@@ -2089,7 +2091,7 @@ impl Profiler {
             Ok(mut sample) => {
                 sample.collected_at += walltime_at_system_boot;
                 if let Err(e) = sample_send.send(sample) {
-                    error!("failed to send sample, err={:?}", e);
+                    debug!("failed to send sample with: `{:?}", e);
                 }
             }
             Err(e) => {
@@ -2105,7 +2107,9 @@ impl Profiler {
     fn handle_event(sender: &Arc<Sender<Event>>, data: &[u8]) {
         let mut event = Event::default();
         plain::copy_from_bytes(&mut event, data).expect("handle event serde");
-        sender.send(event).expect("handle event send");
+        if let Err(e) = sender.send(event) {
+            debug!("failed to send event with: `{:?}`", e);
+        }
     }
 
     fn handle_lost_events(cpu: i32, count: u64) {
