@@ -1,3 +1,4 @@
+use std::fmt;
 use std::fs;
 use std::fs::File;
 use std::io::Read;
@@ -46,6 +47,30 @@ pub enum Runtime {
     /// handwritten code sections that aren't covered by the unwind
     /// information
     V8,
+}
+
+impl fmt::Debug for Runtime {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Runtime::CLike => write!(f, "CLike"),
+            Runtime::Zig {
+                start_low_address,
+                start_high_address,
+            } => f
+                .debug_struct("Zig")
+                .field(
+                    "start_low_address",
+                    &format_args!("0x{:x}", start_low_address),
+                )
+                .field(
+                    "start_high_address",
+                    &format_args!("0x{:x}", start_high_address),
+                )
+                .finish(),
+            Runtime::Go(frames) => f.debug_tuple("Go").field(frames).finish(),
+            Runtime::V8 => write!(f, "V8"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -293,4 +318,46 @@ fn sha256_digest<R: Read>(mut reader: R) -> Digest {
     }
 
     context.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_runtime_debug_clike() {
+        let r = Runtime::CLike;
+        assert_eq!(format!("{:?}", r), "CLike");
+    }
+
+    #[test]
+    fn test_runtime_debug_v8() {
+        let r = Runtime::V8;
+        assert_eq!(format!("{:?}", r), "V8");
+    }
+
+    #[test]
+    fn test_runtime_debug_zig() {
+        let r = Runtime::Zig {
+            start_low_address: 0x7f8a_0000_1000,
+            start_high_address: 0x7f8a_0000_2000,
+        };
+        let debug = format!("{:?}", r);
+        assert_eq!(
+            debug,
+            "Zig { start_low_address: 0x7f8a00001000, start_high_address: 0x7f8a00002000 }"
+        );
+    }
+
+    #[test]
+    fn test_runtime_debug_go() {
+        let r = Runtime::Go(vec![StopUnwindingFrames {
+            name: "runtime.mcall".to_string(),
+            start_address: 0x4000,
+            end_address: 0x5000,
+        }]);
+        let debug = format!("{:?}", r);
+        assert!(debug.starts_with("Go("));
+        assert!(debug.contains("runtime.mcall"));
+    }
 }
