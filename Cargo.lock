@@ -1563,6 +1563,7 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "base64",
  "bindgen",
  "blazesym",
  "clap",
@@ -1570,6 +1571,7 @@ dependencies = [
  "crossbeam-channel",
  "ctrlc",
  "flamelens",
+ "flate2",
  "gimli 0.33.0",
  "glob",
  "inferno",
@@ -1595,10 +1597,12 @@ dependencies = [
  "reqwest",
  "ring",
  "rstest",
+ "serde",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -2528,6 +2532,8 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -3350,6 +3356,15 @@ name = "utf8parse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
+
+[[package]]
+name = "uuid"
+version = "1.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a68d3c8f01c0cfa54a75291d83601161799e4a89a39e0929f4b0354d88757a37"
+dependencies = [
+ "getrandom 0.4.2",
+]
 
 [[package]]
 name = "valuable"
