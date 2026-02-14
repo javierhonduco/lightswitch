@@ -1,9 +1,15 @@
+use base64::Engine;
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use prost::Message;
+use serde::Serialize;
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, span, Level};
+use uuid::Uuid;
 
 use crate::process::ObjectFileInfo;
 use crate::process::ProcessInfo;
@@ -135,7 +141,149 @@ impl Collector for StreamingCollector {
             request = request.bearer_auth(token);
         }
         let response = request.send();
-        tracing::debug!("http response: {:?}", response);
+        tracing::info!("http response: {:?}", response);
+    }
+
+    fn finish(
+        &self,
+    ) -> (
+        AggregatedProfile,
+        &HashMap<i32, ProcessInfo>,
+        &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        (AggregatedProfile::new(), &self.procs, &self.objs)
+    }
+}
+
+#[derive(Default)]
+pub struct PyroscopeCollector {
+    local_symbolizer: bool,
+    push_url: String,
+    service_name: String,
+    client: reqwest::blocking::Client,
+    tenant_id: Option<String>,
+    profile_duration: Duration,
+    profile_frequency_hz: u64,
+    procs: HashMap<i32, ProcessInfo>,
+    objs: HashMap<ExecutableId, ObjectFileInfo>,
+    metadata_provider: ThreadSafeGlobalMetadataProvider,
+}
+
+impl PyroscopeCollector {
+    pub fn new(
+        local_symbolizer: bool,
+        server_url: &str,
+        // We use the same "service" name for all the profiles sent from lightswitch.
+        service_name: &str,
+        tenant_id: Option<String>,
+        profile_duration: Duration,
+        profile_frequency_hz: u64,
+        metadata_provider: ThreadSafeGlobalMetadataProvider,
+    ) -> Self {
+        let push_url = format!(
+            "{}/push.v1.PusherService/Push",
+            server_url
+        );
+        let client_builder = reqwest::blocking::Client::builder().timeout(Duration::from_secs(30));
+        let client = client_builder.build().unwrap();
+        Self {
+            local_symbolizer,
+            push_url,
+            service_name: service_name.to_string(),
+            client,
+            tenant_id,
+            profile_duration,
+            profile_frequency_hz,
+            metadata_provider,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct PyroscopePushRequest {
+    series: Vec<PyroscopeSeries>,
+}
+
+#[derive(Serialize)]
+struct PyroscopeSeries {
+    labels: Vec<PyroscopeLabel>,
+    samples: Vec<PyroscopeSample>,
+}
+
+#[derive(Serialize)]
+struct PyroscopeLabel {
+    name: String,
+    value: String,
+}
+
+#[derive(Serialize)]
+struct PyroscopeSample {
+    #[serde(rename = "ID")]
+    id: String,
+    #[serde(rename = "rawProfile")]
+    raw_profile: String,
+}
+
+/// POSTs pprof-encoded profiles to a Pyroscope server's Push endpoint.
+impl Collector for PyroscopeCollector {
+    fn collect(
+        &mut self,
+        profile: RawAggregatedProfile,
+        procs: &HashMap<i32, ProcessInfo>,
+        objs: &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        let _span = span!(Level::DEBUG, "PyroscopeCollector.collect").entered();
+
+        let mut profile = raw_to_processed(&profile, procs, objs);
+        if self.local_symbolizer {
+            profile = symbolize_profile(&profile, procs, objs);
+        }
+
+        let pprof_profile = to_pprof(
+            profile,
+            procs,
+            objs,
+            &self.metadata_provider,
+            self.profile_duration,
+            self.profile_frequency_hz,
+        );
+
+        let mut gz_encoder = GzEncoder::new(Vec::new(), Compression::default());
+        gz_encoder
+            .write_all(&pprof_profile.encode_to_vec())
+            .unwrap();
+        let gzipped_profile = gz_encoder.finish().unwrap();
+        let base64_profile = base64::engine::general_purpose::STANDARD.encode(gzipped_profile);
+
+        // The pyroscope data model is different than ours. We store metadata within the pprof but
+        // pyroscope expects separate pprofs for each set of labels. Rather than constructing all
+        // these, we don't send the metadata in the expected format and it's dropped.
+        let payload = PyroscopePushRequest {
+            series: vec![PyroscopeSeries {
+                labels: vec![
+                    PyroscopeLabel {
+                        name: "__name__".to_string(),
+                        value: "process_cpu".to_string(),
+                    },
+                    PyroscopeLabel {
+                        name: "service_name".to_string(),
+                        value: self.service_name.clone(),
+                    },
+                ],
+                samples: vec![PyroscopeSample {
+                    id: Uuid::new_v4().to_string().to_uppercase(),
+                    raw_profile: base64_profile,
+                }],
+            }],
+        };
+
+        let mut request = self.client.post(self.push_url.clone()).json(&payload);
+        if let Some(tenant_id) = &self.tenant_id {
+            request = request.header("X-Scope-OrgID", tenant_id.clone());
+        }
+        let response = request.send();
+        tracing::info!("pyroscope http response: {:?}", response);
     }
 
     fn finish(

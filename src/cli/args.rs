@@ -41,6 +41,7 @@ pub(crate) enum ProfileSender {
     #[default]
     LocalDisk,
     Remote,
+    Pyroscope,
 }
 
 #[derive(PartialEq, clap::ValueEnum, Debug, Clone, Default)]
@@ -113,6 +114,12 @@ pub(crate) struct CliArgs {
     pub(crate) server_url: Option<String>,
     #[arg(long)]
     pub(crate) token: Option<String>,
+    /// Application name for Pyroscope
+    #[arg(long, default_value = "lightswitch")]
+    pub(crate) pyroscope_app_name: String,
+    /// Tenant ID for multi-tenant Pyroscope (sets X-Scope-OrgID header)
+    #[arg(long)]
+    pub(crate) pyroscope_tenant_id: Option<String>,
     // Buffer Sizes with defaults
     #[arg(long, default_value_t = ProfilerConfig::default().perf_buffer_bytes, value_name = "PERF_BUFFER_BYTES",
           help="Size of each profiler perf buffer, in bytes (must be a power of 2)",

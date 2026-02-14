@@ -67,6 +67,7 @@ impl PprofBuilder {
             duration,
             freq_in_hz: freq_in_hz as i64,
 
+            known_mappings: HashMap::new(),
             mappings: Vec::new(),
             known_strings: HashMap::new(),
             string_table: Vec::new(),
