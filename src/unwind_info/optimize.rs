@@ -1,72 +1,146 @@
 use crate::unwind_info::types::{CfaType, CompactUnwindRow};
 
-/// Remove unecessary end of function markers.
-///
-/// A function marker is superfluous when there is another unwind information
-/// entry for the same program counter. This logic might be changed later on to
-/// delete markers within a certain bytes of the closest instruction.
-///
-/// The input *must* be sorted.
-pub fn remove_unnecesary_markers(unwind_info: &mut Vec<CompactUnwindRow>) {
-    let mut last_row: Option<CompactUnwindRow> = None;
-    let mut new_i = 0;
-
-    for i in 0..unwind_info.len() {
-        let row = unwind_info[i];
-
-        if let Some(last_row_unwrapped) = last_row {
-            let previous_is_redundant_marker = (last_row_unwrapped.cfa_type
-                == CfaType::EndFdeMarker)
-                && last_row_unwrapped.pc == row.pc;
-            if previous_is_redundant_marker {
-                new_i -= 1;
-            }
-        }
-
-        let mut current_is_redundant_marker = false;
-        if let Some(last_row_unwrapped) = last_row {
-            current_is_redundant_marker =
-                (row.cfa_type == CfaType::EndFdeMarker) && last_row_unwrapped.pc == row.pc;
-        }
-
-        if !current_is_redundant_marker {
-            unwind_info[new_i] = row;
-            new_i += 1;
-        }
-
-        last_row = Some(row);
+pub trait UnwindRowSink {
+    type Error;
+    fn push(&mut self, row: CompactUnwindRow) -> Result<(), Self::Error>;
+    fn finish(&mut self) -> Result<(), Self::Error> {
+        Ok(())
     }
-
-    unwind_info.truncate(new_i);
 }
 
-/// Remove contiguous unwind information entries that are repeated.
-///
-/// The input *must* be sorted.
-pub fn remove_redundant(unwind_info: &mut Vec<CompactUnwindRow>) {
-    let mut last_row: Option<CompactUnwindRow> = None;
-    let mut new_i = 0;
+pub struct NoopSink;
 
-    for i in 0..unwind_info.len() {
-        let mut redundant = false;
-        let row = unwind_info[i];
+impl UnwindRowSink for NoopSink {
+    type Error = anyhow::Error;
 
-        if let Some(last_row_unwrapped) = last_row {
-            redundant = row.cfa_type == last_row_unwrapped.cfa_type
-                && row.cfa_offset == last_row_unwrapped.cfa_offset
-                && row.rbp_type == last_row_unwrapped.rbp_type
-                && row.rbp_offset == last_row_unwrapped.rbp_offset;
-        }
+    fn push(&mut self, _row: CompactUnwindRow) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
 
-        if !redundant {
-            unwind_info[new_i] = row;
-            new_i += 1;
-        }
+pub struct VecSink(pub Vec<CompactUnwindRow>);
 
-        last_row = Some(row);
+impl VecSink {
+    pub fn new() -> Self {
+        VecSink(Vec::new())
     }
 
-    unwind_info.truncate(new_i);
+    pub fn into_vec(self) -> Vec<CompactUnwindRow> {
+        self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl UnwindRowSink for VecSink {
+    type Error = anyhow::Error;
+
+    fn push(&mut self, row: CompactUnwindRow) -> Result<(), Self::Error> {
+        self.0.push(row);
+        Ok(())
+    }
+}
+
+pub struct RemoveUnnecessaryMarkers<S> {
+    inner: S,
+    pending: Option<CompactUnwindRow>,
+}
+
+impl<S: UnwindRowSink> RemoveUnnecessaryMarkers<S> {
+    pub fn new(inner: S) -> Self {
+        RemoveUnnecessaryMarkers {
+            inner,
+            pending: None,
+        }
+    }
+
+    pub fn into_inner(self) -> S {
+        self.inner
+    }
+}
+
+impl<S: UnwindRowSink> UnwindRowSink for RemoveUnnecessaryMarkers<S> {
+    type Error = S::Error;
+
+    fn push(&mut self, row: CompactUnwindRow) -> Result<(), Self::Error> {
+        if let Some(prev) = self.pending.take() {
+            if prev.pc == row.pc {
+                let prev_is_marker = prev.cfa_type == CfaType::EndFdeMarker;
+                let row_is_marker = row.cfa_type == CfaType::EndFdeMarker;
+
+                match (prev_is_marker, row_is_marker) {
+                    (true, _) => {
+                        self.pending = Some(row);
+                        return Ok(());
+                    }
+                    (false, true) => {
+                        self.pending = Some(prev);
+                        return Ok(());
+                    }
+                    (false, false) => {
+                        self.inner.push(prev)?;
+                        self.pending = Some(row);
+                        return Ok(());
+                    }
+                }
+            }
+
+            self.inner.push(prev)?;
+        }
+
+        self.pending = Some(row);
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), Self::Error> {
+        if let Some(last) = self.pending.take() {
+            self.inner.push(last)?;
+        }
+        self.inner.finish()
+    }
+}
+
+pub struct RemoveRedundant<S> {
+    inner: S,
+    last_kept: Option<CompactUnwindRow>,
+}
+
+impl<S: UnwindRowSink> RemoveRedundant<S> {
+    pub fn new(inner: S) -> Self {
+        RemoveRedundant {
+            inner,
+            last_kept: None,
+        }
+    }
+
+    pub fn into_inner(self) -> S {
+        self.inner
+    }
+}
+
+impl<S: UnwindRowSink> UnwindRowSink for RemoveRedundant<S> {
+    type Error = S::Error;
+
+    fn push(&mut self, row: CompactUnwindRow) -> Result<(), Self::Error> {
+        let redundant = self.last_kept.is_some_and(|prev| {
+            row.cfa_type == prev.cfa_type
+                && row.cfa_offset == prev.cfa_offset
+                && row.rbp_type == prev.rbp_type
+                && row.rbp_offset == prev.rbp_offset
+        });
+
+        if !redundant {
+            self.inner.push(row)?;
+            self.last_kept = Some(row);
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), Self::Error> {
+        self.inner.finish()
+    }
 }
 
 #[cfg(test)]
@@ -75,31 +149,70 @@ mod tests {
 
     #[test]
     fn test_remove_unnecesary_markers() {
-        let unwind_info = vec![
+        let input = vec![
             CompactUnwindRow::stop_unwinding(0x100),
             CompactUnwindRow {
                 pc: 0x100,
                 ..Default::default()
             },
         ];
-        let mut processed = unwind_info.clone();
-        remove_unnecesary_markers(&mut processed);
+
+        let sink = VecSink::new();
+        let mut pipeline = RemoveUnnecessaryMarkers::new(sink);
+        for row in input {
+            pipeline.push(row).unwrap();
+        }
+        pipeline.finish().unwrap();
+        let result = pipeline.into_inner().into_vec();
 
         assert_eq!(
-            processed,
+            result,
             vec![CompactUnwindRow {
                 pc: 0x100,
                 ..Default::default()
             }]
-        )
+        );
+    }
+
+    #[test]
+    fn test_remove_unnecesary_markers_instruction_then_marker() {
+        let input = vec![
+            CompactUnwindRow {
+                pc: 0x100,
+                ..Default::default()
+            },
+            CompactUnwindRow::stop_unwinding(0x100),
+        ];
+
+        let sink = VecSink::new();
+        let mut pipeline = RemoveUnnecessaryMarkers::new(sink);
+        for row in input {
+            pipeline.push(row).unwrap();
+        }
+        pipeline.finish().unwrap();
+        let result = pipeline.into_inner().into_vec();
+
+        assert_eq!(
+            result,
+            vec![CompactUnwindRow {
+                pc: 0x100,
+                ..Default::default()
+            }]
+        );
     }
 
     #[test]
     fn test_remove_redundant() {
-        let unwind_info = vec![CompactUnwindRow::default(), CompactUnwindRow::default()];
-        let mut processed = unwind_info.clone();
-        remove_redundant(&mut processed);
+        let input = vec![CompactUnwindRow::default(), CompactUnwindRow::default()];
 
-        assert_eq!(processed, vec![CompactUnwindRow::default()])
+        let sink = VecSink::new();
+        let mut pipeline = RemoveRedundant::new(sink);
+        for row in input {
+            pipeline.push(row).unwrap();
+        }
+        pipeline.finish().unwrap();
+        let result = pipeline.into_inner().into_vec();
+
+        assert_eq!(result, vec![CompactUnwindRow::default()]);
     }
 }
