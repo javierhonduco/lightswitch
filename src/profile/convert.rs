@@ -79,7 +79,6 @@ pub fn to_pprof(
                     }
 
                     let mapping_id = pprof.add_mapping(
-                        mapping.executable_id.into(),
                         mapping.start_addr,
                         mapping.end_addr,
                         0x0,
@@ -151,7 +150,6 @@ pub fn to_pprof(
                         None => "no-build-id".into(),
                     };
                     let mapping_id: u64 = pprof.add_mapping(
-                        mapping.executable_id.into(),
                         mapping.start_addr,
                         mapping.end_addr,
                         mapping.offset,

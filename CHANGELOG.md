@@ -5,6 +5,7 @@ Unreleased
 - Add support for custom BTF path
 - Add `--no-pre-alloc-hash-maps` to not prealloc BPF maps, if supported
 - Add live viewer `--live` with flamelens
+- Add v2 trailer to the backend URL used by `StreamingCollector`
 
 v0.3.1
 ---------
