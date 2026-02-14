@@ -48,7 +48,7 @@ pub fn to_pprof(
     let profile_start = SystemTime::now();
 
     let mut pprof = PprofBuilder::new(profile_start, profile_duration, profile_frequency_hz);
-    let mut task_to_labels: HashMap<i32, Vec<Label>> = HashMap::new();
+    let mut task_to_labels: HashMap<TaskKey, Vec<Label>> = HashMap::new();
 
     for sample in profile {
         let ustack = sample.ustack;
@@ -189,11 +189,12 @@ pub fn to_pprof(
             }
         }
 
-        let labels = task_to_labels.entry(sample.tid).or_insert_with(|| {
-            let metadata = metadata_provider.lock().unwrap().get_metadata(TaskKey {
-                tid: sample.tid,
-                pid: sample.pid,
-            });
+        let task_key = TaskKey {
+            tid: sample.tid,
+            pid: sample.pid,
+        };
+        let labels = task_to_labels.entry(task_key).or_insert_with(|| {
+            let metadata = metadata_provider.lock().unwrap().get_metadata(task_key);
             metadata
                 .into_iter()
                 .map(|label| {
