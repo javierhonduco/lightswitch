@@ -41,7 +41,7 @@
           ];
           rust-toolchain = pkgs.rust-bin.nightly.latest.default;
           craneLib = (crane.mkLib nixpkgs.legacyPackages.${system}).overrideToolchain rust-toolchain;
-          lightswitch = craneLib.buildPackage {
+          commonArgs = {
             src = ./.;
             doCheck = false;
             buildInputs = buildInputs;
@@ -50,6 +50,11 @@
             LIBCLANG_PATH = with pkgs; lib.makeLibraryPath [ llvmPackages_19.libclang ];
             LIBBPF_SYS_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [ zlib.static elfutils' ];
           };
+          lightswitch = craneLib.buildPackage (
+            commonArgs // {
+              cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+            }
+          );
         in
         with pkgs;
         {
