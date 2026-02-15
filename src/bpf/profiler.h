@@ -76,6 +76,7 @@ struct lightswitch_config_t {
     bool verbose_logging;
     bool use_ring_buffers;
     bool use_task_pt_regs_helper;
+    bool use_btf_helpers;
 };
 
 struct unwinder_stats_t {

@@ -44,7 +44,7 @@ struct munmap_entry_args {
 
 SEC("tracepoint/sched/sched_process_exit")
 int tracer_process_exit(void *ctx) {
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+    struct task_struct *task = current_task();
     unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
     int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
@@ -82,7 +82,7 @@ int tracer_process_exit(void *ctx) {
 SEC("tracepoint/syscalls/sys_enter_munmap")
 int tracer_enter_munmap(struct munmap_entry_args *args) {
     u64 start_address = args->addr;
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+    struct task_struct *task = current_task();
     unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
 

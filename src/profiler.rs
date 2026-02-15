@@ -15,6 +15,7 @@ use std::mem::size_of;
 use std::mem::ManuallyDrop;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
+
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -183,6 +184,7 @@ pub struct ProfilerConfig {
     pub max_native_unwind_info_size_mb: i32,
     pub use_ring_buffers: bool,
     pub use_task_pt_regs_helper: bool,
+    pub btf_custom_path: Option<String>,
 }
 
 impl Default for ProfilerConfig {
@@ -202,6 +204,7 @@ impl Default for ProfilerConfig {
             max_native_unwind_info_size_mb: i32::MAX,
             use_ring_buffers: true,
             use_task_pt_regs_helper: true,
+            btf_custom_path: None,
         }
     }
 }
@@ -359,6 +362,13 @@ impl Profiler {
             .use_task_pt_regs_helper
             .write(profiler_config.use_task_pt_regs_helper);
 
+        // Disable BTF helpers if a BTF custom path is selected since
+        // it will not load in machines that don't have one. TODO add override?
+        rodata
+            .lightswitch_config
+            .use_btf_helpers
+            .write(profiler_config.btf_custom_path.is_none());
+
         if profiler_config.use_ring_buffers {
             // Set sample collecting ringbuf size based sampling frequency
             let profile_sample_max_entries =
@@ -463,6 +473,12 @@ impl Profiler {
 
         let mut skel_builder = ProfilerSkelBuilder::default();
         skel_builder.obj_builder.debug(profiler_config.libbpf_debug);
+        if let Some(btf_custom_path) = &profiler_config.btf_custom_path {
+            skel_builder
+                .obj_builder
+                .btf_custom_path(btf_custom_path)
+                .expect("set btf custom path");
+        }
         let mut open_skel = skel_builder
             .open(&mut native_unwinder_open_object)
             .expect("open skel");
@@ -493,9 +509,17 @@ impl Profiler {
         tracers_builder
             .obj_builder
             .debug(profiler_config.libbpf_debug);
+
+        if let Some(btf_custom_path) = &profiler_config.btf_custom_path {
+            tracers_builder
+                .obj_builder
+                .btf_custom_path(btf_custom_path)
+                .expect("set btf custom path");
+        }
         let mut open_tracers = tracers_builder
             .open(&mut tracers_open_object)
             .expect("open skel");
+
         open_tracers
             .maps
             .exec_mappings
@@ -515,6 +539,13 @@ impl Profiler {
             .lightswitch_config
             .use_ring_buffers
             .write(profiler_config.use_ring_buffers);
+
+        // Disable BTF helpers if a BTF custom path is selected since
+        // it will not load in machines that don't have one. TODO add override?
+        rodata
+            .lightswitch_config
+            .use_btf_helpers
+            .write(profiler_config.btf_custom_path.is_none());
         Self::set_tracers_map_sizes(&mut open_tracers, &profiler_config);
 
         let tracers = ManuallyDrop::new(open_tracers.load().expect("load skel"));
@@ -2198,6 +2229,31 @@ mod tests {
         assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 20);
         Profiler::delete_bpf_process_mapping(&native_unwinder, 0xBADFAD, 0, 0xFFFFF, false);
         assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
+    }
+
+    #[test]
+    fn test_custom_btf_path() {
+        let config = ProfilerConfig {
+            btf_custom_path: Some("/sys/kernel/btf/vmlinux".into()),
+            ..Default::default()
+        };
+        let (_stop_signal_send, stop_signal_receive) = bounded(1);
+        let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+
+        let _profiler = Profiler::new(config, stop_signal_receive, metadata_provider);
+    }
+
+    #[test]
+    #[should_panic(expected = "No such file or directory")]
+    fn test_custom_btf_path_bad_path() {
+        let config = ProfilerConfig {
+            btf_custom_path: Some("/non/existent/path".into()),
+            ..Default::default()
+        };
+        let (_stop_signal_send, stop_signal_receive) = bounded(1);
+        let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+
+        let _profiler = Profiler::new(config, stop_signal_receive, metadata_provider);
     }
 
     #[test]
