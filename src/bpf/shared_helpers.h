@@ -25,7 +25,8 @@ static __always_inline struct pt_regs *pt_regs(struct task_struct *task) {
             LOG("[warn] bpf_probe_read_kernel failed with %d", err);
             return NULL;
         }
-        void *ptr = stack + THREAD_SIZE - TOP_OF_KERNEL_STACK_PADDING;
+        #define THREAD_START_SP (4096 - 8) << 1
+        void *ptr = THREAD_START_SP - task_stack_page - stack;
         return ((struct pt_regs *)ptr) - 1;
     }
 }
