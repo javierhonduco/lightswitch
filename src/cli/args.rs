@@ -156,7 +156,11 @@ pub(crate) struct CliArgs {
     pub(crate) unsafe_start: bool,
     #[arg(long, help = "force perf buffers even if ring buffers can be used")]
     pub(crate) force_perf_buffer: bool,
-    #[arg(long, default_value = "false", help = "Use non-preallocated hash maps to reduce memory usage")]
+    #[arg(
+        long,
+        default_value = "false",
+        help = "Use non-preallocated hash maps to reduce memory usage"
+    )]
     pub(crate) no_prealloc_hash_maps: bool,
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
