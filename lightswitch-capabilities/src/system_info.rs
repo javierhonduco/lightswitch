@@ -1,4 +1,5 @@
 use crate::bpf::features_skel::FeaturesSkelBuilder;
+use crate::bpf::noprealloc_test_skel::NopreallocTestSkelBuilder;
 use std::fs::read_to_string;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
@@ -32,6 +33,7 @@ pub struct BpfFeatures {
     pub has_task_pt_regs_helper: bool,
     pub has_get_current_task_btf: bool,
     pub has_variable_inner_map: bool,
+    pub has_non_prealloc_hash_maps_in_tracing: bool,
 }
 
 #[derive(Debug)]
@@ -230,6 +232,18 @@ fn has_variable_inner_map() -> bool {
     true
 }
 
+fn has_non_prealloc_hash_maps_in_tracing() -> bool {
+    let skel_builder = NopreallocTestSkelBuilder::default();
+    let mut obj = MaybeUninit::uninit();
+    let open_skel = match skel_builder.open(&mut obj) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    let result = open_skel.load().is_ok();
+    result
+}
+
 fn check_bpf_features(btf_custom_path: Option<String>) -> Result<BpfFeatures> {
     let mut skel_builder = FeaturesSkelBuilder::default();
     let mut a = MaybeUninit::uninit();
@@ -274,6 +288,7 @@ fn check_bpf_features(btf_custom_path: Option<String>) -> Result<BpfFeatures> {
         has_task_pt_regs_helper: bpf_features_bss.has_task_pt_regs_helper,
         has_get_current_task_btf: bpf_features_bss.has_get_current_task_btf,
         has_variable_inner_map: has_variable_inner_map(),
+        has_non_prealloc_hash_maps_in_tracing: has_non_prealloc_hash_maps_in_tracing(),
     };
 
     Ok(features)
