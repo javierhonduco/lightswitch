@@ -1,5 +1,6 @@
 use prost::Message;
 use std::collections::HashMap;
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, span, Level};
@@ -10,7 +11,7 @@ use crate::profile::raw_to_processed;
 use crate::profile::AggregatedProfile;
 use crate::profile::AggregatedSample;
 use crate::profile::RawAggregatedProfile;
-use crate::profile::{symbolize_profile, to_pprof};
+use crate::profile::{fold_profile, symbolize_profile, to_pprof};
 use lightswitch_object::ExecutableId;
 
 use lightswitch_metadata::metadata_provider::ThreadSafeGlobalMetadataProvider;
@@ -216,5 +217,57 @@ impl Collector for AggregatorCollector {
             .collect();
 
         (profile, &self.procs, &self.objs)
+    }
+}
+
+pub struct LiveCollector {
+    tx: Sender<String>,
+    procs: HashMap<i32, ProcessInfo>,
+    objs: HashMap<ExecutableId, ObjectFileInfo>,
+}
+
+impl LiveCollector {
+    pub fn new(tx: Sender<String>) -> Self {
+        Self {
+            tx,
+            procs: HashMap::new(),
+            objs: HashMap::new(),
+        }
+    }
+}
+
+impl Collector for LiveCollector {
+    fn collect(
+        &mut self,
+        raw_profile: RawAggregatedProfile,
+        procs: &HashMap<i32, ProcessInfo>,
+        objs: &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        let _span = span!(Level::DEBUG, "LiveCollector.collect").entered();
+
+        for (k, v) in procs {
+            self.procs.insert(*k, v.clone());
+        }
+        for (k, v) in objs {
+            self.objs.insert(*k, v.clone());
+        }
+
+        let profile = raw_to_processed(&raw_profile, procs, objs);
+        let profile = symbolize_profile(&profile, procs, objs);
+        let folded = fold_profile(profile, true);
+
+        if !folded.trim().is_empty() {
+            let _ = self.tx.send(folded);
+        }
+    }
+
+    fn finish(
+        &self,
+    ) -> (
+        AggregatedProfile,
+        &HashMap<i32, ProcessInfo>,
+        &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        (AggregatedProfile::new(), &self.procs, &self.objs)
     }
 }

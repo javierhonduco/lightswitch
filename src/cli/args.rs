@@ -162,6 +162,8 @@ pub(crate) struct CliArgs {
         help = "Do not preallocate BPF hash maps"
     )]
     pub(crate) no_prealloc_bpf_hash_maps: bool,
+    #[arg(long, help = "Launch live flamegraph TUI")]
+    pub(crate) live: bool,
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
 }

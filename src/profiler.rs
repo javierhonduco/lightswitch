@@ -155,7 +155,7 @@ pub struct Profiler {
     /// Whether the profiler itself should be excluded from profiling.
     exclude_self: bool,
     /// Deals with debug information
-    debug_info_manager: Box<dyn DebugInfoManager>,
+    debug_info_manager: Box<dyn DebugInfoManager + Send>,
     /// Maximum size of BPF unwind information maps. A higher value will result
     /// in evictions which might reduce the quality of the profiles and in
     /// more work for the profiler.
@@ -180,7 +180,7 @@ pub struct ProfilerConfig {
     pub mapsize_info: bool,
     pub mapsize_rate_limits: u32,
     pub exclude_self: bool,
-    pub debug_info_manager: Box<dyn DebugInfoManager>,
+    pub debug_info_manager: Box<dyn DebugInfoManager + Send>,
     pub max_native_unwind_info_size_mb: i32,
     pub use_ring_buffers: bool,
     pub use_task_pt_regs_helper: bool,
