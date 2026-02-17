@@ -4,6 +4,7 @@ Unreleased
 - Fix panic during teardown due to attempting to send data to a closed channel
 - Add support for custom BTF path
 - Add `--no-pre-alloc-hash-maps` to not prealloc BPF maps, if supported
+- Add live viewer `--live` with flamelens
 
 v0.3.1
 ---------
