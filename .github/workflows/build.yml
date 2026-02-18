@@ -14,7 +14,7 @@ jobs:
         steps:
             - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
             - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
-            - uses: DeterminateSystems/flakehub-cache-action@91ca310d06020a14c188943f8277d38678b576e5 # v2
+            - uses: DeterminateSystems/flakehub-cache-action@a09b82cd3b1c66a93894d2071510aac1441d2f39 # v2
             - name: Show nix version
               run: nix --version
             - name: Set up nix dev env
@@ -48,7 +48,7 @@ jobs:
         steps:
             - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
             - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
-            - uses: DeterminateSystems/flakehub-cache-action@91ca310d06020a14c188943f8277d38678b576e5 # v2
+            - uses: DeterminateSystems/flakehub-cache-action@a09b82cd3b1c66a93894d2071510aac1441d2f39 # v2
             - name: Set up nix dev env
               run: nix develop --command echo 0
             - name: Set nix rustc env var
