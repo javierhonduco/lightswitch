@@ -61,7 +61,7 @@ procfs = { workspace = true }
 nix = { workspace = true, features = ["user"] }
 parking_lot = { version = "0.12.5", features = ["deadlock_detection"] }
 ring = { workspace = true }
-flamelens = { git = "https://github.com/xlanor/flamelens", rev = "5ea5a57", default-features = false }
+flamelens = { git = "https://github.com/xlanor/flamelens", rev = "3ac501f", default-features = false }
 
 [dev-dependencies]
 assert_cmd = { version = "2.1.1" }

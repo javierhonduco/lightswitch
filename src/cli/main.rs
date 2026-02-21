@@ -21,6 +21,9 @@ use lightswitch::debug_info::DebugInfoManager;
 use nix::unistd::Uid;
 use tracing::{debug, error, info, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
 use tracing_subscriber::FmtSubscriber;
 
 use lightswitch_capabilities::system_info::SystemInfo;
@@ -53,6 +56,34 @@ use crate::args::ProfileFormat;
 use crate::args::ProfileSender;
 use crate::args::Symbolizer;
 use crate::killswitch::KillSwitch;
+
+struct ChannelLogLayer {
+    tx: mpsc::Sender<String>,
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ChannelLogLayer {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        let mut visitor = StringVisitor(String::new());
+        event.record(&mut visitor);
+        let msg = format!(
+            "{} {}: {}",
+            event.metadata().level(),
+            event.metadata().target(),
+            visitor.0,
+        );
+        let _ = self.tx.send(msg);
+    }
+}
+
+struct StringVisitor(String);
+
+impl tracing::field::Visit for StringVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.0 = format!("{:?}", value);
+        }
+    }
+}
 
 const DEFAULT_SERVER_URL: &str = "http://localhost:4567";
 static KILLSWITCH_POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -90,19 +121,23 @@ fn main() -> Result<(), Box<dyn Error>> {
         start_deadlock_detector();
     }
 
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(match args.logging {
-            LoggingLevel::Trace => Level::TRACE,
-            LoggingLevel::Debug => Level::DEBUG,
-            LoggingLevel::Info => Level::INFO,
-            LoggingLevel::Warn => Level::WARN,
-            LoggingLevel::Error => Level::ERROR,
-        })
-        .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE)
-        .with_ansi(std::io::stdout().is_terminal())
-        .finish();
+    let level_filter = match args.logging {
+        LoggingLevel::Trace => Level::TRACE,
+        LoggingLevel::Debug => Level::DEBUG,
+        LoggingLevel::Info => Level::INFO,
+        LoggingLevel::Warn => Level::WARN,
+        LoggingLevel::Error => Level::ERROR,
+    };
 
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    if !args.live {
+        let subscriber = FmtSubscriber::builder()
+            .with_max_level(level_filter)
+            .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE)
+            .with_ansi(std::io::stdout().is_terminal())
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("setting default subscriber failed");
+    }
 
     let btf_custom_path = args.btf_custom_path;
 
@@ -203,6 +238,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     if args.live {
+        let (log_tx, log_rx) = mpsc::channel::<String>();
+        tracing_subscriber::registry()
+            .with(
+                ChannelLogLayer { tx: log_tx }
+                    .with_filter(tracing_subscriber::filter::LevelFilter::from_level(level_filter)),
+            )
+            .init();
+
         let (tx, rx) = mpsc::channel::<String>();
         let collector: Arc<Mutex<Box<dyn Collector + Send>>> =
             Arc::new(Mutex::new(Box::new(LiveCollector::new(tx))));
@@ -214,6 +257,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let (stop_signal_sender, stop_signal_receive) = bounded(1);
         let profiler_stop_signal_sender = stop_signal_sender.clone();
+        let tui_stop_signal_sender = stop_signal_sender.clone();
         ctrlc::set_handler(move || {
             let _ = profiler_stop_signal_sender.send(());
         })
@@ -239,8 +283,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             })
             .expect("Failed to spawn profiler thread");
 
-        flamelens::run_from_live_stream(rx, "lightswitch --live")?;
+        flamelens::run_from_live_stream_with_logs(rx, log_rx, "lightswitch --live")?;
 
+        let _ = tui_stop_signal_sender.send(());
         let _ = profiler_thread.join();
         return Ok(());
     }
