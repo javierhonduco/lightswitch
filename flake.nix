@@ -83,6 +83,7 @@
               })
               # Debugging tools
               strace
+              clickhouse
               gdb
               bpftools
               # Upload container image to registry

@@ -1,21 +1,24 @@
 use lightswitch_object::ExecutableId;
+use memmap2::Mmap;
 use std::collections::BinaryHeap;
 use std::fs;
+use std::fs::File;
+use std::io::BufReader;
 use std::io::BufWriter;
+use std::io::Cursor;
 use std::io::ErrorKind;
 use std::io::Read;
+use std::io::Seek;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Instant;
-use std::{fs::File, io::BufReader};
 
 use thiserror::Error;
 use tracing::debug;
 
 use super::persist::{Reader, Writer};
 use crate::unwind_info::persist::{ReaderError, WriterError};
-use crate::unwind_info::types::CompactUnwindRow;
 
 const DEFAULT_MAX_CACHED_FILES: usize = 1_000;
 
@@ -59,10 +62,20 @@ pub struct UnwindInfoManager {
     cache_dir: PathBuf,
     usage_tracking: BinaryHeap<Usage>,
     max_cached_files: usize,
+    file_opener: fn(path: &Path) -> std::io::Result<Box<dyn ReadSeek>>,
 }
 
+pub trait ReadSeek: Read + Seek {}
+impl ReadSeek for BufReader<File> {}
+impl ReadSeek for File {}
+impl<T: AsRef<[u8]>> ReadSeek for Cursor<T> {}
+
 impl UnwindInfoManager {
-    pub fn new(cache_dir: &Path, max_cached_files: Option<usize>) -> Self {
+    pub fn new(
+        cache_dir: &Path,
+        max_cached_files: Option<usize>,
+        file_opener: fn(path: &Path) -> std::io::Result<Box<dyn ReadSeek>>,
+    ) -> Self {
         let max_cached_files = max_cached_files.unwrap_or(DEFAULT_MAX_CACHED_FILES);
         debug!(
             "Storing unwind information cache in {}",
@@ -71,10 +84,26 @@ impl UnwindInfoManager {
         let mut manager = UnwindInfoManager {
             cache_dir: cache_dir.to_path_buf(),
             usage_tracking: BinaryHeap::with_capacity(max_cached_files),
+            file_opener,
             max_cached_files,
         };
         let _ = manager.bump_already_present();
         manager
+    }
+
+    pub fn from_file(cache_dir: &Path, max_cached_files: Option<usize>) -> Self {
+        Self::new(cache_dir, max_cached_files, |path| {
+            let file = BufReader::new(File::open(path)?);
+            Ok(Box::new(file))
+        })
+    }
+
+    pub fn from_mmap(cache_dir: &Path, max_cached_files: Option<usize>) -> Self {
+        Self::new(cache_dir, max_cached_files, |path| {
+            let file = File::open(path)?;
+            let mmap = Box::new(Cursor::new(unsafe { Mmap::map(&file) }?));
+            Ok(mmap)
+        })
     }
 
     pub fn fetch_unwind_info(
@@ -83,20 +112,21 @@ impl UnwindInfoManager {
         executable_id: ExecutableId,
         first_frame_override: Option<(u64, u64)>,
         check_digest: bool,
-    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
+    ) -> Result<Reader<impl Read + Seek>, FetchUnwindInfoError> {
         match self.read_from_cache(executable_id, check_digest) {
-            Ok(unwind_info) => Ok(unwind_info),
+            Ok(reader) => Ok(reader),
             Err(e) => {
                 if matches!(e, FetchUnwindInfoError::NotFound) {
                     debug!("error fetch_unwind_info: {:?}, regenerating...", e);
                 }
                 // No matter the error, regenerate the unwind information.
-                let unwind_info =
+                let writer =
                     self.write_to_cache(executable_path, executable_id, first_frame_override);
-                if unwind_info.is_ok() {
+                if writer.is_ok() {
                     self.bump(executable_id, None);
                 }
-                unwind_info
+
+                self.read_from_cache(executable_id, check_digest)
             }
         }
     }
@@ -105,9 +135,9 @@ impl UnwindInfoManager {
         &self,
         executable_id: ExecutableId,
         check_digest: bool,
-    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
+    ) -> Result<Reader<impl Read + Seek>, FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
-        let file = File::open(unwind_info_path).map_err(|e| {
+        let file = (self.file_opener)(&unwind_info_path).map_err(|e| {
             if e.kind() == ErrorKind::NotFound {
                 FetchUnwindInfoError::NotFound
             } else {
@@ -115,12 +145,13 @@ impl UnwindInfoManager {
             }
         })?;
 
-        let mut buffer = BufReader::new(file);
-        let mut data = Vec::new();
-        buffer.read_to_end(&mut data)?;
-        let reader = Reader::new(&data, check_digest).map_err(FetchUnwindInfoError::Reader)?;
+        let file = BufReader::new(file);
+        let mut reader = Reader::new(file, check_digest).map_err(FetchUnwindInfoError::Reader)?;
+        if check_digest {
+            reader.check_digest()?;
+        }
 
-        Ok(reader.unwind_info()?)
+        Ok(reader)
     }
 
     fn write_to_cache(
@@ -128,7 +159,7 @@ impl UnwindInfoManager {
         executable_path: &Path,
         executable_id: ExecutableId,
         first_frame_override: Option<(u64, u64)>,
-    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
+    ) -> Result<(), FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
         let unwind_info_writer = Writer::new(executable_path, first_frame_override);
         // [`File::create`] will truncate an existing file to the size it needs.
@@ -216,7 +247,7 @@ mod tests {
     fn test_unwind_info_manager_unwind_info() {
         let unwind_info = compact_unwind_info("/proc/self/exe", None).unwrap();
         let tmpdir = tempfile::TempDir::new().unwrap();
-        let mut manager = UnwindInfoManager::new(tmpdir.path(), None);
+        let mut manager = UnwindInfoManager::from_file(tmpdir.path(), None);
 
         // The unwind info fetched with the manager should be correct
         // both when it's a cache miss and a cache hit.
@@ -227,8 +258,8 @@ mod tests {
                 None,
                 true,
             );
-            let manager_unwind_info = manager_unwind_info.unwrap();
-            assert_eq!(unwind_info, manager_unwind_info);
+            let mut manager_unwind_info = manager_unwind_info.unwrap();
+            assert_eq!(unwind_info, manager_unwind_info.as_vec().unwrap());
         }
     }
 
@@ -236,9 +267,10 @@ mod tests {
     fn test_unwind_info_manager_corrupt() {
         let unwind_info = compact_unwind_info("/proc/self/exe", None).unwrap();
         let tmpdir = tempfile::TempDir::new().unwrap();
-        let mut manager = UnwindInfoManager::new(tmpdir.path(), None);
+        let mut manager = UnwindInfoManager::from_file(tmpdir.path(), None);
 
         // Cache unwind info.
+        println!("initial cache?");
         let manager_unwind_info = manager.fetch_unwind_info(
             &PathBuf::from("/proc/self/exe"),
             ExecutableId(0xFABADA),
@@ -246,8 +278,8 @@ mod tests {
             true,
         );
         assert!(manager_unwind_info.is_ok());
-        let manager_unwind_info = manager_unwind_info.unwrap();
-        assert_eq!(unwind_info, manager_unwind_info);
+        let mut manager_unwind_info = manager_unwind_info.unwrap();
+        assert_eq!(unwind_info, manager_unwind_info.as_vec().unwrap());
 
         // Corrupt it.
         let mut file = OpenOptions::new()
@@ -264,7 +296,7 @@ mod tests {
             None,
             true,
         );
-        let manager_unwind_info = manager_unwind_info.unwrap();
+        let manager_unwind_info = manager_unwind_info.unwrap().as_vec().unwrap();
         assert_eq!(unwind_info, manager_unwind_info);
     }
 
@@ -279,7 +311,7 @@ mod tests {
         }
 
         assert_eq!(fs::read_dir(path).unwrap().collect::<Vec<_>>().len(), 20);
-        UnwindInfoManager::new(path, Some(4));
+        UnwindInfoManager::from_file(path, Some(4));
         assert_eq!(fs::read_dir(path).unwrap().collect::<Vec<_>>().len(), 4);
     }
 }

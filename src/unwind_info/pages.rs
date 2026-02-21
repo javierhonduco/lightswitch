@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::unwind_info::types::CompactUnwindRow;
+use crate::unwind_info::{persist::ReaderError, types::CompactUnwindRow};
 
 #[derive(PartialEq)]
 pub struct Page {
@@ -28,7 +28,10 @@ impl fmt::Debug for Page {
 /// unwind info in a given page in 16 iterations, and represent the program
 /// counters with 32 bits (32 bits for PC + 16 bits for page offset = 48 bits,
 /// which is enough as the upper 16 bits are unused).
-pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
+pub fn to_pages(
+    unwind_info: impl Iterator<Item = Result<CompactUnwindRow, ReaderError>>,
+    unwind_info_len: usize,
+) -> Vec<Page> {
     let page_size_bits = 16;
     let page_size = 2_u64.pow(page_size_bits);
     let low_bits_mask = page_size - 1;
@@ -38,7 +41,8 @@ pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
     let mut prev_high_pc = None;
     let mut prev_index = 0;
 
-    for (i, row) in unwind_info.iter().enumerate() {
+    for (i, row) in unwind_info.into_iter().enumerate() {
+        let row = row.unwrap();
         let high_pc = row.pc & high_bits_mask;
         match prev_high_pc {
             None => {
@@ -78,7 +82,7 @@ pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
         pages.push(Page {
             address: id,
             low_index: prev_index.try_into().unwrap(),
-            high_index: unwind_info.len().try_into().unwrap(),
+            high_index: unwind_info_len.try_into().unwrap(),
         });
     }
 
@@ -92,12 +96,17 @@ mod tests {
     #[test]
     fn test_to_pages() {
         let unwind_info = vec![];
-        let pages = to_pages(&unwind_info);
+        let pages = to_pages(unwind_info.clone().into_iter(), 0);
         assert_eq!(pages, vec![]);
 
         let row = CompactUnwindRow::default();
-        let unwind_info = vec![CompactUnwindRow { pc: 0x100, ..row }];
-        let pages = to_pages(&unwind_info);
+        let unwind_info = vec![CompactUnwindRow { pc: 0x100, ..row }]
+            .into_iter()
+            .map(Ok)
+            .collect::<Vec<_>>();
+
+        let len = unwind_info.len();
+        let pages = to_pages(unwind_info.clone().into_iter(), len);
         assert_eq!(
             pages,
             vec![Page {
@@ -121,10 +130,15 @@ mod tests {
                 pc: 0x1103f4,
                 ..row
             },
-        ];
-        let pages = to_pages(&unwind_info);
+        ]
+        .into_iter()
+        .map(Ok)
+        .collect::<Vec<_>>();
+
+        let len = unwind_info.len();
+        let pages = to_pages(unwind_info.clone().into_iter(), len);
         assert!(
-            unwind_info.is_sorted_by(|a, b| a.pc <= b.pc),
+            unwind_info.is_sorted_by(|a, b| a.as_ref().unwrap().pc <= b.as_ref().unwrap().pc),
             "unwind info is sorted"
         );
         assert_eq!(
@@ -158,8 +172,13 @@ mod tests {
                 pc: 4 * 2_u64.pow(16),
                 ..row
             },
-        ];
-        let pages = to_pages(&unwind_info);
+        ]
+        .into_iter()
+        .map(Ok)
+        .collect::<Vec<_>>();
+
+        let len = unwind_info.len();
+        let pages = to_pages(unwind_info.clone().into_iter(), len);
         assert_eq!(
             pages,
             vec![
@@ -195,9 +214,10 @@ mod tests {
         let page_size_bits = 16;
         let low_bits_mask = u64::pow(2, page_size_bits) - 1;
         let high_bits_mask = u64::MAX ^ low_bits_mask;
-        let pages = to_pages(&unwind_info);
-
+        let len = unwind_info.len();
+        let pages = to_pages(unwind_info.clone().into_iter(), len);
         for row in &unwind_info {
+            let row = row.as_ref().unwrap();
             let pc = row.pc;
             let pc_high = pc & high_bits_mask;
             assert_eq!(pc_high, pc_high & 0x0000FFFFFFFF0000); // [ 16 unused bits -- 32 bits for high -- 16 bits for each page ]
@@ -205,9 +225,12 @@ mod tests {
             let found = pages.iter().find(|el| el.address == pc_high).unwrap();
             // Make sure we can find the inner slice
             let search_here = &unwind_info[(found.low_index as usize)..(found.high_index as usize)];
-            let found_row = search_here.iter().find(|el| el.pc == pc).unwrap();
+            let found_row = search_here
+                .iter()
+                .find(|el| el.as_ref().unwrap().pc == pc)
+                .unwrap();
             // And that the high and low bits were done ok
-            let pc = found_row.pc;
+            let pc = found_row.as_ref().unwrap().pc;
             assert_eq!((pc & low_bits_mask) + pc_high, pc);
         }
     }
