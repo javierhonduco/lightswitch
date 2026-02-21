@@ -240,8 +240,8 @@ fn has_non_prealloc_hash_maps_in_tracing() -> bool {
         Err(_) => return false,
     };
 
-    let result = open_skel.load().is_ok();
-    result
+    let loaded = open_skel.load();
+    loaded.is_ok()
 }
 
 fn check_bpf_features(btf_custom_path: Option<String>) -> Result<BpfFeatures> {

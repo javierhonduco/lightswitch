@@ -158,10 +158,10 @@ pub(crate) struct CliArgs {
     pub(crate) force_perf_buffer: bool,
     #[arg(
         long,
-        default_value = "false",
-        help = "Use non-preallocated hash maps to reduce memory usage"
+        default_value_t = ProfilerConfig::default().no_prealloc_bpf_hash_maps,
+        help = "Do not preallocate BPF hash maps"
     )]
-    pub(crate) no_prealloc_hash_maps: bool,
+    pub(crate) no_prealloc_bpf_hash_maps: bool,
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
 }

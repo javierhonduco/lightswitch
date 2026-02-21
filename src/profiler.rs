@@ -185,7 +185,7 @@ pub struct ProfilerConfig {
     pub use_ring_buffers: bool,
     pub use_task_pt_regs_helper: bool,
     pub btf_custom_path: Option<String>,
-    pub no_prealloc_hash_maps: bool,
+    pub no_prealloc_bpf_hash_maps: bool,
 }
 
 impl Default for ProfilerConfig {
@@ -206,7 +206,7 @@ impl Default for ProfilerConfig {
             use_ring_buffers: true,
             use_task_pt_regs_helper: true,
             btf_custom_path: None,
-            no_prealloc_hash_maps: false,
+            no_prealloc_bpf_hash_maps: false,
         }
     }
 }
@@ -345,7 +345,7 @@ impl Profiler {
             .set_max_entries(profiler_config.mapsize_rate_limits)
             .expect("Unable to set rate_limits map max_entries");
 
-        if profiler_config.no_prealloc_hash_maps {
+        if profiler_config.no_prealloc_bpf_hash_maps {
             open_skel
                 .maps
                 .rate_limits
@@ -356,6 +356,11 @@ impl Profiler {
                 .executable_to_page
                 .set_map_flags(libbpf_sys::BPF_F_NO_PREALLOC)
                 .expect("set executable_to_page NO_PREALLOC");
+            open_skel
+                .maps
+                .outer_map
+                .set_map_flags(libbpf_sys::BPF_F_NO_PREALLOC)
+                .expect("set outer NO_PREALLOC");
         }
 
         let rodata = open_skel
@@ -444,7 +449,7 @@ impl Profiler {
                 .expect("set ring buffer entries to one as it's unused");
         }
 
-        if profiler_config.no_prealloc_hash_maps {
+        if profiler_config.no_prealloc_bpf_hash_maps {
             open_skel
                 .maps
                 .tracked_munmap
