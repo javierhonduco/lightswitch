@@ -778,11 +778,12 @@ checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 [[package]]
 name = "flamelens"
 version = "0.3.1"
-source = "git+https://github.com/xlanor/flamelens?rev=3ac501f#3ac501fea72530e06d0c21880a43b4209d270bd2"
+source = "git+https://github.com/xlanor/flamelens?rev=7a50252#7a5025271850f4f37f5f3baa329c8199ee7762ab"
 dependencies = [
  "anyhow",
  "cfg-if",
  "clap",
+ "crossbeam-channel",
  "crossterm",
  "ratatui",
  "regex",

@@ -19,12 +19,12 @@ use lightswitch::collector::{
 };
 use lightswitch::debug_info::DebugInfoManager;
 use nix::unistd::Uid;
-use tracing::{debug, error, info, Level};
+use tracing::{Level, debug, error, info};
+use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::Layer;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::Layer;
-use tracing_subscriber::FmtSubscriber;
 
 use lightswitch_capabilities::system_info::SystemInfo;
 use lightswitch_metadata::metadata_provider::{
@@ -38,10 +38,10 @@ use lightswitch::kernel::kernel_build_id;
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::{fold_profile, to_pprof};
 use lightswitch::profiler::{Profiler, ProfilerConfig};
-use lightswitch::unwind_info::compact_unwind_info;
 use lightswitch::unwind_info::CompactUnwindInfoBuilder;
-use lightswitch_object::kernel::kaslr_offset;
+use lightswitch::unwind_info::compact_unwind_info;
 use lightswitch_object::ObjectFile;
+use lightswitch_object::kernel::kaslr_offset;
 
 mod args;
 mod killswitch;
@@ -58,11 +58,15 @@ use crate::args::Symbolizer;
 use crate::killswitch::KillSwitch;
 
 struct ChannelLogLayer {
-    tx: mpsc::Sender<String>,
+    tx: crossbeam_channel::Sender<String>,
 }
 
 impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ChannelLogLayer {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
         let mut visitor = StringVisitor(String::new());
         event.record(&mut visitor);
         let msg = format!(
@@ -71,7 +75,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ChannelLogLayer {
             event.metadata().target(),
             visitor.0,
         );
-        let _ = self.tx.send(msg);
+        let _ = self.tx.try_send(msg);
     }
 }
 
@@ -86,6 +90,7 @@ impl tracing::field::Visit for StringVisitor {
 }
 
 const DEFAULT_SERVER_URL: &str = "http://localhost:4567";
+const LOG_CHANNEL_CAPACITY: usize = 1000;
 static KILLSWITCH_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Exit the main thread if any thread panics. We prefer this behaviour because
@@ -100,15 +105,17 @@ fn panic_thread_hook() {
 
 /// Starts `parking_lot`'s deadlock detector.
 fn start_deadlock_detector() {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        for deadlock in parking_lot::deadlock::check_deadlock() {
-            for deadlock in deadlock {
-                eprintln!(
-                    "Found a deadlock! {:?}: {:?}",
-                    deadlock.thread_id(),
-                    deadlock.backtrace()
-                );
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            for deadlock in parking_lot::deadlock::check_deadlock() {
+                for deadlock in deadlock {
+                    eprintln!(
+                        "Found a deadlock! {:?}: {:?}",
+                        deadlock.thread_id(),
+                        deadlock.backtrace()
+                    );
+                }
             }
         }
     });
@@ -238,12 +245,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     if args.live {
-        let (log_tx, log_rx) = mpsc::channel::<String>();
+        let (log_tx, log_rx) = crossbeam_channel::bounded::<String>(LOG_CHANNEL_CAPACITY);
         tracing_subscriber::registry()
-            .with(
-                ChannelLogLayer { tx: log_tx }
-                    .with_filter(tracing_subscriber::filter::LevelFilter::from_level(level_filter)),
-            )
+            .with(ChannelLogLayer { tx: log_tx }.with_filter(
+                tracing_subscriber::filter::LevelFilter::from_level(level_filter),
+            ))
             .init();
 
         let (tx, rx) = mpsc::channel::<String>();
@@ -266,10 +272,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         let killswitch_ticker = tick(KILLSWITCH_POLL_INTERVAL);
         let killswitch_poll_thread =
             thread::Builder::new().name("killswitch-poll-thread".to_string());
-        let _ = killswitch_poll_thread.spawn(move || loop {
-            if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
-                let _ = stop_signal_sender.send(());
-                break;
+        let _ = killswitch_poll_thread.spawn(move || {
+            loop {
+                if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
+                    let _ = stop_signal_sender.send(());
+                    break;
+                }
             }
         });
 
@@ -301,11 +309,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Start a thread to stop the profiler if the killswitch is enabled
     let killswitch_ticker = tick(KILLSWITCH_POLL_INTERVAL);
     let killswitch_poll_thread = thread::Builder::new().name("killswitch-poll-thread".to_string());
-    let _ = killswitch_poll_thread.spawn(move || loop {
-        if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
-            info!("killswitch detected. Sending stop signal to profiler.");
-            let _ = stop_signal_sender.send(());
-            break;
+    let _ = killswitch_poll_thread.spawn(move || {
+        loop {
+            if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
+                info!("killswitch detected. Sending stop signal to profiler.");
+                let _ = stop_signal_sender.send(());
+                break;
+            }
         }
     });
 
