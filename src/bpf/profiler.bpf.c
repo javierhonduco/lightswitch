@@ -138,7 +138,7 @@ find_page(mapping_t *mapping, u64 object_relative_pc, u64 *low_index, u64 *high_
 static __always_inline void send_event(Event *event, struct bpf_perf_event_data *ctx) {
     bool *is_rate_limited = bpf_map_lookup_elem(&rate_limits, event);
     if (is_rate_limited != NULL && *is_rate_limited) {
-        LOG("[debug] send_event was rate limited");
+        LOG("[debug] send_event was rate limited for process %d", event->pid);
         return;
     }
 
@@ -149,6 +149,8 @@ static __always_inline void send_event(Event *event, struct bpf_perf_event_data 
         ret = bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, event, sizeof(Event));
     }
     if (ret < 0) {
+        LOG("[error] failed to send event for process %d", event->pid);
+
         if (event->type == EVENT_NEW_PROCESS) {
             bump_unwind_error_sending_new_process_event();
         } else if (event->type == EVENT_NEED_UNWIND_INFO) {
@@ -156,7 +158,7 @@ static __always_inline void send_event(Event *event, struct bpf_perf_event_data 
         }
     }
 
-    LOG("[debug] event type %d sent", event->type);
+    LOG("[debug] event type %d sent for process %d", event->type, event->pid);
     bool rate_limited = true;
 
     bpf_map_update_elem(&rate_limits, event, &rate_limited, BPF_ANY);

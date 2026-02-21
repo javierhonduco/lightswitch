@@ -1,6 +1,5 @@
 #include "constants.h"
 
-
 static __always_inline struct task_struct *current_task() {
     if (lightswitch_config.use_task_pt_regs_helper && lightswitch_config.use_btf_helpers) {
         return bpf_get_current_task_btf();
