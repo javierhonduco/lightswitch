@@ -156,6 +156,12 @@ pub(crate) struct CliArgs {
     pub(crate) unsafe_start: bool,
     #[arg(long, help = "force perf buffers even if ring buffers can be used")]
     pub(crate) force_perf_buffer: bool,
+    #[arg(
+        long,
+        default_value_t = ProfilerConfig::default().no_prealloc_bpf_hash_maps,
+        help = "Do not preallocate BPF hash maps"
+    )]
+    pub(crate) no_prealloc_bpf_hash_maps: bool,
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
 }
