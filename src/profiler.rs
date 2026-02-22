@@ -2109,7 +2109,6 @@ impl Profiler {
             }
         }
 
-        mappings.sort_by_key(|k| k.start_addr.cmp(&k.start_addr));
         let proc_info = ProcessInfo {
             status: ProcessStatus::Running,
             mappings: ExecutableMappings(mappings),
