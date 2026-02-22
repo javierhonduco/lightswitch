@@ -19,12 +19,12 @@ use lightswitch::collector::{
 };
 use lightswitch::debug_info::DebugInfoManager;
 use nix::unistd::Uid;
-use tracing::{Level, debug, error, info};
-use tracing_subscriber::FmtSubscriber;
-use tracing_subscriber::Layer;
+use tracing::{debug, error, info, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::Layer;
 
 use lightswitch_capabilities::system_info::SystemInfo;
 use lightswitch_metadata::metadata_provider::{
@@ -38,10 +38,10 @@ use lightswitch::kernel::kernel_build_id;
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::{fold_profile, to_pprof};
 use lightswitch::profiler::{Profiler, ProfilerConfig};
-use lightswitch::unwind_info::CompactUnwindInfoBuilder;
 use lightswitch::unwind_info::compact_unwind_info;
-use lightswitch_object::ObjectFile;
+use lightswitch::unwind_info::CompactUnwindInfoBuilder;
 use lightswitch_object::kernel::kaslr_offset;
+use lightswitch_object::ObjectFile;
 
 mod args;
 mod killswitch;
@@ -69,9 +69,11 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ChannelLogLayer {
     ) {
         let mut visitor = StringVisitor(String::new());
         event.record(&mut visitor);
+        let now = chrono::Local::now();
         let msg = format!(
-            "{} {}: {}",
+            "{} {} {}: {}",
             event.metadata().level(),
+            now.format("%Y-%m-%dT%H:%M:%S%.3f%:z"),
             event.metadata().target(),
             visitor.0,
         );
@@ -105,17 +107,15 @@ fn panic_thread_hook() {
 
 /// Starts `parking_lot`'s deadlock detector.
 fn start_deadlock_detector() {
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            for deadlock in parking_lot::deadlock::check_deadlock() {
-                for deadlock in deadlock {
-                    eprintln!(
-                        "Found a deadlock! {:?}: {:?}",
-                        deadlock.thread_id(),
-                        deadlock.backtrace()
-                    );
-                }
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        for deadlock in parking_lot::deadlock::check_deadlock() {
+            for deadlock in deadlock {
+                eprintln!(
+                    "Found a deadlock! {:?}: {:?}",
+                    deadlock.thread_id(),
+                    deadlock.backtrace()
+                );
             }
         }
     });
@@ -272,12 +272,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         let killswitch_ticker = tick(KILLSWITCH_POLL_INTERVAL);
         let killswitch_poll_thread =
             thread::Builder::new().name("killswitch-poll-thread".to_string());
-        let _ = killswitch_poll_thread.spawn(move || {
-            loop {
-                if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
-                    let _ = stop_signal_sender.send(());
-                    break;
-                }
+        let _ = killswitch_poll_thread.spawn(move || loop {
+            if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
+                let _ = stop_signal_sender.send(());
+                break;
             }
         });
 
@@ -309,13 +307,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Start a thread to stop the profiler if the killswitch is enabled
     let killswitch_ticker = tick(KILLSWITCH_POLL_INTERVAL);
     let killswitch_poll_thread = thread::Builder::new().name("killswitch-poll-thread".to_string());
-    let _ = killswitch_poll_thread.spawn(move || {
-        loop {
-            if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
-                info!("killswitch detected. Sending stop signal to profiler.");
-                let _ = stop_signal_sender.send(());
-                break;
-            }
+    let _ = killswitch_poll_thread.spawn(move || loop {
+        if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
+            info!("killswitch detected. Sending stop signal to profiler.");
+            let _ = stop_signal_sender.send(());
+            break;
         }
     });
 

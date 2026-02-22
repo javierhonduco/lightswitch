@@ -42,6 +42,7 @@ inferno = "0.12.4"
 primal = "0.3.3"
 prost = "0.14" # Needed to encode protocol buffers to bytes.
 reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false }
+chrono = "0.4"
 ctrlc = "3.5.1"
 crossbeam-channel = "0.5.15"
 itertools = "0.14.0"
