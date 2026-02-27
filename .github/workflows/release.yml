@@ -27,7 +27,7 @@ jobs:
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
     - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
-    - uses: DeterminateSystems/flakehub-cache-action@94e18b0009f736bc4071682aa53cd5a48e0d9618 # v2
+    - uses: DeterminateSystems/flakehub-cache-action@6783a3a5482dcb2d35f4898eb26310606b2a5f48 # v2
     - name: Show nix version
       run: nix --version
     - name: Set up nix dev env
@@ -41,14 +41,14 @@ jobs:
         nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:${{ github.ref_name }}
         nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:latest
     - name: Upload container
-      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
       with:
         name: lightswitch-container-${{ matrix.config.target }}
         path: ./result
     - name: Build `lightswitch` statically linked with glibc
       run: nix develop --ignore-environment --keep TARGET --command bash -c 'RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target $TARGET'
     - name: Upload static binary
-      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
       with:
         name: lightswitch-static-glibc-${{ matrix.config.target }}
         path: ./target/${{ matrix.config.target }}/release/lightswitch
@@ -59,7 +59,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
       - name: Display artifacts structure
         run: tree -h
       - name: Rename artifacts
@@ -87,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
-      - uses: DeterminateSystems/flakehub-cache-action@94e18b0009f736bc4071682aa53cd5a48e0d9618 # v2
+      - uses: DeterminateSystems/flakehub-cache-action@6783a3a5482dcb2d35f4898eb26310606b2a5f48 # v2
       - name: Show nix version
         run: nix --version
       - name: Set up nix dev env
