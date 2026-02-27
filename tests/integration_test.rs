@@ -130,7 +130,6 @@ fn test_integration() {
         ],
     ));
 }
-
 #[test]
 fn test_use_pt_regs_helper() {
     let bpf_test_debug = std::env::var("TEST_DEBUG_BPF").is_ok();

@@ -158,6 +158,16 @@ impl ObjectFileInfo {
     }
 }
 
+/// Returns the path for the procfs file referencing the mapped file which can
+/// be read from even after the executable gets deleted and can't be accessed
+/// via its path anymore.
+pub(crate) fn opened_exe_path(pid: Pid, start_address: u64, end_address: u64) -> PathBuf {
+    PathBuf::from(format!(
+        "/proc/{pid}/map_files/{:x}-{:x}",
+        start_address, end_address
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

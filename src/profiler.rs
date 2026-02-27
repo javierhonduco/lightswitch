@@ -1,3 +1,4 @@
+use crate::process::opened_exe_path;
 use libbpf_rs::MapImpl;
 use libbpf_rs::OpenObject;
 use libbpf_rs::RingBufferBuilder;
@@ -8,6 +9,7 @@ use std::collections::hash_map::OccupiedEntry;
 use std::collections::HashMap;
 use std::env::temp_dir;
 use std::fs;
+use std::fs::read_link;
 use std::fs::File;
 use std::io::ErrorKind;
 use std::iter;
@@ -286,10 +288,8 @@ enum AddUnwindInformationError {
     Eviction,
     #[error("unwind information too large for executable: {0} which has {1} unwind rows")]
     TooLarge(String, usize),
-    #[error("no unwind information, known naughty executable")]
-    NoUnwindInfoKnownNaughty,
-    #[error("no unwind information: {0} for executable: {1}")]
-    NoUnwindInfo(String, String),
+    #[error("generic error: {0} for executable: {1}")]
+    Generic(String, String),
     #[error("unwind information contains no entries")]
     Empty,
     #[error("failed to write to BPF map that stores unwind information: {0}")]
@@ -1499,13 +1499,11 @@ impl Profiler {
 
             // Fetch unwind info and store it in in BPF maps.
             if let Err(e) = self.add_unwind_information_for_executable(
+                pid,
                 mapping.executable_id,
                 mapping.start_addr,
                 mapping.end_addr,
             ) {
-                if e == AddUnwindInformationError::NoUnwindInfoKnownNaughty {
-                    return;
-                }
                 warn!(
                     "error adding unwind information for executable 0x{} due to {:?}",
                     mapping.executable_id, e
@@ -1544,6 +1542,7 @@ impl Profiler {
 
     fn add_unwind_information_for_executable(
         &mut self,
+        pid: Pid,
         executable_id: ExecutableId,
         start_address: u64,
         end_address: u64,
@@ -1554,6 +1553,11 @@ impl Profiler {
         let object_files = self.object_files.read();
         let executable_info = object_files.get(&executable_id).unwrap();
         let executable_path = executable_info.path.clone();
+        let opened_exe_path = if executable_info.is_vdso {
+            executable_info.path.clone()
+        } else {
+            opened_exe_path(pid, start_address, end_address)
+        };
         let needs_synthesis = executable_info.is_vdso && architecture() == Architecture::Arm64;
         let runtime = executable_info.runtime.clone();
         std::mem::drop(object_files);
@@ -1584,12 +1588,13 @@ impl Profiler {
                 let _span = span!(
                     Level::DEBUG,
                     "calling in_memory_unwind_info",
-                    "{}",
+                    "{} aka {}",
+                    opened_exe_path.display(),
                     executable_path.display()
                 )
                 .entered();
                 self.unwind_info_manager.fetch_unwind_info(
-                    &executable_path,
+                    &opened_exe_path,
                     executable_id,
                     Some((start_low_address, start_high_address)),
                     false,
@@ -1606,12 +1611,13 @@ impl Profiler {
                     let _span = span!(
                         Level::DEBUG,
                         "calling in_memory_unwind_info",
-                        "{}",
+                        "{} aka {}",
+                        opened_exe_path.display(),
                         executable_path.display()
                     )
                     .entered();
                     self.unwind_info_manager.fetch_unwind_info(
-                        &executable_path,
+                        &opened_exe_path,
                         executable_id,
                         None,
                         false,
@@ -1627,16 +1633,14 @@ impl Profiler {
         let unwind_info = match unwind_info {
             Ok(unwind_info) => unwind_info,
             Err(e) => {
-                let known_naughty = executable_path.to_string_lossy().contains("libicudata.so")
-                    || executable_path.to_string_lossy().contains("libnss_dns.so");
-                if known_naughty {
-                    return Err(AddUnwindInformationError::NoUnwindInfoKnownNaughty);
-                } else {
-                    return Err(AddUnwindInformationError::NoUnwindInfo(
-                        e.to_string(),
-                        executable_path.to_string_lossy().to_string(),
-                    ));
-                }
+                return Err(AddUnwindInformationError::Generic(
+                    format!("{:?}", e),
+                    format!(
+                        "{} aka {}",
+                        opened_exe_path.display(),
+                        executable_path.display()
+                    ),
+                ));
             }
         };
 
@@ -1841,11 +1845,7 @@ impl Profiler {
         std::mem::drop(procs);
 
         if let Some((executable_id, s, e)) = mapping_data {
-            if let Err(e) = self.add_unwind_information_for_executable(executable_id, s, e) {
-                if e == AddUnwindInformationError::NoUnwindInfoKnownNaughty {
-                    return;
-                }
-
+            if let Err(e) = self.add_unwind_information_for_executable(pid, executable_id, s, e) {
                 warn!(
                     "error adding unwind information for executable 0x{} due to {:?}",
                     executable_id, e
@@ -1916,31 +1916,29 @@ impl Profiler {
                 continue;
             }
             match &map.pathname {
-                procfs::process::MMapPath::Path(path) => {
-                    let Ok(exe_path) = executable_path(pid, path) else {
-                        // Can fail due to race-conditions
+                procfs::process::MMapPath::Path(mapping_path) => {
+                    // These libraries don't have unwind information, they contain data.
+                    let path_str = mapping_path.to_string_lossy();
+                    if path_str.contains("libicudata.so") || path_str.contains("libnss_dns.so") {
+                        continue;
+                    }
+                    let opened_exe_path = opened_exe_path(pid, map.address.0, map.address.1);
+                    let Ok(link) = read_link(&opened_exe_path) else {
+                        debug!("failed to read symbolic link at {}", mapping_path.display());
                         continue;
                     };
-
-                    // We've seen debug info executables that get deleted in Rust applications.
-                    if exe_path.to_string_lossy().contains("(deleted)") {
-                        continue;
-                    }
-
-                    // There are probably other cases, but we'll handle them as we bump into them.
-                    if exe_path.to_string_lossy().contains("(") {
-                        warn!(
-                            "absolute path ({}) contains '(', it might be special",
-                            exe_path.display()
-                        );
-                    }
-
+                    let exe_path = executable_path(pid, &link);
                     // We want to open the file as quickly as possible to minimise the chances of
                     // races if the file is deleted.
-                    let file = match File::open(&exe_path) {
+                    let file = match File::open(&opened_exe_path) {
                         Ok(f) => f,
                         Err(e) => {
-                            debug!("failed to open file {} due to {:?}", exe_path.display(), e);
+                            debug!(
+                                "failed to open file {} aka {} due to {:?}",
+                                opened_exe_path.display(),
+                                exe_path.display(),
+                                e
+                            );
                             // Rather than returning here, we prefer to be able to profile some
                             // parts of the binary
                             continue;
@@ -1950,7 +1948,12 @@ impl Profiler {
                     let object_file = match ObjectFile::new(&file) {
                         Ok(f) => f,
                         Err(e) => {
-                            debug!("object_file {} failed with {}", exe_path.display(), e);
+                            debug!(
+                                "object_file {} aka {} failed with {}",
+                                opened_exe_path.display(),
+                                exe_path.display(),
+                                e
+                            );
                             // Rather than returning here, we prefer to be able to profile some
                             // parts of the binary
                             continue;
@@ -1963,7 +1966,7 @@ impl Profiler {
                         continue;
                     };
 
-                    debug!("Path {:?} executable_id 0x{}", path, executable_id);
+                    debug!("adding executable at path {} executable_id 0x{} to the mappings of process {}", mapping_path.display(), executable_id, pid);
 
                     // mmap'ed data is always page aligned but the load segment information might
                     // not be. As we need to account for any randomisation added
