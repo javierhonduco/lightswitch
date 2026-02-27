@@ -162,6 +162,12 @@ pub(crate) struct CliArgs {
         help = "Do not preallocate BPF hash maps"
     )]
     pub(crate) no_prealloc_bpf_hash_maps: bool,
+    #[arg(
+        long,
+        default_value_t = ProfilerConfig::default().preload_thread_metadata,
+        help = "Read metadata for all threads when a new process is detected. This might be slow in older kernels."
+    )]
+    pub(crate) preload_thread_metadata: bool,
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
 }

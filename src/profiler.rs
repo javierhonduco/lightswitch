@@ -167,6 +167,7 @@ pub struct Profiler {
     // Baseline for calculating raw_sample collection wall clock time
     // as bpf currently only supports getting the offset since system boot.
     walltime_at_system_boot: u64,
+    preload_thread_metadata: bool,
 }
 
 pub struct ProfilerConfig {
@@ -186,6 +187,7 @@ pub struct ProfilerConfig {
     pub use_task_pt_regs_helper: bool,
     pub btf_custom_path: Option<String>,
     pub no_prealloc_bpf_hash_maps: bool,
+    pub preload_thread_metadata: bool,
 }
 
 impl Default for ProfilerConfig {
@@ -207,6 +209,7 @@ impl Default for ProfilerConfig {
             use_task_pt_regs_helper: true,
             btf_custom_path: None,
             no_prealloc_bpf_hash_maps: false,
+            preload_thread_metadata: false,
         }
     }
 }
@@ -640,6 +643,7 @@ impl Profiler {
             aggregator: Aggregator::default(),
             metadata_provider,
             walltime_at_system_boot,
+            preload_thread_metadata: profiler_config.preload_thread_metadata,
         }
     }
 
@@ -2116,23 +2120,25 @@ impl Profiler {
         };
         self.procs.clone().write().insert(pid, proc_info);
 
-        // Best effort, failing here won't be an issue for profiling.
-        for thread in proc
-            .tasks()
-            .map_err(|_| AddProcessError::ProcfsRaceBestEffort)?
-        {
-            match thread {
-                Ok(thread) => {
-                    self.metadata_provider
-                        .lock()
-                        .unwrap()
-                        .register_task(TaskKey {
-                            pid,
-                            tid: thread.tid,
-                        });
-                }
-                Err(e) => {
-                    warn!("failed to get thread info due to {:?}", e);
+        if self.preload_thread_metadata {
+            // Best effort, failing here won't be an issue for profiling.
+            for thread in proc
+                .tasks()
+                .map_err(|_| AddProcessError::ProcfsRaceBestEffort)?
+            {
+                match thread {
+                    Ok(thread) => {
+                        self.metadata_provider
+                            .lock()
+                            .unwrap()
+                            .register_task(TaskKey {
+                                pid,
+                                tid: thread.tid,
+                            });
+                    }
+                    Err(e) => {
+                        warn!("failed to get thread info due to {:?}", e);
+                    }
                 }
             }
         }
