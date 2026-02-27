@@ -18,11 +18,11 @@ use crate::unwind_info::types::*;
 
 #[derive(Debug, Error)]
 pub enum UnwindInfoError {
-    #[error("no eh_frame section found")]
+    #[error("no .eh_frame section found")]
     NoEhFrameSection,
     #[error("object file could not be parsed due to {0}")]
     ParsingObjectFile(String),
-    #[error("no text section found")]
+    #[error("no .text section found")]
     NoTextSection,
     #[error("no functions found in .eh_frame data")]
     NoFunctionsFoundInEhFrameData,
