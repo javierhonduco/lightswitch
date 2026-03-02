@@ -58,6 +58,33 @@ $ cargo test
 $ nix run .#vmtest
 ```
 
+Live mode
+---------
+Run with `--live` to view a live flamegraph in the terminal (powered by [flamelens](https://github.com/YS-L/flamelens)):
+
+```shell
+$ sudo lightswitch --live --pids $(pidof myapp)
+```
+
+### Key bindings
+
+#### Flamegraph
+
+Key | Action
+--- | ---
+`hjkl` / arrow keys | Navigate cursor
+`f` / `b` | Page down / up
+`G` / `g` | Scroll to bottom / top
+`Enter` | Zoom in on selected frame
+`Esc` | Reset zoom
+`/` | Search (regex)
+`#` | Search for selected frame
+`n` / `N` | Next / previous search match
+`r` | Reset view
+`Tab` | Switch between flamegraph and top view
+`z` | Freeze / unfreeze flamegraph updates
+`q` | Quit
+
 Reporting bugs
 --------------
 Please share which version / revision you are running, the arguments you used, the output of `lightswitch system-info` and if relevant, the logs with `--logging=debug`. If you suspect there is a bug in the unwinders, adding `--bpf-logging` and sharing the output from `bpftool prog tracelog` or `/sys/kernel/debug/tracing/trace_pipe` will be very helpful.

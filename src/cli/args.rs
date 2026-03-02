@@ -168,6 +168,8 @@ pub(crate) struct CliArgs {
         help = "Read metadata for all threads when a new process is detected. This might be slow in older kernels."
     )]
     pub(crate) preload_thread_metadata: bool,
+    #[arg(long, help = "Launch live flamegraph TUI")]
+    pub(crate) live: bool,
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
 }
