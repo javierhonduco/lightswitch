@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 #[allow(clippy::all)]
 pub mod pprof {
     include!(concat!(env!("OUT_DIR"), "/perftools.profiles.rs"));
@@ -16,17 +14,14 @@ pub struct PprofBuilder {
     duration: Duration,
     freq_in_hz: i64,
 
-    known_mappings: HashMap<u64, u64>,
+    known_mappings: HashMap<i64, u64>,
     mappings: Vec<pprof::Mapping>,
 
     known_strings: HashMap<String, i64>,
     string_table: Vec<String>,
 
-    /// (address, mapping_id) => location_id
-    known_locations: HashMap<(u64, u64), u64>,
     locations: Vec<pprof::Location>,
 
-    known_functions: HashMap<i64, u64>,
     pub functions: Vec<pprof::Function>,
 
     samples: Vec<pprof::Sample>,
@@ -74,16 +69,10 @@ impl PprofBuilder {
 
             known_mappings: HashMap::new(),
             mappings: Vec::new(),
-
             known_strings: HashMap::new(),
             string_table: Vec::new(),
-
-            known_locations: HashMap::new(),
             locations: Vec::new(),
-
-            known_functions: HashMap::new(),
             functions: Vec::new(),
-
             samples: Vec::new(),
         }
     }
@@ -186,23 +175,17 @@ impl PprofBuilder {
         let id = self.functions.len() as u64 + 1;
         let name_idx = self.get_or_insert_string(func_name);
 
-        let function: pprof::Function = pprof::Function {
+        let function = pprof::Function {
             id,
             name: name_idx,
-            system_name: name_idx,
+            system_name: self.get_or_insert_string(""),
             filename: self.get_or_insert_string(&filename.unwrap_or("".to_string())),
             ..Default::default()
         };
 
-        match self.known_functions.entry(name_idx) {
-            Entry::Occupied(o) => *o.get(),
-            Entry::Vacant(v) => {
-                let id = self.functions.len() as u64 + 1;
-                v.insert(id);
-                self.functions.push(function);
-                id
-            }
-        }
+        self.functions.push(function);
+
+        id
     }
 
     pub fn add_line(
@@ -212,14 +195,12 @@ impl PprofBuilder {
         line: Option<u32>,
     ) -> (pprof::Line, u64) {
         let function_id = self.add_function(func_name, file_name);
-        (
-            pprof::Line {
-                function_id,
-                line: line.unwrap_or(0) as i64,
-                column: 0,
-            },
+        let line = pprof::Line {
             function_id,
-        )
+            line: line.unwrap_or(0) as i64,
+            column: 0,
+        };
+        (line, function_id)
     }
 
     pub fn add_location(&mut self, address: u64, mapping_id: u64, lines: Vec<pprof::Line>) -> u64 {
@@ -233,49 +214,42 @@ impl PprofBuilder {
             is_folded: false, // only used for local symbolisation.
         };
 
-        let unique_id = (address, mapping_id);
-
-        match self.known_locations.entry(unique_id) {
-            Entry::Occupied(o) => *o.get(),
-            Entry::Vacant(v) => {
-                let id = self.locations.len() as u64 + 1;
-                v.insert(id);
-                self.locations.push(location);
-                id
-            }
-        }
+        self.locations.push(location);
+        id
     }
 
     /// Adds a memory mapping. The id of the mapping is derived from the hash of
     /// the code region and should be unique.
     pub fn add_mapping(
         &mut self,
-        id: u64,
         start: u64,
         end: u64,
         offset: u64,
         filename: &str,
         build_id: &str,
     ) -> u64 {
-        let mapping = pprof::Mapping {
-            id,
-            memory_start: start,
-            memory_limit: end,
-            file_offset: offset,
-            filename: self.get_or_insert_string(filename),
-            build_id: self.get_or_insert_string(build_id),
-            has_functions: false,
-            has_filenames: false,
-            has_line_numbers: false,
-            has_inline_frames: false,
-        };
+        let build_id = self.get_or_insert_string(build_id);
 
-        match self.known_mappings.entry(mapping.id) {
+        match self.known_mappings.entry(build_id) {
             Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
                 let id = self.mappings.len() as u64 + 1;
                 v.insert(id);
+                let mapping = pprof::Mapping {
+                    id,
+                    memory_start: start,
+                    memory_limit: end,
+                    file_offset: offset,
+                    filename: self.get_or_insert_string(filename),
+                    build_id,
+                    has_functions: false,
+                    has_filenames: false,
+                    has_line_numbers: false,
+                    has_inline_frames: false,
+                };
+
                 self.mappings.push(mapping);
+
                 id
             }
         }
@@ -383,11 +357,15 @@ mod tests {
     fn test_mappings() {
         let mut pprof = PprofBuilder::new(SystemTime::now(), Duration::from_secs(5), 27);
         assert_eq!(
-            pprof.add_mapping(0, 0x100, 0x200, 0x0, "file.so", "sha256-abc"),
+            pprof.add_mapping(0x100, 0x200, 0x0, "file.so", "sha256-abc"),
             1
         );
         assert_eq!(
-            pprof.add_mapping(1, 0x200, 0x400, 0x100, "libc.so", "sha256-bad"),
+            pprof.add_mapping(0x100, 0x200, 0x0, "file.so", "sha256-abc"),
+            1
+        );
+        assert_eq!(
+            pprof.add_mapping(0x200, 0x400, 0x100, "libc.so", "sha256-bad"),
             2
         );
         assert_eq!(pprof.mappings[0].memory_start, 0x100);
@@ -395,6 +373,7 @@ mod tests {
             pprof.mappings[0].filename,
             pprof.string_id("file.so").unwrap()
         );
+        assert_eq!(pprof.mappings.len(), 2);
     }
 
     #[test]
@@ -404,11 +383,11 @@ mod tests {
         let (line, function_id) = pprof.add_line("test-line", Some("test-file".into()), Some(42));
 
         assert_eq!(pprof.add_location(0x123, 0x1111, vec![line]), 1);
-        assert_eq!(pprof.add_location(0x123, 0x1111, vec![line]), 1);
-        assert_eq!(pprof.add_location(0x256, 0x2222, vec![line]), 2);
-        assert_eq!(pprof.add_location(0x512, 0x3333, vec![line]), 3);
+        assert_eq!(pprof.add_location(0x123, 0x1111, vec![line]), 2);
+        assert_eq!(pprof.add_location(0x256, 0x2222, vec![line]), 3);
+        assert_eq!(pprof.add_location(0x512, 0x3333, vec![line]), 4);
 
-        assert_eq!(pprof.locations.len(), 3);
+        assert_eq!(pprof.locations.len(), 4);
         assert_eq!(
             pprof.locations[0],
             pprof::Location {
@@ -464,7 +443,7 @@ mod tests {
     fn test_profile() {
         let mut pprof = PprofBuilder::new(SystemTime::now(), Duration::from_secs(5), 27);
         let raw_samples = vec![
-            (vec![123], 200),
+            (vec![123_u64], 200),
             (vec![0, 20, 30, 40, 50], 900),
             (vec![1, 2, 3, 4, 5, 99999], 2000),
         ];
@@ -475,7 +454,6 @@ mod tests {
 
             for (i, addr) in raw_sample.0.into_iter().enumerate() {
                 let mapping_id: u64 = pprof.add_mapping(
-                    if addr == 0 { 1 } else { addr }, // id 0 is reserved and can't be used.
                     (i * 100) as u64,
                     (i * 100 + 100) as u64,
                     0,
@@ -504,7 +482,7 @@ mod tests {
     fn test_encode_decode() {
         let mut pprof = PprofBuilder::new(SystemTime::now(), Duration::from_secs(5), 27);
         pprof.add_function("func1", None);
-        let mapping_id = pprof.add_mapping(2, 0x33, 0x66, 0x54, "prof.so", "fake-buildid");
+        let mapping_id = pprof.add_mapping(0x33, 0x66, 0x54, "prof.so", "fake-buildid");
         let location_ids = vec![pprof.add_location(0x33, mapping_id, vec![])];
         pprof.add_sample(location_ids, 1, &[]);
 
