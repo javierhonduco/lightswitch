@@ -1537,7 +1537,7 @@ impl Profiler {
     /// information in a BPF map in bytes.
     fn unwind_info_size_bytes(unwind_info_len: usize) -> u64 {
         let overhead = 1.02; // Account for internal overhead of the BPF maps
-        ((unwind_info_len * 8 * 8) as f64 * overhead) as u64
+        ((unwind_info_len * 8) as f64 * overhead) as u64
     }
 
     fn add_unwind_information_for_executable(
@@ -2226,6 +2226,12 @@ impl Profiler {
 mod tests {
     use crate::bpf::profiler_skel::ProfilerMaps;
     use crate::profiler::*;
+
+    #[test]
+    fn test_unwind_info_size() {
+        assert_eq!(Profiler::unwind_info_size_bytes(1), 8);
+        assert_eq!(Profiler::unwind_info_size_bytes(100), 816);
+    }
 
     #[test]
     fn test_bpf_mappings_creation_and_deletion() {
