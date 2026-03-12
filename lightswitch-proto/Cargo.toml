@@ -11,7 +11,7 @@ prost = "0.14"
 thiserror = { workspace = true }
 
 [build-dependencies]
-prost-build = "0.14.1"
+prost-build = "0.14.3"
 protox = "0.9.1"
 
 [package.metadata.cargo-shear]
