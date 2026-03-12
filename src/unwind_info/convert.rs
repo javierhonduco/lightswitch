@@ -218,9 +218,10 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                             }
                         };
 
-                        match row.register(frame_pointer) {
-                            gimli::RegisterRule::Undefined => {}
-                            gimli::RegisterRule::Offset(offset) => {
+                        let fp = row.register(frame_pointer);
+                        match fp {
+                            Some(gimli::RegisterRule::Undefined) => {}
+                            Some(gimli::RegisterRule::Offset(offset)) => {
                                 compact_row.rbp_type = RbpType::CfaOffset;
 
                                 match i16::try_from(offset) {
@@ -232,19 +233,19 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                                     }
                                 }
                             }
-                            gimli::RegisterRule::Register(_reg) => {
+                            Some(gimli::RegisterRule::Register(_reg)) => {
                                 compact_row.rbp_type = RbpType::Register;
                             }
-                            gimli::RegisterRule::Expression(_) => {
+                            Some(gimli::RegisterRule::Expression(_)) => {
                                 compact_row.rbp_type = RbpType::Expression;
                             }
                             _ => {
-                                // print!(", rbp unsupported {:?}", rbp);
+                                debug!("unsupported frame pointer {:?}", fp);
                             }
                         }
 
                         if row.register(fde.cie().return_address_register())
-                            == gimli::RegisterRule::Undefined
+                            == Some(gimli::RegisterRule::Undefined)
                         {
                             compact_row.rbp_type = RbpType::UndefinedReturnAddress;
                         }
