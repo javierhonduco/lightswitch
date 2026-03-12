@@ -1,99 +1,106 @@
 name: release
 on:
-  push:
-    tags:
-      - "v*.*.*"
-    # branches:
-    #   - main
-  # pull_request:
+    push:
+        tags:
+            - "v*.*.*"
+        # branches:
+        #   - main
+    # pull_request:
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        config: [
-          {os: ubuntu-22.04, target: x86_64-unknown-linux-gnu},
-          {os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu}
-        ]
+    build:
+        strategy:
+            matrix:
+                config:
+                    [
+                        { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu },
+                        {
+                            os: ubuntu-22.04-arm,
+                            target: aarch64-unknown-linux-gnu,
+                        },
+                    ]
 
-    runs-on: ${{ matrix.config.os }}
-    env:
-      TARGET: "${{ matrix.config.target }}"
-    permissions:
-        id-token: write
-        contents: read
-        packages: write
+        runs-on: ${{ matrix.config.os }}
+        env:
+            TARGET: "${{ matrix.config.target }}"
+        permissions:
+            id-token: write
+            contents: read
+            packages: write
 
-    steps:
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-    - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
-    - uses: DeterminateSystems/flakehub-cache-action@b346310c0af974cf01100bfb63602580e7f9f97a # v2
-    - name: Show nix version
-      run: nix --version
-    - name: Set up nix dev env
-      run: nix develop --command echo 0
-    - name: Run `cargo test`
-      run: nix develop --command cargo test --workspace
-    - name: Build container image
-      run: nix build .#container
-    - name: Upload container image to GitHub's container registry
-      run: |
-        nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:${{ github.ref_name }}
-        nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:latest
-    - name: Upload container
-      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-      with:
-        name: lightswitch-container-${{ matrix.config.target }}
-        path: ./result
-    - name: Build `lightswitch` statically linked with glibc
-      run: nix develop --ignore-environment --keep TARGET --command bash -c 'RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target $TARGET'
-    - name: Upload static binary
-      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-      with:
-        name: lightswitch-static-glibc-${{ matrix.config.target }}
-        path: ./target/${{ matrix.config.target }}/release/lightswitch
+        steps:
+            - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+            - uses: DeterminateSystems/flakehub-cache-action@b346310c0af974cf01100bfb63602580e7f9f97a # v2
+            - name: Show nix version
+              run: nix --version
+            - name: Set up nix dev env
+              run: nix develop --command echo 0
+            - name: Run `cargo test`
+              run: nix develop --command cargo test --workspace
+            - name: Build container image
+              run: nix build .#container
+            - name: Upload container image to GitHub's container registry
+              run: |
+                  nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:${{ github.ref_name }}
+                  nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:latest
+            - name: Upload container
+              uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+              with:
+                  name: lightswitch-container-${{ matrix.config.target }}
+                  path: ./result
+            - name: Build `lightswitch` statically linked with glibc
+              run: nix develop --ignore-environment --keep TARGET --command bash -c 'RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target $TARGET'
+            - name: Upload static binary
+              uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+              with:
+                  name: lightswitch-static-glibc-${{ matrix.config.target }}
+                  path: ./target/${{ matrix.config.target }}/release/lightswitch
 
-  release:
-    runs-on: ubuntu-22.04
-    needs: [build]
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
-      - name: Display artifacts structure
-        run: tree -h
-      - name: Rename artifacts
-        run: |
-          mkdir renamed
-          cp lightswitch-container-x86_64-unknown-linux-gnu/result renamed/lightswitch-container-x86_64-unknown-linux-gnu
-          cp lightswitch-static-glibc-x86_64-unknown-linux-gnu/lightswitch renamed/lightswitch-static-glibc-x86_64-unknown-linux-gnu
-          cp lightswitch-container-aarch64-unknown-linux-gnu/result renamed/lightswitch-container-aarch64-unknown-linux-gnu
-          cp lightswitch-static-glibc-aarch64-unknown-linux-gnu/lightswitch renamed/lightswitch-static-glibc-aarch64-unknown-linux-gnu
+    release:
+        runs-on: ubuntu-22.04
+        needs: [build]
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+            - name: Display artifacts structure
+              run: tree -h
+            - name: Rename artifacts
+              run: |
+                  mkdir renamed
+                  cp lightswitch-container-x86_64-unknown-linux-gnu/result renamed/lightswitch-container-x86_64-unknown-linux-gnu
+                  cp lightswitch-static-glibc-x86_64-unknown-linux-gnu/lightswitch renamed/lightswitch-static-glibc-x86_64-unknown-linux-gnu
+                  cp lightswitch-container-aarch64-unknown-linux-gnu/result renamed/lightswitch-container-aarch64-unknown-linux-gnu
+                  cp lightswitch-static-glibc-aarch64-unknown-linux-gnu/lightswitch renamed/lightswitch-static-glibc-aarch64-unknown-linux-gnu
 
-      - name: Create release
-        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
-        with:
-          files: |
-            renamed/lightswitch-container-x86_64-unknown-linux-gnu
-            renamed/lightswitch-static-glibc-x86_64-unknown-linux-gnu
-            renamed/lightswitch-container-aarch64-unknown-linux-gnu
-            renamed/lightswitch-static-glibc-aarch64-unknown-linux-gnu
+            - name: Create release
+              uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
+              with:
+                  files: |
+                      renamed/lightswitch-container-x86_64-unknown-linux-gnu
+                      renamed/lightswitch-static-glibc-x86_64-unknown-linux-gnu
+                      renamed/lightswitch-container-aarch64-unknown-linux-gnu
+                      renamed/lightswitch-static-glibc-aarch64-unknown-linux-gnu
 
-  publish:
-    runs-on: ubuntu-22.04
-    needs: [build]
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
-      - uses: DeterminateSystems/flakehub-cache-action@b346310c0af974cf01100bfb63602580e7f9f97a # v2
-      - name: Show nix version
-        run: nix --version
-      - name: Set up nix dev env
-        run: nix develop --command echo 0
-      - name: Publish workspace dependencies
-        run:  nix develop --command cargo publish --workspace --exclude lightswitch --no-verify --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-      - name: Publish main crate
-        run:  nix develop --command cargo publish --package lightswitch --no-verify --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        
+    publish:
+        runs-on: ubuntu-22.04
+        needs: [build]
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+            - uses: DeterminateSystems/flakehub-cache-action@b346310c0af974cf01100bfb63602580e7f9f97a # v2
+            - name: Show nix version
+              run: nix --version
+            - name: Set up nix dev env
+              run: nix develop --command echo 0
+            - name: Publish workspace dependencies
+              run: nix develop --command cargo publish --workspace --exclude lightswitch --no-verify
+              env:
+                  CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+            - name: Publish main crate
+              run: nix develop --command cargo publish --package lightswitch --no-verify
+              env:
+                  CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
