@@ -30,12 +30,10 @@ impl DeletionScheduler {
         let mut r = Vec::new();
 
         match self.peek() {
-            Some(ToDelete::Process(time, _, _)) => {
-                if time.elapsed() > pending_after {
-                    r.push(self.pop().unwrap())
-                }
+            Some(ToDelete::Process(time, _, _)) if time.elapsed() > pending_after => {
+                r.push(self.pop().unwrap())
             }
-            None => {}
+            _ => {}
         }
 
         r

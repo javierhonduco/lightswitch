@@ -73,7 +73,7 @@ impl GlobalMetadataProvider {
         for provider in &self.custom_system_metadata_providers {
             match provider.get_metadata() {
                 Ok(custom_system_labels) => {
-                    labels.extend(custom_system_labels.into_iter());
+                    labels.extend(custom_system_labels);
                 }
                 Err(err) => {
                     warn!("Failed to retrieve custom system metadata, error = {}", err);
@@ -84,7 +84,7 @@ impl GlobalMetadataProvider {
         for provider in &self.custom_task_metadata_providers {
             match provider.get_metadata(task_key) {
                 Ok(custom_task_labels) => {
-                    labels.extend(custom_task_labels.into_iter());
+                    labels.extend(custom_task_labels);
                 }
                 Err(err) => {
                     warn!("Failed to retrieve custom task metadata, error = {}", err);
