@@ -203,6 +203,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             && system_info
                 .available_bpf_features
                 .has_non_prealloc_hash_maps_in_tracing,
+        userspace_pid_ns_level: system_info.available_bpf_features.userspace_pid_ns_level,
         ..Default::default()
     };
 

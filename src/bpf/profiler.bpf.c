@@ -257,7 +257,7 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
     }
 
     struct task_struct *task = current_task();
-    unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
+    unsigned int level = lightswitch_config.userspace_pid_ns_level;
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
     int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
 
@@ -296,7 +296,7 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
 SEC("perf_event")
 int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     struct task_struct *task = current_task();
-    unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
+    unsigned int level = lightswitch_config.userspace_pid_ns_level;
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
     int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
 
@@ -619,7 +619,7 @@ static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_
 SEC("perf_event")
 int on_event(struct bpf_perf_event_data *ctx) {
     struct task_struct *task = current_task();
-    unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
+    unsigned int level = lightswitch_config.userspace_pid_ns_level;
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
 
     // There's no point in checking for the swapper process.

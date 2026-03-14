@@ -34,6 +34,7 @@ pub struct BpfFeatures {
     pub has_get_current_task_btf: bool,
     pub has_variable_inner_map: bool,
     pub has_non_prealloc_hash_maps_in_tracing: bool,
+    pub userspace_pid_ns_level: u32,
 }
 
 #[derive(Debug)]
@@ -252,9 +253,18 @@ fn check_bpf_features(btf_custom_path: Option<String>) -> Result<BpfFeatures> {
         let _ = skel_builder.obj_builder.btf_custom_path(btf_custom_path);
     }
 
-    let open_skel = skel_builder
+    let mut open_skel = skel_builder
         .open(&mut a)
         .map_err(|e| SystemInfoError::ErrorDetectingBpfFeatures(e.to_string()))?;
+
+    // Add the pid we get in userspace from the perspective of the pid namespace
+    // that this code runs in.
+    open_skel
+        .maps
+        .rodata_data
+        .as_deref_mut()
+        .expect("could not map .rodata")
+        .userspace_pid = std::process::id() as i32;
 
     let mut bpf_features = open_skel
         .load()
@@ -289,6 +299,7 @@ fn check_bpf_features(btf_custom_path: Option<String>) -> Result<BpfFeatures> {
         has_get_current_task_btf: bpf_features_bss.has_get_current_task_btf,
         has_variable_inner_map: has_variable_inner_map(),
         has_non_prealloc_hash_maps_in_tracing: has_non_prealloc_hash_maps_in_tracing(),
+        userspace_pid_ns_level: bpf_features_bss.userspace_pid_ns_level,
     };
 
     Ok(features)

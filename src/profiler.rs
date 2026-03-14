@@ -190,6 +190,7 @@ pub struct ProfilerConfig {
     pub btf_custom_path: Option<String>,
     pub no_prealloc_bpf_hash_maps: bool,
     pub preload_thread_metadata: bool,
+    pub userspace_pid_ns_level: u32,
 }
 
 impl Default for ProfilerConfig {
@@ -212,6 +213,7 @@ impl Default for ProfilerConfig {
             btf_custom_path: None,
             no_prealloc_bpf_hash_maps: false,
             preload_thread_metadata: false,
+            userspace_pid_ns_level: 0, // Assumes running in the root pid namespace by default
         }
     }
 }
@@ -391,6 +393,8 @@ impl Profiler {
             .lightswitch_config
             .use_btf_helpers
             .write(profiler_config.btf_custom_path.is_none());
+
+        rodata.lightswitch_config.userspace_pid_ns_level = profiler_config.userspace_pid_ns_level;
 
         if profiler_config.use_ring_buffers {
             // Set sample collecting ringbuf size based sampling frequency
