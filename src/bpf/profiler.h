@@ -77,6 +77,7 @@ struct lightswitch_config_t {
     bool use_ring_buffers;
     bool use_task_pt_regs_helper;
     bool use_btf_helpers;
+    unsigned int userspace_pid_ns_level;
 };
 
 struct unwinder_stats_t {

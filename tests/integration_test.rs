@@ -10,6 +10,7 @@ use lightswitch::collector::{AggregatorCollector, Collector, NullCollector};
 use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::AggregatedProfile;
 use lightswitch::profiler::{Profiler, ProfilerConfig};
+use lightswitch_capabilities::system_info::SystemInfo;
 use lightswitch_metadata::metadata_provider::GlobalMetadataProvider;
 
 /// Find the `nix` binary either in the $PATH or in the below hardcoded
@@ -50,9 +51,16 @@ struct TestProcess {
 
 /// Runs a test program and terminates it when the scope exits.
 impl TestProcess {
-    fn new(target: &str) -> Self {
+    fn new(target: &str, new_pid_namespace: bool) -> Self {
+        let test_executable = format!("target/nix/bin/{target}");
+        let mut command = Command::new(&test_executable);
+        if new_pid_namespace {
+            command = Command::new("unshare");
+            command.args(["--pid", "--", &test_executable]);
+        };
+
         Self {
-            child: Command::new(format!("./target/nix/bin/{target}"))
+            child: command
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
@@ -74,6 +82,7 @@ impl Drop for TestProcess {
 fn assert_any_stack_contains(
     symbolized_profile: &AggregatedProfile,
     expected_stack: &[&str],
+    expected_pid: i32,
 ) -> bool {
     for sample in symbolized_profile {
         let stack_string = sample
@@ -83,7 +92,7 @@ fn assert_any_stack_contains(
             .collect::<Vec<_>>()
             .join("::");
 
-        if stack_string.contains(&expected_stack.join("::")) {
+        if stack_string.contains(&expected_stack.join("::")) && sample.pid == expected_pid {
             return true;
         }
     }
@@ -94,9 +103,11 @@ fn assert_any_stack_contains(
 #[test]
 fn test_integration() {
     let bpf_test_debug = std::env::var("TEST_DEBUG_BPF").is_ok();
+    let system_info = SystemInfo::new(None).expect("failed to detect system info");
 
     build_test_binary("cpp-progs");
-    let cpp_proc = TestProcess::new("main_cpp_clang_O1");
+    let cpp_proc = TestProcess::new("main_cpp_clang_O1", false);
+    let cpp_proc_new_pid_ns = TestProcess::new("main_cpp_clang_O2", true);
 
     let collector = Arc::new(Mutex::new(
         Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
@@ -107,12 +118,14 @@ fn test_integration() {
         bpf_logging: bpf_test_debug,
         duration: Duration::from_secs(5),
         sample_freq: 999,
+        userspace_pid_ns_level: system_info.available_bpf_features.userspace_pid_ns_level,
         ..Default::default()
     };
     let (_stop_signal_send, stop_signal_receive) = bounded(1);
     let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
     let mut p = Profiler::new(profiler_config, stop_signal_receive, metadata_provider);
     p.profile_pids(vec![cpp_proc.pid()]);
+    p.profile_pids(vec![cpp_proc_new_pid_ns.pid()]);
     p.run(collector.clone());
     let collector = collector.lock().unwrap();
     let (raw_profile, procs, objs) = collector.finish();
@@ -128,6 +141,20 @@ fn test_integration() {
             "main",
             "__libc_start_call_main",
         ],
+        cpp_proc.pid(),
+    ));
+
+    assert!(assert_any_stack_contains(
+        &symbolized_profile,
+        &[
+            "top2()",
+            "c2()",
+            "b2()",
+            "a2()",
+            "main",
+            "__libc_start_call_main",
+        ],
+        cpp_proc_new_pid_ns.pid(),
     ));
 }
 #[test]
