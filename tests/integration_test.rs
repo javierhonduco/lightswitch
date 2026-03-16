@@ -116,7 +116,7 @@ fn test_integration() {
     let profiler_config = ProfilerConfig {
         libbpf_debug: bpf_test_debug,
         bpf_logging: bpf_test_debug,
-        duration: Duration::from_secs(5),
+        duration: Duration::from_secs(1),
         sample_freq: 999,
         userspace_pid_ns_level: system_info.available_bpf_features.userspace_pid_ns_level,
         ..Default::default()

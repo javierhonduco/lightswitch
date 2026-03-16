@@ -48,11 +48,12 @@
               gcc -O2 main.cpp -o main_cpp_gcc_O2
               gcc -O3 main.cpp -o main_cpp_gcc_O3
 
-              clang -O1 main.cpp -o main_cpp_clang_O1
-              clang -O2 main.cpp -o main_cpp_clang_O2
-              clang -O3 main.cpp -o main_cpp_clang_O3
-
-              clang -O3 -fno-omit-frame-pointer main.cpp -o main_cpp_clang_no_omit_fp_O3
+              # Omit frame pointers as it seems like clang on arm64 won't do this...
+              clang -O1 -fomit-frame-pointer main.cpp -o main_cpp_clang_O1
+              clang -O2 -fomit-frame-pointer main.cpp -o main_cpp_clang_O2
+              clang -O3 -fomit-frame-pointer main.cpp -o main_cpp_clang_O3
+              
+	clang -O3 -fno-omit-frame-pointer main.cpp -o main_cpp_clang_no_omit_fp_O3
 
               ${if system == "aarch64-linux" then "clang -O3 -mbranch-protection=pac-ret main.cpp -o main_cpp_clang_pac" else ""}
             '';
@@ -124,6 +125,22 @@
             '';
             buildInputs = [
               pkgs.go
+            ];
+          };
+
+          test-rust-progs = pkgs.stdenv.mkDerivation {
+            name = "build-test-rust-prog";
+            src = ./.;
+            buildPhase = ''
+              cd src/rust
+              rustc src/main.rs
+            '';
+            installPhase = ''
+              mkdir -p $out/bin
+              cp main $out/bin/main_rust
+            '';
+            buildInputs = [
+              pkgs.rust-bin.stable.latest.default
             ];
           };
 

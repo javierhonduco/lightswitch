@@ -514,18 +514,17 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 #endif
 
 #ifdef __TARGET_ARCH_arm64
-        // Special handling for leaf frame.
         if (unwind_state->sample.stack.ulen == 0) {
+            // Leaf frame: LR register holds the return address.
             previous_rip = unwind_state->lr;
         } else {
-            // This is guaranteed by the Aarch64 ABI.
-            previous_rip_addr = previous_rbp_addr + 8;
+            // No frame record: x29 was not saved. rbp_offset holds the
+            // CFA-relative offset of the saved LR (x30).
+            previous_rip_addr = previous_rsp + found_rbp_offset;
         }
 #endif
 
-        int err =
-            bpf_probe_read_user(&previous_rip, 8, (void *)(previous_rip_addr));
-
+        int err = bpf_probe_read_user(&previous_rip, 8, (void *)(previous_rip_addr));
         if (previous_rip == 0) {
             if (err == 0) {
                 LOG("[warn] previous_rip=0, maybe this is a JIT segment?");

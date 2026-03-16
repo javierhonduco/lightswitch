@@ -249,6 +249,25 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                         {
                             compact_row.rbp_type = RbpType::UndefinedReturnAddress;
                         }
+
+                        // On AArch64 without a frame record (x29 not saved), store the
+                        // return address register's (x30) CFA-relative offset in rbp_offset
+                        // so the BPF unwinder can locate the saved LR directly.
+                        if object_file.architecture() == Architecture::Aarch64
+                        {
+                            if let Some(gimli::RegisterRule::Offset(offset)) =
+                                row.register(fde.cie().return_address_register())
+                            {
+                                match i16::try_from(offset) {
+                                    Ok(off) => {
+                                        compact_row.rbp_offset = off;
+                                    }
+                                    Err(_) => {
+                                        compact_row.rbp_type = RbpType::OffsetDidNotFit;
+                                    }
+                                }
+                            }
+                        }
                     }
                     _ => continue,
                 }
