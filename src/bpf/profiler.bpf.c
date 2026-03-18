@@ -12,6 +12,9 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
+#define PF_EXITING		0x00000004	/* Getting shut down */
+
+
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
     __uint(max_entries, 256 * 1024 /* 256 KB */);
@@ -292,6 +295,47 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
     }
 }
 
+#define DNAME_INLINE_LEN 32
+#define VM_EXEC		0x00000004
+
+char d_iname[DNAME_INLINE_LEN] = {0};
+
+
+struct callback_ctx {
+	int dummy;
+};
+
+static long check_vma(struct task_struct *task, struct vm_area_struct *vma,
+		      struct callback_ctx *data)
+{
+    unsigned int level = lightswitch_config.userspace_pid_ns_level;
+    int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
+
+	if (vma->vm_file) {
+		bpf_probe_read_kernel_str(d_iname, DNAME_INLINE_LEN - 1,
+					  vma->vm_file->f_path.dentry->d_shortname.string);
+		bpf_printk("-- vma name: %s, pid %d exeec %d", d_iname, per_process_id, vma->vm_flags & VM_EXEC);
+	} else {
+	    bpf_printk("!! vma does not have a file pid %d anon_vma: %d exec %d", per_process_id, vma->anon_vma != NULL, vma->vm_flags & VM_EXEC);
+	}
+
+	data->dummy = task->pid;
+	return 0;
+}
+
+bool is_exiting(struct task_struct *task) {
+    /* PF_EXITING is set once do_exit() is entered */
+    if (task->flags & PF_EXITING)
+        return true;
+
+    /* exit_code is set during exit.
+       For a more granular check: */
+    if (task->exit_state != 0)
+        return true;
+
+    return false;
+}
+
 // The unwinding machinery lives here.
 SEC("perf_event")
 int dwarf_unwind(struct bpf_perf_event_data *ctx) {
@@ -498,7 +542,17 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
             int ret =
                 bpf_probe_read_user(&previous_rbp, 8, (void *)(previous_rbp_addr));
             if (ret < 0) {
-                LOG("[error] previous_rbp read failed with %d", ret);
+                {
+                    struct callback_ctx _data = {};
+                   	int find_vma_err = bpf_find_vma(task, previous_rbp_addr, check_vma, &_data, 0);
+                    bpf_printk("-- exiting? %d", is_exiting(task));
+                    bpf_printk("-- rbp@%llx find_vma_err: %d frame: %d", previous_rbp_addr, find_vma_err, unwind_state->sample.stack.ulen);
+                    int contained = task->mm->start_stack >= previous_rbp_addr && previous_rbp_addr >=PT_REGS_SP(ctx);
+                    bpf_printk("-- stack %llx, start_stack %llx rsp: %llx contained %d", task->stack, task->mm->start_stack, PT_REGS_SP(ctx), contained);
+                    bpf_printk("-- start time %d micro", (bpf_ktime_get_boot_ns() - task->start_boottime) / 1000);
+
+                }
+                bpf_printk("[error] previous_rbp read failed with %d", ret);
                 bump_unwind_error_previous_rbp_read();
                 return 1;
             }
@@ -654,5 +708,18 @@ int on_event(struct bpf_perf_event_data *ctx) {
     send_event(&event, ctx);
     return 0;
 }
+
+
+SEC("tracepoint/sched/sched_process_exec")
+int handle_exec() {
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+    unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
+    int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
+
+    bpf_printk("!! process exec, pid %d process_is_known %d start time %d micro task bootime %llu ns", per_process_id, process_is_known(per_process_id), (bpf_ktime_get_boot_ns() - task->start_boottime) / 1000, task->start_boottime);
+    return 0;
+}
+
+
 
 char LICENSE[] SEC("license") = "Dual MIT/GPL";

@@ -804,6 +804,13 @@ impl Profiler {
         self.add_kernel_modules();
 
         self.tracers.attach().expect("attach tracers");
+        self._links.push(
+            self.native_unwinder
+                .progs
+                .handle_exec
+                .attach()
+                .expect("attach exec tracer"),
+        );
 
         let chan_send = self.new_proc_chan_send.clone();
         let raw_sample_send = self.raw_sample_send.clone();
