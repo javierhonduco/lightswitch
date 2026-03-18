@@ -240,26 +240,21 @@ struct PyroscopeSample {
     raw_profile: String,
 }
 
-/// POSTs pprof-encoded profiles to a Pyroscope server's Push endpoint.
-impl Collector for PyroscopeCollector {
-    fn collect(
-        &mut self,
-        profile: RawAggregatedProfile,
+impl PyroscopeCollector {
+    fn build_series(
+        &self,
+        raw_profile: RawAggregatedProfile,
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
-    ) {
-        let _span = span!(Level::DEBUG, "PyroscopeCollector.collect").entered();
-
-        let mut profile = raw_to_processed(&profile, procs, objs);
+        service_name: &str,
+    ) -> Option<PyroscopeSeries> {
+        let mut profile = raw_to_processed(&raw_profile, procs, objs);
         if self.local_symbolizer {
             profile = symbolize_profile(&profile, procs, objs);
         }
         if profile.is_empty() {
-            return;
+            return None;
         }
-
-        let mut series = Vec::new();
-        let mut buffer = Vec::new();
 
         let pprof_profile = to_pprof(
             profile,
@@ -270,33 +265,38 @@ impl Collector for PyroscopeCollector {
             self.profile_frequency_hz,
         );
 
+        let mut buffer = Vec::new();
         let mut gz_encoder = GzEncoder::new(&mut buffer, Compression::default());
         if let Err(e) = gz_encoder.write_all(&pprof_profile.encode_to_vec()) {
             tracing::error!("failed to write gzipped pprof with {:?}", e);
-            return;
+            return None;
         }
         let gzipped_profile = match gz_encoder.finish() {
             Ok(prof) => prof,
             Err(e) => {
                 tracing::error!("failed to gzip pprof with {:?}", e);
-                return;
+                return None;
             }
         };
 
         let base64_profile = base64::engine::general_purpose::STANDARD.encode(gzipped_profile);
-        series.push(PyroscopeSeries {
+        Some(PyroscopeSeries {
             labels: vec![
                 PyroscopeLabel::new("__name__", "process_cpu"),
-                PyroscopeLabel::new("service_name", self.service_name.clone()),
+                PyroscopeLabel::new("service_name", service_name),
             ],
             samples: vec![PyroscopeSample {
                 id: Uuid::new_v4().to_string().to_uppercase(),
                 raw_profile: base64_profile,
             }],
-        });
+        })
+    }
 
+    fn push_series(&self, series: Vec<PyroscopeSeries>) {
+        if series.is_empty() {
+            return;
+        }
         let payload = PyroscopePushRequest { series };
-
         let mut request = self.client.post(self.push_url.clone()).json(&payload);
         if let Some(tenant_id) = &self.tenant_id {
             request = request.header("X-Scope-OrgID", tenant_id.clone());
@@ -309,6 +309,23 @@ impl Collector for PyroscopeCollector {
             Err(e) => tracing::error!("pyroscope push error: {:?}", e),
         }
     }
+}
+
+/// POSTs pprof-encoded profiles to a Pyroscope server's Push endpoint.
+impl Collector for PyroscopeCollector {
+    fn collect(
+        &mut self,
+        profile: RawAggregatedProfile,
+        procs: &HashMap<i32, ProcessInfo>,
+        objs: &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        let _span = span!(Level::DEBUG, "PyroscopeCollector.collect").entered();
+        let series: Vec<_> = self
+            .build_series(profile, procs, objs, &self.service_name.clone())
+            .into_iter()
+            .collect();
+        self.push_series(series);
+    }
 
     fn finish(
         &self,
@@ -318,6 +335,31 @@ impl Collector for PyroscopeCollector {
         &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
         (AggregatedProfile::new(), &self.procs, &self.objs)
+    }
+}
+
+impl PodAwareCollector for PyroscopeCollector {
+    fn collect_by_pod(
+        &mut self,
+        profiles: Vec<(Option<PodLabels>, RawAggregatedProfile)>,
+        procs: &HashMap<i32, ProcessInfo>,
+        objs: &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        let _span = span!(Level::DEBUG, "PyroscopeCollector.collect_by_pod").entered();
+
+        let mut series = Vec::new();
+
+        for (pod_labels, raw_profile) in profiles {
+            let service_name = match &pod_labels {
+                Some(pl) => format!("{}/{}/{}", pl.node_name, pl.namespace, pl.pod_name),
+                None => "host".to_string(),
+            };
+            if let Some(s) = self.build_series(raw_profile, procs, objs, &service_name) {
+                series.push(s);
+            }
+        }
+
+        self.push_series(series);
     }
 }
 
@@ -424,6 +466,104 @@ impl Collector for LiveCollector {
         if !folded.trim().is_empty() {
             let _ = self.tx.send(folded);
         }
+    }
+
+    fn finish(
+        &self,
+    ) -> (
+        AggregatedProfile,
+        &HashMap<i32, ProcessInfo>,
+        &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        (AggregatedProfile::new(), &self.procs, &self.objs)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PodLabels {
+    pub node_name: String,
+    pub namespace: String,
+    pub pod_name: String,
+}
+
+pub trait PodAwareCollector: Collector {
+    fn collect_by_pod(
+        &mut self,
+        profiles: Vec<(Option<PodLabels>, RawAggregatedProfile)>,
+        procs: &HashMap<i32, ProcessInfo>,
+        objs: &HashMap<ExecutableId, ObjectFileInfo>,
+    );
+}
+
+pub struct K8sCollector {
+    metadata_provider: ThreadSafeGlobalMetadataProvider,
+    inner: Box<dyn PodAwareCollector + Send>,
+    node_name: String,
+    procs: HashMap<i32, ProcessInfo>,
+    objs: HashMap<ExecutableId, ObjectFileInfo>,
+}
+
+impl K8sCollector {
+    pub fn new(
+        metadata_provider: ThreadSafeGlobalMetadataProvider,
+        inner: Box<dyn PodAwareCollector + Send>,
+        node_name: String,
+    ) -> Self {
+        Self {
+            metadata_provider,
+            inner,
+            node_name,
+            procs: HashMap::new(),
+            objs: HashMap::new(),
+        }
+    }
+
+    fn extract_pod_labels(&self, labels: &[lightswitch_metadata::types::MetadataLabel]) -> Option<PodLabels> {
+        let mut namespace = None;
+        let mut pod_name = None;
+        for label in labels {
+            if let lightswitch_metadata::types::MetadataLabelValue::String(ref v) = label.value {
+                match label.key.as_str() {
+                    "k8s.namespace.name" => namespace = Some(v.clone()),
+                    "k8s.pod.name" => pod_name = Some(v.clone()),
+                    _ => {}
+                }
+            }
+        }
+        Some(PodLabels {
+            node_name: self.node_name.clone(),
+            namespace: namespace?,
+            pod_name: pod_name?,
+        })
+    }
+}
+
+impl Collector for K8sCollector {
+    fn collect(
+        &mut self,
+        profile: RawAggregatedProfile,
+        procs: &HashMap<i32, ProcessInfo>,
+        objs: &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        let _span = span!(Level::DEBUG, "K8sCollector.collect").entered();
+
+        let mut grouped: HashMap<Option<PodLabels>, RawAggregatedProfile> = HashMap::new();
+
+        {
+            let mut provider = self.metadata_provider.lock().unwrap();
+            for sample in profile {
+                let task_key = lightswitch_metadata::types::TaskKey {
+                    pid: sample.sample.pid,
+                    tid: sample.sample.tid,
+                };
+                let labels = provider.get_metadata(task_key);
+                let pod_key = self.extract_pod_labels(&labels);
+                grouped.entry(pod_key).or_default().push(sample);
+            }
+        }
+
+        let profiles: Vec<(Option<PodLabels>, RawAggregatedProfile)> = grouped.into_iter().collect();
+        self.inner.collect_by_pod(profiles, procs, objs);
     }
 
     fn finish(

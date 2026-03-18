@@ -177,6 +177,10 @@ pub(crate) struct CliArgs {
     pub(crate) preload_thread_metadata: bool,
     #[arg(long, help = "Launch live flamegraph TUI")]
     pub(crate) live: bool,
+    #[arg(long, help = "Enable Kubernetes pod-level profiling")]
+    pub(crate) kubernetes: bool,
+    #[arg(long, help = "Node name for Kubernetes metadata (required with --kubernetes)")]
+    pub(crate) node_name: Option<String>,
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
 }

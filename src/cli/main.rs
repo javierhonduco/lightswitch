@@ -18,6 +18,7 @@ use lightswitch::collector::{
     AggregatorCollector, Collector, LiveCollector, NullCollector, PyroscopeCollector,
     StreamingCollector,
 };
+use lightswitch::collector::K8sCollector;
 use lightswitch::debug_info::DebugInfoManager;
 use nix::unistd::Uid;
 use tracing::{debug, error, info, Level};
@@ -85,6 +86,13 @@ fn start_deadlock_detector() {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // kube-rs and reqwest both bring in rustls with different crypto providers
+    // (ring and aws-lc-rs). When both are present, rustls cannot auto-detect
+    // which to use. Explicitly install aws-lc-rs as the process-wide default
+    // to match what reqwest was using before kube-rs was added.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("failed to install rustls crypto provider");
     panic_thread_hook();
     let args = CliArgs::parse();
     if args.enable_deadlock_detector {
@@ -166,6 +174,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let metadata_provider: ThreadSafeGlobalMetadataProvider =
         Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+
+    let node_name = if args.kubernetes {
+        let node_name = args.node_name.clone().expect("--node-name is required when --kubernetes is enabled");
+        let k8s_cache = lightswitch_metadata::containers::k8s_metadata_cache::K8sMetadataCache::new(node_name.clone())
+            .expect("failed to create k8s metadata cache");
+        let k8s_provider = lightswitch_metadata::containers::k8s_metadata_provider::K8sMetadataProvider::new(k8s_cache);
+        metadata_provider.lock().unwrap().register_task_metadata_providers(vec![Box::new(k8s_provider)]);
+        info!("Kubernetes metadata provider registered for node {}", node_name);
+        node_name
+    } else {
+        String::new()
+    };
 
     let token = args.token;
     let debug_info_manager: Box<dyn DebugInfoManager + Send> = match args.debug_info_backend {
@@ -284,15 +304,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                 args.sample_freq,
                 metadata_provider.clone(),
             )),
-            ProfileSender::Pyroscope => Box::new(PyroscopeCollector::new(
-                args.symbolizer == Symbolizer::Local,
-                &server_url,
-                &args.pyroscope_app_name,
-                args.pyroscope_tenant_id.clone(),
-                ProfilerConfig::default().session_duration,
-                args.sample_freq,
-                metadata_provider.clone(),
-            )),
+            ProfileSender::Pyroscope => {
+                let pyro = PyroscopeCollector::new(
+                    args.symbolizer == Symbolizer::Local,
+                    &server_url,
+                    &args.pyroscope_app_name,
+                    args.pyroscope_tenant_id.clone(),
+                    ProfilerConfig::default().session_duration,
+                    args.sample_freq,
+                    metadata_provider.clone(),
+                );
+                if args.kubernetes {
+                    Box::new(K8sCollector::new(
+                        metadata_provider.clone(),
+                        Box::new(pyro),
+                        node_name.clone(),
+                    ))
+                } else {
+                    Box::new(pyro)
+                }
+            }
         }));
 
     let mut p: Profiler = Profiler::new(
