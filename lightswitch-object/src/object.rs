@@ -6,6 +6,9 @@ use std::path::Path;
 
 use anyhow::{Result, anyhow};
 use memmap2::Mmap;
+use object::elf::ELF_NOTE_GO;
+use object::elf::NT_GO_BUILD_ID;
+use object::read::elf::NoteIterator;
 use ring::digest::{Context, Digest, SHA256};
 
 use object::Endianness;
@@ -73,7 +76,7 @@ impl fmt::Debug for Runtime {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StopUnwindingFrames {
     pub name: String,
     pub start_address: u64,
@@ -137,12 +140,9 @@ impl ObjectFile {
         }
 
         // Golang (the Go toolchain does not interpret these bytes as we do).
-        for section in object.sections() {
-            if section.name()? == ".note.go.buildid"
-                && let Ok(data) = section.data()
-            {
-                return Ok(BuildId::go_from_bytes(data)?);
-            }
+        let go_build_id = go_build_id(object)?;
+        if let Some(data) = go_build_id {
+            return Ok(BuildId::go_from_bytes(data)?);
         }
 
         // No build id (Rust, some compilers and Linux distributions).
@@ -320,9 +320,121 @@ fn sha256_digest<R: Read>(mut reader: R) -> Digest {
     context.finish()
 }
 
+/// Read a GO build id (`.note.go.buildid`), if present
+fn go_build_id<'object>(object: &'object object::File<'static>) -> Result<Option<&'object [u8]>> {
+    for section in object.sections() {
+        if section.name()? == ".note.go.buildid"
+            && let Ok(data) = section.data()
+        {
+            let notes: NoteIterator<'_, FileHeader32<Endianness>> =
+                NoteIterator::new(Endianness::Little, 4, data)?;
+
+            for note in notes {
+                let Ok(note) = note else {
+                    continue;
+                };
+
+                let name = note.name();
+                let ntype = note.n_type(Endianness::Little);
+
+                if name != ELF_NOTE_GO || ntype != NT_GO_BUILD_ID {
+                    continue;
+                }
+
+                return Ok(Some(note.desc()));
+            }
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use crate::buildid::BuildIdFlavour;
+
     use super::*;
+
+    #[test]
+    fn test_object_file_go() {
+        let object = ObjectFile::from_path(&PathBuf::from("src/testdata/main-go")).unwrap();
+        assert_eq!(object.build_id().flavour, BuildIdFlavour::Go);
+        assert_eq!(
+            object.build_id().id().unwrap(),
+            ExecutableId(0x53735856446d7731)
+        );
+        assert_eq!(
+            object.build_id().short(),
+            "SsXVDmw1FzEsmg5l2NDh/UiabaTTM9i0CJqIC0-H1/b1j3ZEiHodd5ZW4Gdd5r/-3fvFv7WY06LvLxe5AtW"
+        );
+        assert!(!object.has_debug_info());
+        assert_eq!(
+            object.go_stop_unwinding_frames(),
+            [
+                StopUnwindingFrames {
+                    name: "runtime.mstart0".to_string(),
+                    start_address: 4429120,
+                    end_address: 4429264
+                },
+                StopUnwindingFrames {
+                    name: "runtime.mstart1".to_string(),
+                    start_address: 4429264,
+                    end_address: 4429504
+                },
+                StopUnwindingFrames {
+                    name: "runtime.mstartm0".to_string(),
+                    start_address: 4429504,
+                    end_address: 4429600
+                },
+                StopUnwindingFrames {
+                    name: "runtime.goexit1".to_string(),
+                    start_address: 4454032,
+                    end_address: 4454256
+                },
+                StopUnwindingFrames {
+                    name: "runtime.goexit0".to_string(),
+                    start_address: 4454256,
+                    end_address: 4454320
+                },
+                StopUnwindingFrames {
+                    name: "runtime.mstart.abi0".to_string(),
+                    start_address: 4596448,
+                    end_address: 4596480
+                },
+                StopUnwindingFrames {
+                    name: "runtime.mcall".to_string(),
+                    start_address: 4596496,
+                    end_address: 4596592
+                },
+                StopUnwindingFrames {
+                    name: "runtime.systemstack_switch.abi0".to_string(),
+                    start_address: 4596592,
+                    end_address: 4596624
+                },
+                StopUnwindingFrames {
+                    name: "runtime.systemstack.abi0".to_string(),
+                    start_address: 4596624,
+                    end_address: 4596800
+                },
+                StopUnwindingFrames {
+                    name: "runtime.goexit.abi0".to_string(),
+                    start_address: 4606112,
+                    end_address: 4606128
+                },
+                StopUnwindingFrames {
+                    name: "runtime.mstart0.abi0".to_string(),
+                    start_address: 4613040,
+                    end_address: 4613056
+                },
+                StopUnwindingFrames {
+                    name: "runtime.goexit1.abi0".to_string(),
+                    start_address: 4613088,
+                    end_address: 4613104
+                }
+            ]
+        );
+    }
 
     #[test]
     fn test_runtime_debug_clike() {

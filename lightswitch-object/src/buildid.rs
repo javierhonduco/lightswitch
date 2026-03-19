@@ -56,7 +56,7 @@ impl FromStr for ExecutableId {
     }
 }
 
-#[derive(Hash, Eq, PartialEq, Clone)]
+#[derive(Debug, Hash, Eq, PartialEq, Clone)]
 pub enum BuildIdFlavour {
     Gnu,
     Go,

@@ -298,6 +298,8 @@ enum AddUnwindInformationError {
     BpfUnwindInfo(String),
     #[error("failed to write to BPF map that stores pages: {0}")]
     BpfPages(String),
+    #[error("stripped Go binaries aren't supported yet")]
+    StrippedGo,
 }
 
 impl Profiler {
@@ -857,6 +859,7 @@ impl Profiler {
                 Ok(profile) => {
                     collector
                         .lock()
+                        // panic
                         .unwrap()
                         .collect(profile, &procs.read(), &object_files.read());
                 }
@@ -1568,6 +1571,9 @@ impl Profiler {
 
         let unwind_info = match runtime {
             Runtime::Go(stop_frames) => {
+                if stop_frames.is_empty() {
+                    return Err(AddUnwindInformationError::StrippedGo);
+                }
                 let mut unwind_info = Vec::new();
 
                 // For each bottom frame, add a end of function marker to stop unwinding
