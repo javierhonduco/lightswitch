@@ -400,7 +400,11 @@ fn show_object_file_info(path: &str) {
     }
     let unwind_info = CompactUnwindInfoBuilder::with_callback(path, None, |_| {});
     println!("- unwind info: {:?}", unwind_info.unwrap().process());
-    println!("- go: {:?}", object_file.is_go());
+    println!(
+        "- go: {:?} {:?}",
+        object_file.is_go(),
+        object_file.go_stop_unwinding_frames()
+    );
     println!("- dynamic: {:?}", object_file.is_dynamic());
     println!("- load segments: {:?}", object_file.elf_load_segments());
 }

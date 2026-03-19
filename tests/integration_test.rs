@@ -105,9 +105,12 @@ fn test_integration() {
     let bpf_test_debug = std::env::var("TEST_DEBUG_BPF").is_ok();
     let system_info = SystemInfo::new(None).expect("failed to detect system info");
 
-    build_test_binary("cpp-progs");
+    build_test_binary("all-progs");
     let cpp_proc = TestProcess::new("main_cpp_clang_O1", false);
     let cpp_proc_new_pid_ns = TestProcess::new("main_cpp_clang_O2", true);
+    let go_proc = TestProcess::new("main_go", false);
+    let go_static_proc = TestProcess::new("main_go_static", false);
+    let go_stripped_proc = TestProcess::new("main_go_stripped", false);
 
     let collector = Arc::new(Mutex::new(
         Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
@@ -126,6 +129,9 @@ fn test_integration() {
     let mut p = Profiler::new(profiler_config, stop_signal_receive, metadata_provider);
     p.profile_pids(vec![cpp_proc.pid()]);
     p.profile_pids(vec![cpp_proc_new_pid_ns.pid()]);
+    p.profile_pids(vec![go_proc.pid()]);
+    p.profile_pids(vec![go_static_proc.pid()]);
+    p.profile_pids(vec![go_stripped_proc.pid()]);
     p.run(collector.clone());
     let collector = collector.lock().unwrap();
     let (raw_profile, procs, objs) = collector.finish();
@@ -156,7 +162,41 @@ fn test_integration() {
         ],
         cpp_proc_new_pid_ns.pid(),
     ));
+
+    assert!(assert_any_stack_contains(
+        &symbolized_profile,
+        &[
+            "main.top2",
+            "main.c2",
+            "main.b2",
+            "main.a2",
+            "main.main",
+            "runtime.main",
+        ],
+        go_proc.pid(),
+    ));
+
+    assert!(assert_any_stack_contains(
+        &symbolized_profile,
+        &[
+            "main.top2",
+            "main.c2",
+            "main.b2",
+            "main.a2",
+            "main.main",
+            "runtime.main",
+        ],
+        go_static_proc.pid(),
+    ));
+
+    // Stripped binaries aren't supported yet. Looking at you, Cilium.
+    assert!(!assert_any_stack_contains(
+        &symbolized_profile,
+        &[],
+        go_stripped_proc.pid(),
+    ));
 }
+
 #[test]
 fn test_use_pt_regs_helper() {
     let bpf_test_debug = std::env::var("TEST_DEBUG_BPF").is_ok();

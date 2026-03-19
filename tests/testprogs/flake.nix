@@ -116,38 +116,26 @@
             buildPhase = ''
               export HOME=$TMPDIR
               cd src/go
-              go build -o main-go main.go
+              go build -o main_go main.go
+              CGO_ENABLED=0 go build -ldflags "-w -s" -o main_go_stripped main.go
+              CGO_ENABLED=0 go build -o main_go_static main.go
             '';
             installPhase = ''
               mkdir -p $out/bin
-              cp main-go $out/bin
+              cp main_go $out/bin
+              cp main_go_stripped $out/bin
+              cp main_go_static $out/bin
             '';
             buildInputs = [
               pkgs.go
             ];
           };
 
-          test-cgo-progs = pkgs.stdenv.mkDerivation {
-            name = "build-test-cgo-prog";
-            src = ./.;
-            buildPhase = ''
-              export HOME=$TMPDIR
-              cd src/cgo
-              go build -o main main.go
-            '';
-            installPhase = ''
-              mkdir -p $out/bin
-              cp main $out/bin
-            '';
-            buildInputs = [
-              pkgs.go
-            ];
-          };
-
-          # Trying to get a derivation that aggregates all the other derivations.
-          all-progs = pkgs.stdenv.mkDerivation {
+          test-all-progs = pkgs.symlinkJoin {
             name = "all-progs";
-            buildInputs = [
+            paths = [
+              test-cpp-progs
+              test-go-progs
             ];
           };
 
@@ -159,8 +147,8 @@
             default = test-cpp-progs;
             cpp-progs = test-cpp-progs;
             go-progs = test-go-progs;
-            cgo-progs = test-cgo-progs;
             cpp-progs-static-musl = test-static-musl-cpp-progs;
+            all-progs = test-all-progs;
           };
         }
       );
