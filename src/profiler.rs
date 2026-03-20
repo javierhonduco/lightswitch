@@ -1,8 +1,11 @@
 use crate::process::opened_exe_path;
+use crate::util::FileId;
 use libbpf_rs::MapImpl;
 use libbpf_rs::OpenObject;
 use libbpf_rs::RingBufferBuilder;
+use lightswitch_object::BuildId;
 use lightswitch_object::ElfLoad;
+use lru::LruCache;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
 use std::collections::hash_map::OccupiedEntry;
@@ -16,6 +19,7 @@ use std::iter;
 use std::mem::size_of;
 use std::mem::ManuallyDrop;
 use std::mem::MaybeUninit;
+use std::num::NonZeroUsize;
 use std::os::fd::{AsFd, AsRawFd};
 
 use std::os::unix::fs::FileExt;
@@ -170,6 +174,9 @@ pub struct Profiler {
     // as bpf currently only supports getting the offset since system boot.
     walltime_at_system_boot: u64,
     preload_thread_metadata: bool,
+    file_id_to_info: LruCache<FileId, ExecutableId>,
+    afflicted_processes: LruCache<Pid, ()>,
+    vdso_extraction: Option<(Instant, ExecutableId)>,
 }
 
 pub struct ProfilerConfig {
@@ -257,22 +264,17 @@ fn fetch_vdso_info(
     start_addr: u64,
     end_addr: u64,
     offset: u64,
-    cache_dir: &Path,
-) -> Result<(PathBuf, ObjectFile)> {
-    // Read raw memory
+    vdso_path: &Path,
+) -> Result<ObjectFile> {
+    // Read the vDSO object from the process' memory
     let file = File::open(format!("/proc/{pid}/mem"))?;
     let size = end_addr - start_addr;
     let mut buf: Vec<u8> = vec![0; size as usize];
     file.read_exact_at(&mut buf, start_addr + offset)?;
-
-    // Write to a temporary place
-    let dumped_vdso = cache_dir.join("dumped-vdso");
-    fs::write(&dumped_vdso, &buf)?;
-
-    // Pass that to the object parser
-    let object = ObjectFile::from_path(&dumped_vdso)?;
-
-    Ok((dumped_vdso, object))
+    // Write to a temporary location, so it can be inspected, if needed
+    fs::write(vdso_path, &buf)?;
+    let object = ObjectFile::from_path(vdso_path)?;
+    Ok(object)
 }
 
 enum AddUnwindInformationResult {
@@ -650,6 +652,13 @@ impl Profiler {
             metadata_provider,
             walltime_at_system_boot,
             preload_thread_metadata: profiler_config.preload_thread_metadata,
+            file_id_to_info: LruCache::new(
+                NonZeroUsize::new(1_000).expect("invalid non zero usize"),
+            ),
+            afflicted_processes: LruCache::new(
+                NonZeroUsize::new(100).expect("invalid non zero usize"),
+            ),
+            vdso_extraction: None,
         }
     }
 
@@ -761,7 +770,6 @@ impl Profiler {
                                     );
                                     ExecutableMapping {
                                         executable_id: e.build_id.id().expect("should never fail"),
-                                        build_id: Some(e.build_id.clone()),
                                         kind: ExecutableMappingType::Kernel,
                                         start_addr: e.start,
                                         end_addr: e.end,
@@ -783,6 +791,7 @@ impl Profiler {
                             .id()
                             .expect("should never happen"),
                         ObjectFileInfo {
+                            build_id: Some(kernel_code_range.build_id),
                             path: PathBuf::from(kernel_code_range.name),
                             elf_load_segments: vec![],
                             is_dyn: false,
@@ -859,7 +868,6 @@ impl Profiler {
                 Ok(profile) => {
                     collector
                         .lock()
-                        // panic
                         .unwrap()
                         .collect(profile, &procs.read(), &object_files.read());
                 }
@@ -937,7 +945,8 @@ impl Profiler {
     }
 
     pub fn handle_process_exit(&mut self, pid: Pid, partial_write: bool) {
-        // TODO: remove ratelimits for this process.
+        // TODO: remove BPF ratelimits for this process.
+        let _ = self.afflicted_processes.pop(&pid);
         let mut procs = self.procs.write();
         match procs.get_mut(&pid) {
             Some(proc_info) => {
@@ -1451,8 +1460,17 @@ impl Profiler {
             panic!("add_unwind_info -- expected process to be known");
         }
 
-        let mut bpf_mappings = Vec::new();
+        // Do not attempt to profile processes we can't extract or generate unwind
+        // information for.
+        if self.afflicted_processes.contains(&pid) {
+            debug!(
+                "could not extract or generate unwind information before, skipping process {pid}"
+            );
+            return;
+        }
 
+        let mut errored = false;
+        let mut bpf_mappings = Vec::new();
         // Get unwind info
         for mapping in self
             .procs
@@ -1476,10 +1494,6 @@ impl Profiler {
                     type_: MAPPING_TYPE_ANON,
                 });
                 continue;
-            }
-
-            if mapping.build_id.is_none() {
-                panic!("build id should be present for file backed mappings");
             }
 
             let object_file = self.object_files.read();
@@ -1512,15 +1526,16 @@ impl Profiler {
                 mapping.end_addr,
             ) {
                 warn!(
-                    "error adding unwind information for executable 0x{} due to {:?}",
+                    "error adding unwind information for process {pid}, executable 0x{} due to {:?}",
                     mapping.executable_id, e
                 );
+
                 // TODO: cleanup unwind information map in case of a partial write.
-                return;
+                errored = true;
+                break;
             }
         }
 
-        let mut errored = false;
         // Store all mappings in BPF maps.
         if let Err(e) = Self::add_bpf_mappings(&self.native_unwinder, pid, &bpf_mappings) {
             errored = true;
@@ -1573,6 +1588,7 @@ impl Profiler {
         let unwind_info = match runtime {
             Runtime::Go(stop_frames) => {
                 if stop_frames.is_empty() {
+                    self.afflicted_processes.put(pid, ());
                     return Err(AddUnwindInformationError::StrippedGo);
                 }
                 let mut unwind_info = Vec::new();
@@ -1663,10 +1679,12 @@ impl Profiler {
         }
 
         if unwind_info.is_empty() {
+            self.afflicted_processes.put(pid, ());
             return Err(AddUnwindInformationError::Empty);
         }
 
         if unwind_info.len() > MAX_UNWIND_INFO_SIZE {
+            self.afflicted_processes.put(pid, ());
             return Err(AddUnwindInformationError::TooLarge(
                 executable_path.to_string_lossy().to_string(),
                 unwind_info.len(),
@@ -1695,6 +1713,7 @@ impl Profiler {
                 last_used: Instant::now(),
             },
         );
+
         Ok(AddUnwindInformationResult::Success)
     }
 
@@ -1861,7 +1880,7 @@ impl Profiler {
         if let Some((executable_id, s, e)) = mapping_data {
             if let Err(e) = self.add_unwind_information_for_executable(pid, executable_id, s, e) {
                 warn!(
-                    "error adding unwind information for executable 0x{} due to {:?}",
+                    "error adding unwind information for process {pid}, executable 0x{} due to {:?}",
                     executable_id, e
                 );
             }
@@ -1915,6 +1934,121 @@ impl Profiler {
         true
     }
 
+    /// Open and parse an object file on disk. This is a relatively expensive
+    /// operation.
+    pub fn get_object_file(&self, path: &Path) -> Result<ObjectFile> {
+        // We want to open the file as quickly as possible to minimise the
+        // chances of races if the file is deleted.
+        let file = File::open(path)?;
+        let object_file = ObjectFile::new(&file)?;
+        Ok(object_file)
+    }
+
+    pub fn insert_object_file(
+        &mut self,
+        object_file: &ObjectFile,
+        exe_path: &Path,
+        is_vdso: bool,
+    ) -> Result<(Option<BuildId>, ElfLoad)> {
+        let build_id = object_file.build_id();
+        let executable_id = build_id.id()?;
+
+        // If the object file has debug info, add it to our store.
+        if object_file.has_debug_info() {
+            let name = match exe_path.file_name() {
+                Some(os_name) => os_name.to_string_lossy().to_string(),
+                None => "error".to_string(),
+            };
+            let res = self
+                .debug_info_manager
+                .add_if_not_present(&name, build_id, exe_path);
+            match res {
+                Ok(_) => {
+                    debug!("debuginfo add_if_not_present succeeded {:?}", res);
+                }
+                Err(e) => {
+                    error!(
+                        "debuginfo add_if_not_present failed with: {}",
+                        e.root_cause()
+                    );
+                }
+            }
+        } else {
+            debug!(
+                "could not find debug information for {}",
+                exe_path.display()
+            );
+        }
+
+        let Ok(elf_loads) = object_file.elf_load_segments() else {
+            return Err(anyhow::anyhow!("no elf load segments"));
+        };
+
+        let Some(first_elf_load) = elf_loads.first().cloned() else {
+            return Err(anyhow::anyhow!("empty elf load segments"));
+        };
+
+        self.object_files.write().insert(
+            executable_id,
+            ObjectFileInfo {
+                build_id: Some(build_id.clone()),
+                path: exe_path.to_path_buf(),
+                elf_load_segments: elf_loads,
+                is_dyn: object_file.is_dynamic(),
+                references: 1,
+                native_unwind_info_size: None,
+                is_vdso,
+                runtime: object_file.runtime(),
+            },
+        );
+
+        Ok((Some(build_id.clone()), first_elf_load))
+    }
+
+    /// Returns the information needed to fill in a process
+    /// mappings structure.
+    fn get_or_insert_object_file(
+        &mut self,
+        opened_exe_path: &Path,
+        exe_path: &Path,
+        is_vdso: bool,
+    ) -> Result<(Option<BuildId>, ElfLoad)> {
+        let file_id = FileId::new(opened_exe_path)?;
+        let cached_executable_id = self.file_id_to_info.get(&file_id);
+        let (object, executable_id) = match cached_executable_id {
+            Some(executable_id) => (None, *executable_id),
+            None => {
+                let object = self.get_object_file(opened_exe_path)?;
+                let executable_id = object.build_id().id()?;
+                (Some(object), executable_id)
+            }
+        };
+
+        let object_files_clone = self.object_files.clone();
+        let mut object_file = object_files_clone.write();
+        let info = match object_file.entry(executable_id) {
+            Entry::Vacant(_) => {
+                let object = object.unwrap_or(self.get_object_file(opened_exe_path)?);
+                // Release the write lock as it's locked in `insert_object_file`
+                drop(object_file);
+                self.insert_object_file(&object, exe_path, is_vdso)
+            }
+            Entry::Occupied(mut entry) => {
+                let obj = entry.get_mut();
+                obj.references += 1;
+
+                let Some(first_load_segment) = obj.elf_load_segments.first() else {
+                    return Err(anyhow::anyhow!("empty load segments"));
+                };
+
+                Ok((obj.build_id.clone(), first_load_segment.clone()))
+            }
+        };
+
+        self.file_id_to_info.put(file_id, executable_id);
+        info
+    }
+
     pub fn add_proc(&mut self, pid: Pid) -> Result<(), AddProcessError> {
         let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
         let maps = proc.maps().map_err(|_| AddProcessError::ProcfsRace)?;
@@ -1923,8 +2057,6 @@ impl Profiler {
         }
 
         let mut mappings = vec![];
-        let object_files_clone = self.object_files.clone();
-
         for map in maps.iter() {
             if !map.perms.contains(procfs::process::MMPermissions::EXECUTE) {
                 continue;
@@ -1942,128 +2074,44 @@ impl Profiler {
                         continue;
                     };
                     let exe_path = executable_path(pid, &link);
-                    // We want to open the file as quickly as possible to minimise the chances of
-                    // races if the file is deleted.
-                    let file = match File::open(&opened_exe_path) {
-                        Ok(f) => f,
-                        Err(e) => {
-                            debug!(
-                                "failed to open file {} aka {} due to {:?}",
-                                opened_exe_path.display(),
-                                exe_path.display(),
-                                e
-                            );
-                            // Rather than returning here, we prefer to be able to profile some
-                            // parts of the binary
-                            continue;
-                        }
-                    };
+                    let info = self.get_or_insert_object_file(&opened_exe_path, &exe_path, false);
+                    debug!(
+                        "adding executable at path {} to the mappings of process {}",
+                        mapping_path.display(),
+                        pid
+                    );
 
-                    let object_file = match ObjectFile::new(&file) {
-                        Ok(f) => f,
-                        Err(e) => {
-                            debug!(
-                                "object_file {} aka {} failed with {}",
-                                opened_exe_path.display(),
-                                exe_path.display(),
-                                e
-                            );
-                            // Rather than returning here, we prefer to be able to profile some
-                            // parts of the binary
-                            continue;
-                        }
-                    };
-
-                    let build_id = object_file.build_id();
-                    let Ok(executable_id) = object_file.id() else {
-                        info!("could not get id for object file: {}", exe_path.display());
-                        continue;
-                    };
-
-                    debug!("adding executable at path {} executable_id 0x{} to the mappings of process {}", mapping_path.display(), executable_id, pid);
-
-                    // mmap'ed data is always page aligned but the load segment information might
-                    // not be. As we need to account for any randomisation added
-                    // by ASLR, by subtracting the virtual address from the
+                    // mmap'ed data is always page aligned but the load segment information
+                    // might not be. As we need to account for
+                    // any randomisation added by ASLR, by
+                    // subtracting the virtual address from the
                     // first load segment once it's been page aligned we'll get the offset
                     // at which the executable has been loaded.
                     //
-                    // Note: this doesn't take into consideration the mmap'ed or load offsets.
+                    // Note: this doesn't take into consideration the mmap'ed or load
+                    // offsets.
                     let load_address = |map_start: u64, first_elf_load: &ElfLoad| {
                         let page_mask = !(page_size() - 1) as u64;
                         map_start.saturating_sub(first_elf_load.p_vaddr & page_mask)
                     };
 
-                    let mut object_files = object_files_clone.write();
-                    let Ok(elf_loads) = object_file.elf_load_segments() else {
-                        warn!("no elf load segments");
-                        continue;
-                    };
-
-                    let Some(first_elf_load) = elf_loads.first() else {
-                        warn!("empty elf load segments");
-                        continue;
-                    };
-
-                    mappings.push(ExecutableMapping {
-                        executable_id,
-                        build_id: Some(build_id.clone()),
-                        kind: ExecutableMappingType::FileBacked,
-                        start_addr: map.address.0,
-                        end_addr: map.address.1,
-                        offset: map.offset,
-                        load_address: load_address(map.address.0, first_elf_load),
-                        soft_delete: false,
-                    });
-
-                    // If the object file has debug info, add it to our store.
-                    if object_file.has_debug_info() {
-                        let name = match exe_path.file_name() {
-                            Some(os_name) => os_name.to_string_lossy().to_string(),
-                            None => "error".to_string(),
-                        };
-                        let res = self
-                            .debug_info_manager
-                            .add_if_not_present(&name, build_id, &exe_path);
-                        match res {
-                            Ok(_) => {
-                                debug!("debuginfo add_if_not_present succeeded {:?}", res);
-                            }
-                            Err(e) => {
-                                error!(
-                                    "debuginfo add_if_not_present failed with: {}",
-                                    e.root_cause()
-                                );
-                            }
-                        }
+                    if let Ok((Some(build_id), first_elf_load)) = info {
+                        mappings.push(ExecutableMapping {
+                            executable_id: build_id.id().expect("executable id"),
+                            kind: ExecutableMappingType::FileBacked,
+                            start_addr: map.address.0,
+                            end_addr: map.address.1,
+                            offset: map.offset,
+                            load_address: load_address(map.address.0, &first_elf_load),
+                            soft_delete: false,
+                        });
                     } else {
-                        debug!(
-                            "could not find debug information for {}",
-                            exe_path.display()
-                        );
-                    }
-
-                    match object_files.entry(executable_id) {
-                        Entry::Vacant(entry) => {
-                            entry.insert(ObjectFileInfo {
-                                path: exe_path,
-                                elf_load_segments: elf_loads,
-                                is_dyn: object_file.is_dynamic(),
-                                references: 1,
-                                native_unwind_info_size: None,
-                                is_vdso: false,
-                                runtime: object_file.runtime(),
-                            });
-                        }
-                        Entry::Occupied(mut entry) => {
-                            entry.get_mut().references += 1;
-                        }
+                        error!("could not insert object file due to {:?}", info);
                     }
                 }
                 procfs::process::MMapPath::Anonymous => {
                     mappings.push(ExecutableMapping {
                         executable_id: ExecutableId(0), // Placeholder for JIT.
-                        build_id: None,
                         kind: ExecutableMappingType::Anonymous,
                         start_addr: map.address.0,
                         end_addr: map.address.1,
@@ -2073,57 +2121,60 @@ impl Profiler {
                     });
                 }
                 procfs::process::MMapPath::Vdso | procfs::process::MMapPath::Vsyscall => {
-                    // This could be cached, but we are not doing it yet. If we want to add caching
-                    // here we need to be careful, the kernel might be upgraded
-                    // since last time we ran, and that cache might not be valid
-                    // anymore.
-
-                    if let Ok((vdso_path, object_file)) = fetch_vdso_info(
-                        pid,
-                        map.address.0,
-                        map.address.1,
-                        map.offset,
-                        &self.cache_dir,
-                    ) {
-                        let mut object_files = object_files_clone.write();
-                        let Ok(executable_id) = object_file.id() else {
-                            debug!("vDSO object file id failed");
-                            continue;
-                        };
-                        let Ok(elf_load_segments) = object_file.elf_load_segments() else {
-                            debug!("vDSO elf_load_segments failed");
-                            continue;
-                        };
-                        let build_id = object_file.build_id().clone();
-
-                        match object_files.entry(executable_id) {
-                            Entry::Vacant(entry) => {
-                                entry.insert(ObjectFileInfo {
-                                    path: vdso_path.clone(),
-                                    elf_load_segments,
-                                    is_dyn: object_file.is_dynamic(),
-                                    references: 1,
-                                    native_unwind_info_size: None,
-                                    is_vdso: true,
-                                    runtime: Runtime::CLike,
-                                });
-                            }
-                            Entry::Occupied(mut entry) => {
-                                entry.get_mut().references += 1;
-                            }
+                    let needs_fetch = match self.vdso_extraction {
+                        None => true,
+                        Some((instant, _)) if instant.elapsed() >= Duration::from_mins(15) => true,
+                        Some((_, _)) => {
+                            debug!("using cached vDSO");
+                            false
                         }
+                    };
 
-                        mappings.push(ExecutableMapping {
-                            executable_id,
-                            build_id: Some(build_id),
-                            kind: ExecutableMappingType::Vdso,
-                            start_addr: map.address.0,
-                            end_addr: map.address.1,
-                            offset: map.offset,
-                            load_address: map.address.0,
-                            soft_delete: false,
-                        });
+                    let vdso_path = self.cache_dir.join("dumped-vdso");
+                    if needs_fetch {
+                        debug!("fetching vDSO");
+                        match fetch_vdso_info(
+                            pid,
+                            map.address.0,
+                            map.address.1,
+                            map.offset,
+                            &vdso_path,
+                        ) {
+                            Ok(object) => {
+                                let Ok(executable_id) = object.build_id().id() else {
+                                    error!("failed to get executable_id from vDSO");
+                                    continue;
+                                };
+                                self.vdso_extraction = Some((Instant::now(), executable_id));
+                            }
+                            Err(e) => {
+                                error!("failed to fetch vDSO due to {:?}", e);
+                                self.vdso_extraction = None;
+                                continue;
+                            }
+                        };
                     }
+
+                    let info = self.get_or_insert_object_file(&vdso_path, &vdso_path, true);
+                    let Ok((Some(_build_id), _elf_load)) = info else {
+                        error!("could not insert vDSO object file due to {:?}", info);
+                        continue;
+                    };
+
+                    let Some((_, executable_id)) = self.vdso_extraction else {
+                        error!("vdso_extraction should have an executable_id set");
+                        continue;
+                    };
+
+                    mappings.push(ExecutableMapping {
+                        executable_id,
+                        kind: ExecutableMappingType::Vdso,
+                        start_addr: map.address.0,
+                        end_addr: map.address.1,
+                        offset: map.offset,
+                        load_address: map.address.0,
+                        soft_delete: false,
+                    });
                 }
                 // Skip every other mapping we don't care about: Heap, Stack, Vsys, Vvar, etc
                 _ => {}

@@ -2,6 +2,7 @@ Unreleased
 ----------
 - Fix bug preventing profiling of processes in a different pid namespace than lightswitch's
 - Add support for Pyroscope
+- Cache object files by file_id to avoid reparsing them
 
 v0.4.0
 ------

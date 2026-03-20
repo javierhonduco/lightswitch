@@ -1,7 +1,7 @@
 use std::hash::DefaultHasher;
 use std::{collections::HashMap, hash::Hash, hash::Hasher};
 
-use tracing::warn;
+use tracing::debug;
 
 use crate::profile::{RawAggregatedProfile, RawAggregatedSample, RawSample};
 
@@ -17,7 +17,7 @@ impl Aggregator {
         let mut sample_hash_to_aggregated: HashMap<u64, RawAggregatedSample> = HashMap::new();
         for sample in raw_samples {
             if sample.ustack.is_empty() && sample.kstack.is_empty() {
-                warn!(
+                debug!(
                     "No stack present in provided sample={}, skipping...",
                     sample
                 );

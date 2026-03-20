@@ -84,8 +84,7 @@ pub fn to_pprof(
                         0x0,
                         obj.path.to_str().expect("will always be valid"), /* should this be
                                                                            * named name?, */
-                        &mapping
-                            .build_id
+                        &obj.build_id
                             .as_ref()
                             .expect("this should never happen")
                             .to_string(),
@@ -143,7 +142,7 @@ pub fn to_pprof(
 
                     let normalized_addr = normalized_addr.unwrap();
 
-                    let build_id = match &mapping.build_id {
+                    let build_id = match &obj.build_id {
                         Some(build_id) => {
                             format!("{build_id}")
                         }
