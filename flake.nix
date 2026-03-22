@@ -41,6 +41,7 @@
           ];
           rust-toolchain = pkgs.rust-bin.nightly.latest.default;
           craneLib = (crane.mkLib nixpkgs.legacyPackages.${system}).overrideToolchain rust-toolchain;
+          integration-tests-progs = import ./tests/testprogs/shell.nix { inherit pkgs system; };
           commonArgs = {
             src = ./.;
             doCheck = false;
@@ -71,6 +72,7 @@
               };
             };
             vmtest = (import ./vm.nix { inherit pkgs; }).run-vmtest lightswitch;
+            integration-tests-progs = integration-tests-progs.all-progs;
           };
           devShells.default = mkShell {
             nativeBuildInputs = nativeBuildInputs;
@@ -108,6 +110,7 @@
             LIBBPF_SYS_LIBRARY_PATH = lib.makeLibraryPath [ zlib.static elfutils' ];
             RUST_GDB = "${gdb}/bin/gdb";
           };
+
         }
       );
 }

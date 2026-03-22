@@ -29,12 +29,7 @@ fn nix_bin() -> String {
 /// `target/nix` to prevent clobbering artifacts from manual builds.
 fn build_test_binary(target: &str) {
     let output = Command::new(nix_bin())
-        .args([
-            "build",
-            &format!("./tests/testprogs#{target}"),
-            "--out-link",
-            "target/nix",
-        ])
+        .args(["build", &format!(".#{target}"), "--out-link", "target/nix"])
         .output()
         .expect("failed to execute process");
 
@@ -88,7 +83,7 @@ fn assert_any_stack_contains(
         let stack_string = sample
             .ustack
             .iter()
-            .map(|e| e.symbolization_result.clone().unwrap().unwrap().name)
+            .filter_map(|e| Some(e.symbolization_result.clone()?.ok()?.name))
             .collect::<Vec<_>>()
             .join("::");
 
@@ -105,7 +100,7 @@ fn test_integration() {
     let bpf_test_debug = std::env::var("TEST_DEBUG_BPF").is_ok();
     let system_info = SystemInfo::new(None).expect("failed to detect system info");
 
-    build_test_binary("all-progs");
+    build_test_binary("integration-tests-progs");
     let cpp_proc = TestProcess::new("main_cpp_clang_O1", false);
     let cpp_proc_new_pid_ns = TestProcess::new("main_cpp_clang_O2", true);
     let go_proc = TestProcess::new("main_go", false);
