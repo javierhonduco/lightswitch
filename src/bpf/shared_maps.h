@@ -36,6 +36,7 @@ DEFINE_COUNTER(error_unsupported_frame_pointer_action);
 DEFINE_COUNTER(error_unsupported_cfa_register);
 DEFINE_COUNTER(error_previous_rsp_read);
 DEFINE_COUNTER(error_previous_rsp_zero);
+DEFINE_COUNTER(error_previous_rip_read);
 DEFINE_COUNTER(error_previous_rip_zero);
 DEFINE_COUNTER(error_previous_rbp_read);
 DEFINE_COUNTER(error_should_never_happen);
@@ -48,7 +49,9 @@ DEFINE_COUNTER(error_sending_need_unwind_info_event);
 DEFINE_COUNTER(error_cfa_offset_did_not_fit);
 DEFINE_COUNTER(error_rbp_offset_did_not_fit);
 DEFINE_COUNTER(error_failure_sending_stack);
+#ifdef __TARGET_ARCH_x86
 DEFINE_COUNTER(bp_non_zero_for_bottom_frame);
+#endif
 DEFINE_COUNTER(vdso_encountered);
 DEFINE_COUNTER(jit_encountered);
 

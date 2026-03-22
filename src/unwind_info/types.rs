@@ -29,6 +29,9 @@ pub enum RbpType {
     Expression = 3,
     UndefinedReturnAddress = 4,
     OffsetDidNotFit = 5,
+    Arm64ReturnAddressLr = 6,
+    Arm64ReturnAddressFrame = 7,
+    Arm64ReturnAddressElsewhere = 8,
 }
 
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
@@ -50,11 +53,17 @@ impl CompactUnwindRow {
         }
     }
 
-    pub fn frame_setup(pc: u64) -> CompactUnwindRow {
+    pub fn frame_pointer(pc: u64, is_arm64: bool) -> CompactUnwindRow {
+        let rbp_type = if is_arm64 {
+            RbpType::Arm64ReturnAddressFrame
+        } else {
+            RbpType::CfaOffset
+        };
+
         CompactUnwindRow {
             pc,
             cfa_type: CfaType::FramePointerOffset,
-            rbp_type: RbpType::CfaOffset,
+            rbp_type,
             cfa_offset: 16,
             rbp_offset: -16,
         }

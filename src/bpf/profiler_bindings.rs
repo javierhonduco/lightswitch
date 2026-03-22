@@ -57,6 +57,7 @@ impl Add for unwinder_stats_t {
                 + other.error_unsupported_cfa_register,
             error_previous_rsp_read: self.error_previous_rsp_read + other.error_previous_rsp_read,
             error_previous_rsp_zero: self.error_previous_rsp_zero + other.error_previous_rsp_zero,
+            error_previous_rip_read: self.error_previous_rip_read + other.error_previous_rip_read,
             error_previous_rip_zero: self.error_previous_rip_zero + other.error_previous_rip_zero,
             error_previous_rbp_read: self.error_previous_rbp_read + other.error_previous_rbp_read,
             error_should_never_happen: self.error_should_never_happen

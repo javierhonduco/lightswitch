@@ -103,6 +103,7 @@ fn test_integration() {
     build_test_binary("integration-tests-progs");
     let cpp_proc = TestProcess::new("main_cpp_clang_O1", false);
     let cpp_proc_new_pid_ns = TestProcess::new("main_cpp_clang_O2", true);
+    let cpp_proc_fp = TestProcess::new("main_cpp_clang_no_omit_fp_O3", true);
     let go_proc = TestProcess::new("main_go", false);
     let go_static_proc = TestProcess::new("main_go_static", false);
     let go_stripped_proc = TestProcess::new("main_go_stripped", false);
@@ -124,6 +125,7 @@ fn test_integration() {
     let mut p = Profiler::new(profiler_config, stop_signal_receive, metadata_provider);
     p.profile_pids(vec![cpp_proc.pid()]);
     p.profile_pids(vec![cpp_proc_new_pid_ns.pid()]);
+    p.profile_pids(vec![cpp_proc_fp.pid()]);
     p.profile_pids(vec![go_proc.pid()]);
     p.profile_pids(vec![go_static_proc.pid()]);
     p.profile_pids(vec![go_stripped_proc.pid()]);
@@ -158,6 +160,18 @@ fn test_integration() {
         cpp_proc_new_pid_ns.pid(),
     ));
 
+    assert!(assert_any_stack_contains(
+        &symbolized_profile,
+        &[
+            "top2()",
+            "c2()",
+            "b2()",
+            "a2()",
+            "main",
+            "__libc_start_call_main",
+        ],
+        cpp_proc_fp.pid(),
+    ));
     assert!(assert_any_stack_contains(
         &symbolized_profile,
         &[

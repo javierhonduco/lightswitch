@@ -60,12 +60,15 @@ typedef struct {
 #define CFA_TYPE_OFFSET_DID_NOT_FIT    9
 
 // Values for the unwind table's frame pointer type.
-#define RBP_TYPE_UNCHANGED                0
-#define RBP_TYPE_OFFSET                   1
-#define RBP_TYPE_REGISTER                 2
-#define RBP_TYPE_EXPRESSION               3
-#define RBP_TYPE_UNDEFINED_RETURN_ADDRESS 4
-#define RBP_TYPE_OFFSET_DID_NOT_FIT       5
+#define RBP_TYPE_UNCHANGED                      0
+#define RBP_TYPE_OFFSET                         1
+#define RBP_TYPE_REGISTER                       2
+#define RBP_TYPE_EXPRESSION                     3
+#define RBP_TYPE_UNDEFINED_RETURN_ADDRESS       4
+#define RBP_TYPE_OFFSET_DID_NOT_FIT             5
+#define RBP_TYPE_ARM64_RETURN_ADDRESS_LR        6
+#define RBP_TYPE_ARM64_RETURN_ADDRESS_FRAME     7
+#define RBP_TYPE_ARM64_RETURN_ADDRESS_ELSEWHERE 8
 
 // Binary search error codes.
 #define BINARY_SEARCH_DEFAULT              0xFABADAFABADAULL
@@ -89,6 +92,7 @@ struct unwinder_stats_t {
     u64 error_unsupported_cfa_register;
     u64 error_previous_rsp_read;
     u64 error_previous_rsp_zero;
+    u64 error_previous_rip_read;
     u64 error_previous_rip_zero;
     u64 error_previous_rbp_read;
     u64 error_should_never_happen;
