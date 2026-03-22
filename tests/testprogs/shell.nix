@@ -29,9 +29,9 @@ let
       gcc -O2 main.cpp -o main_cpp_gcc_O2
       gcc -O3 main.cpp -o main_cpp_gcc_O3
 
-      clang -O1 main.cpp -o main_cpp_clang_O1
-      clang -O2 main.cpp -o main_cpp_clang_O2
-      clang -O3 main.cpp -o main_cpp_clang_O3
+      clang -O1 -fomit-frame-pointer main.cpp -o main_cpp_clang_O1
+      clang -O2 -fomit-frame-pointer main.cpp -o main_cpp_clang_O2
+      clang -O3 -fomit-frame-pointer main.cpp -o main_cpp_clang_O3
 
       clang -O3 -fno-omit-frame-pointer main.cpp -o main_cpp_clang_no_omit_fp_O3
 

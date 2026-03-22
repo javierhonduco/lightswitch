@@ -1565,7 +1565,8 @@ impl Profiler {
         } else {
             opened_exe_path(pid, start_address, end_address)
         };
-        let needs_synthesis = executable_info.is_vdso && architecture() == Architecture::Arm64;
+        let is_arm64 = architecture() == Architecture::Arm64;
+        let needs_synthesis = executable_info.is_vdso && is_arm64;
         let runtime = executable_info.runtime.clone();
         std::mem::drop(object_files);
 
@@ -1581,11 +1582,14 @@ impl Profiler {
                 // has frame pointers.
                 for stop_frame in stop_frames {
                     unwind_info.push(CompactUnwindRow::stop_unwinding(stop_frame.start_address));
-                    unwind_info.push(CompactUnwindRow::frame_setup(stop_frame.end_address));
+                    unwind_info.push(CompactUnwindRow::frame_pointer(
+                        stop_frame.end_address,
+                        is_arm64,
+                    ));
                 }
 
                 // Go since pretty early on compiles with frame pointers by default.
-                unwind_info.push(CompactUnwindRow::frame_setup(start_address));
+                unwind_info.push(CompactUnwindRow::frame_pointer(start_address, is_arm64));
                 unwind_info.push(CompactUnwindRow::stop_unwinding(end_address));
 
                 unwind_info.sort_by_key(|e| e.pc);
@@ -1614,7 +1618,7 @@ impl Profiler {
                 if needs_synthesis {
                     debug!("synthetising arm64 unwind information using frame pointers for vDSO");
                     Ok(vec![
-                        CompactUnwindRow::frame_setup(start_address),
+                        CompactUnwindRow::frame_pointer(start_address, is_arm64),
                         CompactUnwindRow::stop_unwinding(end_address),
                     ])
                 } else {
@@ -1635,7 +1639,7 @@ impl Profiler {
                 }
             }
             Runtime::V8 => Ok(vec![
-                CompactUnwindRow::frame_setup(start_address),
+                CompactUnwindRow::frame_pointer(start_address, is_arm64),
                 CompactUnwindRow::stop_unwinding(end_address),
             ]),
         };

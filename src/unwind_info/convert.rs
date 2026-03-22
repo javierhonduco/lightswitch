@@ -244,10 +244,34 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                             }
                         }
 
-                        if row.register(fde.cie().return_address_register())
-                            == Some(gimli::RegisterRule::Undefined)
-                        {
-                            compact_row.rbp_type = RbpType::UndefinedReturnAddress;
+                        let is_arm = object_file.architecture() == Architecture::Aarch64;
+
+                        match row.register(fde.cie().return_address_register()) {
+                            Some(gimli::RegisterRule::Undefined) => {
+                                compact_row.rbp_type = RbpType::UndefinedReturnAddress;
+                            }
+                            Some(gimli::RegisterRule::Offset(offset)) if is_arm => {
+                                // In the presence of frame pointers, the following locations
+                                // are guaranteed by the aarch64 ABI.
+                                let fp_layout = offset - compact_row.rbp_offset as i64 == 8;
+                                if compact_row.rbp_type == RbpType::CfaOffset && fp_layout {
+                                    compact_row.rbp_type = RbpType::Arm64ReturnAddressFrame;
+                                } else {
+                                    compact_row.rbp_type = RbpType::Arm64ReturnAddressElsewhere;
+                                    match i16::try_from(offset) {
+                                        Ok(off) => {
+                                            compact_row.rbp_offset = off;
+                                        }
+                                        Err(_) => {
+                                            compact_row.rbp_type = RbpType::OffsetDidNotFit;
+                                        }
+                                    }
+                                }
+                            }
+                            None if is_arm => {
+                                compact_row.rbp_type = RbpType::Arm64ReturnAddressLr;
+                            }
+                            _ => {}
                         }
                     }
                     _ => continue,

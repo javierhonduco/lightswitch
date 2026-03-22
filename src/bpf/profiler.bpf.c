@@ -298,7 +298,6 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     struct task_struct *task = current_task();
     unsigned int level = lightswitch_config.userspace_pid_ns_level;
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
-    int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
 
     bool reached_bottom_of_stack = false;
     u64 zero = 0;
@@ -506,37 +505,48 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 
         u64 previous_rip = 0;
         u64 previous_rip_addr = 0;
+        int err = 0;
 
 #ifdef __TARGET_ARCH_x86
         // The return address is guaranteed to be 8 bytes ahead of
         // the previous stack pointer in x86_64.
         previous_rip_addr = previous_rsp - 8;
+        err = bpf_probe_read_user(&previous_rip, 8, (void *)(previous_rip_addr));
+
 #endif
 
 #ifdef __TARGET_ARCH_arm64
-        // Special handling for leaf frame.
-        if (unwind_state->sample.stack.ulen == 0) {
+        // Special handling for leaf frame. Binaries with .eh_frame will have
+        // a explicit usage of the LR register, while syntethised binaries do
+        // not, such as Golang and Arm64 vDSO.
+        if (found_rbp_type == RBP_TYPE_ARM64_RETURN_ADDRESS_LR) {
             previous_rip = unwind_state->lr;
-        } else {
-            // This is guaranteed by the Aarch64 ABI.
+        } else if (found_rbp_type == RBP_TYPE_ARM64_RETURN_ADDRESS_FRAME) {
+            // The binary was compiled with frame pointers, the location of the return
+            // address is guaranteed by the Aarch64 ABI.
             previous_rip_addr = previous_rbp_addr + 8;
+            err = bpf_probe_read_user(&previous_rip, 8, (void *)(previous_rip_addr));
+        } else {
+            // If there are not frame pointers, we need to fetch the return address somewhere
+            // else in the stack.
+            previous_rip_addr = previous_rsp + found_rbp_offset;
+            err = bpf_probe_read_user(&previous_rip, 8, (void *)(previous_rip_addr));
         }
 #endif
 
-        int err =
-            bpf_probe_read_user(&previous_rip, 8, (void *)(previous_rip_addr));
-
-        if (previous_rip == 0) {
-            if (err == 0) {
-                LOG("[warn] previous_rip=0, maybe this is a JIT segment?");
-            } else {
-                LOG("[error] previous_rip should not be zero. This can mean that the "
-                    "read failed, ret=%d while reading @ %llx.",
-                    err, previous_rip_addr);
-                bump_unwind_error_previous_rip_zero();
-            }
+        if (err < 0) {
+            LOG("[error] previous_rip read failed, ret=%d @ %llx",
+                err, previous_rip_addr);
+            bump_unwind_error_previous_rip_read();
             return 1;
         }
+
+        if (previous_rip == 0) {
+            LOG("[error] previous_rip is zero, ret=%d @ %llx", err, previous_rip_addr);
+            bump_unwind_error_previous_rip_zero();
+            return 1;
+        }
+
 
         LOG("\tprevious ip: %llx (@ %llx)", previous_rip, previous_rip_addr);
         LOG("\tprevious sp: %llx", previous_rsp);
@@ -551,6 +561,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     }
 
     if (reached_bottom_of_stack) {
+#ifdef __TARGET_ARCH_x86
         // We've reached the bottom of the stack once we don't find an unwind
         // entry for the given program counter and the current frame pointer
         // is 0. As per the x86_64 ABI:
@@ -563,13 +574,13 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
         // Note: the initial register state only applies to processes not to threads.
         //
         // https://refspecs.linuxbase.org/elf/x86_64-abi-0.99.pdf
-
+        int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
         bool main_thread = per_process_id == per_thread_id;
         if (main_thread && unwind_state->bp != 0) {
             LOG("[error] Expected rbp to be 0 on main thread but found %llx, pc: %llx", unwind_state->bp, unwind_state->ip);
             bump_unwind_bp_non_zero_for_bottom_frame();
         }
-
+#endif
         LOG("======= reached bottom frame! =======");
         add_stack(ctx, unwind_state);
         bump_unwind_success_dwarf();
