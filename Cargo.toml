@@ -32,8 +32,8 @@ ring = "0.17.14"
 libbpf-sys = "1.6.3"
 
 [features]
-default = ["static"]
-static = ["libbpf-rs/static"]
+default = ["libbpf-rs-static"]
+libbpf-rs-static = ["libbpf-rs/static"]
 
 [dependencies]
 gimli = "0.33.0"
