@@ -13,15 +13,19 @@ use std::path::PathBuf;
 /// read and compare both as a cheap file identity checks. As they can be
 /// re-used (the policy varies across filesystems) the file size is also
 /// checked.
-#[derive(Debug, PartialEq)]
-struct FileId {
+///
+/// Note that this would return the same `FileId` if a file is replaced in-place
+/// with another one of the same size, but different contents. Since this is
+/// highly unlikely, this is a compromise that should be okay.
+#[derive(Eq, Hash, Debug, PartialEq)]
+pub struct FileId {
     inode: u64,
     device: u64,
     size: u64,
 }
 
 impl FileId {
-    fn new(path: &Path) -> io::Result<Self> {
+    pub fn new(path: &Path) -> io::Result<Self> {
         let metadata = fs::metadata(path)?;
         Ok(FileId {
             inode: metadata.ino(),

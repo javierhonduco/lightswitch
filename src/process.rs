@@ -42,7 +42,6 @@ pub struct ProcessInfo {
 #[derive(Debug, Clone)]
 pub struct ExecutableMapping {
     pub executable_id: ExecutableId,
-    pub build_id: Option<BuildId>,
     pub kind: ExecutableMappingType,
     pub start_addr: u64,
     pub end_addr: u64,
@@ -109,6 +108,7 @@ impl ExecutableMapping {
 }
 
 pub struct ObjectFileInfo {
+    pub build_id: Option<BuildId>,
     pub path: PathBuf,
     pub elf_load_segments: Vec<ElfLoad>,
     pub is_dyn: bool,
@@ -121,6 +121,7 @@ pub struct ObjectFileInfo {
 impl Clone for ObjectFileInfo {
     fn clone(&self) -> Self {
         ObjectFileInfo {
+            build_id: self.build_id.clone(),
             path: self.path.clone(),
             elf_load_segments: self.elf_load_segments.clone(),
             is_dyn: self.is_dyn,
@@ -175,6 +176,7 @@ mod tests {
     #[test]
     fn test_address_normalization() {
         let mut object_file_info = ObjectFileInfo {
+            build_id: None,
             path: "/".into(),
             elf_load_segments: vec![],
             is_dyn: false,
@@ -186,7 +188,6 @@ mod tests {
 
         let mapping = ExecutableMapping {
             executable_id: ExecutableId(0x0),
-            build_id: None,
             kind: ExecutableMappingType::FileBacked,
             start_addr: 0x100,
             end_addr: 0x100 + 100,

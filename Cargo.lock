@@ -1607,6 +1607,7 @@ dependencies = [
  "lightswitch-metadata",
  "lightswitch-object",
  "lightswitch-proto",
+ "lru 0.16.3",
  "memmap2",
  "nix",
  "object 0.38.1",
