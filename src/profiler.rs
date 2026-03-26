@@ -1,3 +1,5 @@
+use crate::deletion_scheduler::DeletionScheduler;
+use crate::deletion_scheduler::ToDelete;
 use crate::process::opened_exe_path;
 use crate::util::FileId;
 use libbpf_rs::MapImpl;
@@ -177,6 +179,7 @@ pub struct Profiler {
     file_id_to_info: LruCache<FileId, ExecutableId>,
     afflicted_processes: LruCache<Pid, ()>,
     vdso_extraction: Option<(Instant, ExecutableId)>,
+    deletion_scheduler: DeletionScheduler,
 }
 
 pub struct ProfilerConfig {
@@ -659,6 +662,7 @@ impl Profiler {
                 NonZeroUsize::new(100).expect("invalid non zero usize"),
             ),
             vdso_extraction: None,
+            deletion_scheduler: DeletionScheduler::new(),
         }
     }
 
@@ -899,6 +903,7 @@ impl Profiler {
                     debug!("collecting profiles on schedule");
                     let profile = self.collect_profile();
                     self.send_profile(profile);
+                    self.scheduled_deletion();
                 },
                 recv(self.raw_sample_receive) -> raw_sample => {
                     if let Ok(raw_sample) = raw_sample {
@@ -944,14 +949,35 @@ impl Profiler {
         start.elapsed()
     }
 
+    fn scheduled_deletion(&mut self) {
+        // Wait for an extra session to allow for enough time to normalise the
+        // addresses, symbolise, etc.
+        let items_to_delete = self
+            .deletion_scheduler
+            .pop_pending(self.session_duration * 2);
+
+        debug!("removing {} processes", items_to_delete.len());
+
+        let mut procs = self.procs.write();
+        for to_delete in &items_to_delete {
+            match to_delete {
+                ToDelete::Process(_, pid) => {
+                    // Assumes that the PID hasn't been recycled, which can happen in the wild.
+                    let _ = procs.remove(pid);
+                }
+            }
+        }
+    }
+
     pub fn handle_process_exit(&mut self, pid: Pid, partial_write: bool) {
         // TODO: remove BPF ratelimits for this process.
         let _ = self.afflicted_processes.pop(&pid);
         let mut procs = self.procs.write();
         match procs.get_mut(&pid) {
             Some(proc_info) => {
-                debug!("marking process {} as exited", pid);
                 proc_info.status = ProcessStatus::Exited;
+                self.deletion_scheduler
+                    .add(ToDelete::Process(Instant::now(), pid));
 
                 let err = Self::delete_bpf_process(&self.native_unwinder, pid);
                 if let Err(e) = err {
