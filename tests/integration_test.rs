@@ -95,6 +95,55 @@ fn assert_any_stack_contains(
     false
 }
 
+fn assert_any_stack_contains_subsequence(
+    symbolized_profile: &AggregatedProfile,
+    expected_stack: &[&str],
+    expected_pid: i32,
+) -> bool {
+    for sample in symbolized_profile {
+        if sample.pid != expected_pid {
+            continue;
+        }
+
+        let stack = sample
+            .ustack
+            .iter()
+            .filter_map(|e| Some(e.symbolization_result.clone()?.ok()?.name))
+            .collect::<Vec<_>>();
+
+        let mut expected_iter = expected_stack.iter();
+        let mut expected = expected_iter.next();
+
+        for frame in stack {
+            if let Some(needle) = expected {
+                if frame.contains(needle) {
+                    expected = expected_iter.next();
+                    if expected.is_none() {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
+fn stack_strings_for_pid(symbolized_profile: &AggregatedProfile, expected_pid: i32) -> Vec<String> {
+    symbolized_profile
+        .iter()
+        .filter(|sample| sample.pid == expected_pid)
+        .map(|sample| {
+            sample
+                .ustack
+                .iter()
+                .filter_map(|e| Some(e.symbolization_result.clone()?.ok()?.name))
+                .collect::<Vec<_>>()
+                .join("::")
+        })
+        .collect()
+}
+
 #[test]
 fn test_integration() {
     let bpf_test_debug = std::env::var("TEST_DEBUG_BPF").is_ok();
@@ -204,6 +253,47 @@ fn test_integration() {
         &[],
         go_stripped_proc.pid(),
     ));
+}
+
+#[test]
+fn test_integration_ocaml_native_defaults() {
+    let bpf_test_debug = std::env::var("TEST_DEBUG_BPF").is_ok();
+    let system_info = SystemInfo::new(None).expect("failed to detect system info");
+
+    build_test_binary("integration-tests-progs");
+    let ocaml_proc = TestProcess::new("main_ocaml", false);
+
+    let collector = Arc::new(Mutex::new(
+        Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
+    ));
+
+    let profiler_config = ProfilerConfig {
+        libbpf_debug: bpf_test_debug,
+        bpf_logging: bpf_test_debug,
+        duration: Duration::from_secs(5),
+        sample_freq: 999,
+        userspace_pid_ns_level: system_info.available_bpf_features.userspace_pid_ns_level,
+        ..Default::default()
+    };
+    let (_stop_signal_send, stop_signal_receive) = bounded(1);
+    let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+    let mut p = Profiler::new(profiler_config, stop_signal_receive, metadata_provider);
+    p.profile_pids(vec![ocaml_proc.pid()]);
+    p.run(collector.clone());
+    let collector = collector.lock().unwrap();
+    let (raw_profile, procs, objs) = collector.finish();
+    let symbolized_profile = symbolize_profile(&raw_profile, procs, objs);
+
+    let observed_stacks = stack_strings_for_pid(&symbolized_profile, ocaml_proc.pid());
+    assert!(
+        assert_any_stack_contains_subsequence(
+            &symbolized_profile,
+            &["top2", "c2", "b2", "a2"],
+            ocaml_proc.pid(),
+        ),
+        "expected an OCaml stack containing top2 -> c2 -> b2 -> a2, observed:\n{}",
+        observed_stacks.join("\n"),
+    );
 }
 
 #[test]
