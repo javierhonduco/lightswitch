@@ -959,11 +959,22 @@ impl Profiler {
         debug!("removing {} processes", items_to_delete.len());
 
         let mut procs = self.procs.write();
+        let mut object_files = self.object_files.write();
         for to_delete in &items_to_delete {
             match to_delete {
                 ToDelete::Process(_, pid) => {
                     // Assumes that the PID hasn't been recycled, which can happen in the wild.
+                    // remove from afficted
                     let _ = procs.remove(pid);
+                }
+                ToDelete::ObjectFile(_, executable_id) => {
+                    if let Entry::Occupied(entry) = object_files.entry(*executable_id) {
+                        // It could have references since it was enqueued for deletion
+                        if entry.get().references == 0 {
+                            debug!("removing object file {}", entry.get().path.display());
+                            let _ = entry.remove();
+                        }
+                    }
                 }
             }
         }
@@ -995,6 +1006,9 @@ impl Profiler {
 
                     let mut object_files = self.object_files.write();
                     if mapping.mark_as_deleted(&mut object_files) {
+                        self.deletion_scheduler
+                            .add(ToDelete::ObjectFile(Instant::now(), mapping.executable_id));
+
                         if let Entry::Occupied(entry) = self
                             .native_unwind_state
                             .known_executables
@@ -1034,6 +1048,9 @@ impl Profiler {
 
                         let mut object_files = self.object_files.write();
                         if mapping.mark_as_deleted(&mut object_files) {
+                            self.deletion_scheduler
+                                .add(ToDelete::ObjectFile(Instant::now(), mapping.executable_id));
+
                             if let Entry::Occupied(entry) = self
                                 .native_unwind_state
                                 .known_executables
