@@ -198,9 +198,22 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                                                     register, offset, ..
                                                 })),
                                                 Ok(Some(Deref { .. })),
-                                                Ok(Some(PlusConstant { value: addition })),
-                                                Ok(None),
+                                                Ok(Some(PlusConstant { value: addition1 })),
+                                                Ok(last_instr),
+                                                // All PlusConstant + none
                                             ) if register == stack_pointer => {
+                                                let addition = match last_instr {
+                                                    None => addition1,
+                                                    // OCaml has a couple of expressions with two
+                                                    // additions which their backend is not folding,
+                                                    // so we do it here.
+                                                    Some(PlusConstant { value: addition2 }) => {
+                                                        addition1 + addition2
+                                                    }
+                                                    _ => {
+                                                        continue;
+                                                    }
+                                                };
                                                 debug!("*(rsp+{offset})+{addition}");
                                                 compact_row.cfa_type = CfaType::DerefAndAdd;
                                                 // Assumes that both the offset and addition will
