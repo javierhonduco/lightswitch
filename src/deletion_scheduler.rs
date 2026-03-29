@@ -1,4 +1,5 @@
 use crate::process::Pid;
+use lightswitch_object::ExecutableId;
 use std::collections::BinaryHeap;
 use std::time::Duration;
 use std::time::Instant;
@@ -30,7 +31,9 @@ impl DeletionScheduler {
     pub fn pop_pending(&mut self, older_than: Duration) -> Vec<ToDelete> {
         let mut r = Vec::new();
 
-        while let Some(ToDelete::Process(time, _)) = self.peek() {
+        while let Some(ToDelete::Process(time, _)) | Some(ToDelete::ObjectFile(time, _)) =
+            self.peek()
+        {
             if time.elapsed() >= older_than {
                 if let Some(el) = self.pop() {
                     r.push(el);
@@ -48,6 +51,7 @@ impl DeletionScheduler {
 pub enum ToDelete {
     // The Instant is the moment we track elapsed time from
     Process(Instant, Pid),
+    ObjectFile(Instant, ExecutableId),
 }
 
 impl PartialOrd for ToDelete {
@@ -59,10 +63,10 @@ impl PartialOrd for ToDelete {
 impl Ord for ToDelete {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         let a = match self {
-            ToDelete::Process(time, _) => time,
+            ToDelete::Process(time, _) | ToDelete::ObjectFile(time, _) => time,
         };
         let b = match other {
-            ToDelete::Process(time, _) => time,
+            ToDelete::Process(time, _) | ToDelete::ObjectFile(time, _) => time,
         };
         // We want a reversed comparison - the older it is, the more we want it
         b.cmp(a)
