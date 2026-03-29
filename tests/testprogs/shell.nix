@@ -112,11 +112,29 @@ let
     ];
   };
 
+  test-ocaml-progs = pkgs.stdenv.mkDerivation {
+    name = "build-test-ocaml-prog";
+    src = ./.;
+    dontStrip = true;
+    buildPhase = ''
+      cd src/ocaml
+      ocamlopt main.ml -o main_ocaml
+    '';
+    installPhase = ''
+      mkdir -p $out/bin
+      cp main_ocaml $out/bin
+    '';
+    buildInputs = [
+      pkgs.ocaml
+    ];
+  };
+
   test-all-progs = pkgs.symlinkJoin {
     name = "all-progs";
     paths = [
       test-cpp-progs
       test-go-progs
+      test-ocaml-progs
     ];
   };
 in
@@ -124,6 +142,7 @@ in
   default = test-cpp-progs;
   cpp-progs = test-cpp-progs;
   go-progs = test-go-progs;
+  ocaml-progs = test-ocaml-progs;
   cpp-progs-static-musl = test-static-musl-cpp-progs;
   all-progs = test-all-progs;
 }
