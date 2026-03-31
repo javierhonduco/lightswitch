@@ -1,7 +1,6 @@
 use std::fmt;
 use std::fs;
 use std::fs::File;
-use std::io::Read;
 use std::path::Path;
 
 use anyhow::{Result, anyhow};
@@ -303,20 +302,9 @@ pub fn code_hash(object: &object::File) -> Option<Digest> {
     None
 }
 
-fn sha256_digest<R: Read>(mut reader: R) -> Digest {
+fn sha256_digest(data: &[u8]) -> Digest {
     let mut context = Context::new(&SHA256);
-    let mut buffer = [0; 1024];
-
-    loop {
-        let count = reader
-            .read(&mut buffer)
-            .expect("reading digest into buffer should not fail");
-        if count == 0 {
-            break;
-        }
-        context.update(&buffer[..count]);
-    }
-
+    context.update(data);
     context.finish()
 }
 
