@@ -15,7 +15,7 @@ use crate::unwind_info::types::CompactUnwindRow;
 // To identify this binary file type.
 const MAGIC_NUMBER: u32 = 0x1357531;
 // Any changes to the ABI / digest must bump the version.
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 
 type UnwindInformationDigest = u64;
 
