@@ -31,7 +31,7 @@ jobs:
         steps:
             - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
             - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-            - uses: DeterminateSystems/flakehub-cache-action@54da30ddec8ccb09e540e4490353fd6a702a1670 # v2
+            - uses: DeterminateSystems/flakehub-cache-action@77fe95416299b8d1351b57bf10a1042a0ed75708 # v2
             - name: Show nix version
               run: nix --version
             - name: Set up nix dev env
@@ -45,14 +45,14 @@ jobs:
                   nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:${{ github.ref_name }}
                   nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:latest
             - name: Upload container
-              uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+              uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
               with:
                   name: lightswitch-container-${{ matrix.config.target }}
                   path: ./result
             - name: Build `lightswitch` statically linked with glibc
               run: nix develop --ignore-environment --keep TARGET --command bash -c 'RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target $TARGET'
             - name: Upload static binary
-              uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+              uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
               with:
                   name: lightswitch-static-glibc-${{ matrix.config.target }}
                   path: ./target/${{ matrix.config.target }}/release/lightswitch
@@ -75,7 +75,7 @@ jobs:
                   cp lightswitch-static-glibc-aarch64-unknown-linux-gnu/lightswitch renamed/lightswitch-static-glibc-aarch64-unknown-linux-gnu
 
             - name: Create release
-              uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
+              uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
               with:
                   files: |
                       renamed/lightswitch-container-x86_64-unknown-linux-gnu
@@ -91,7 +91,7 @@ jobs:
         steps:
             - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
             - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-            - uses: DeterminateSystems/flakehub-cache-action@54da30ddec8ccb09e540e4490353fd6a702a1670 # v2
+            - uses: DeterminateSystems/flakehub-cache-action@77fe95416299b8d1351b57bf10a1042a0ed75708 # v2
             - name: Show nix version
               run: nix --version
             - name: Set up nix dev env
