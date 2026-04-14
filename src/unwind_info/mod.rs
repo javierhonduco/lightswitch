@@ -3,6 +3,7 @@ pub mod manager;
 mod optimize;
 pub mod pages;
 pub mod persist;
+pub mod source;
 pub mod types;
 
 pub use convert::compact_unwind_info;

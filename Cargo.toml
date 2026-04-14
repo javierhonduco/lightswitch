@@ -11,7 +11,7 @@ members = [
     "lightswitch-proto",
     "lightswitch-capabilities",
     "lightswitch-metadata",
-    "lightswitch-object"
+    "lightswitch-object",
 ]
 
 [workspace.dependencies]
@@ -70,6 +70,7 @@ procfs = { workspace = true }
 nix = { workspace = true, features = ["user"] }
 parking_lot = { version = "0.12.5", features = ["deadlock_detection"] }
 ring = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "aws_lc_rs"] }
 flamelens = { version = "0.4.0", default-features = false }
 lru = { workspace = true }
 
