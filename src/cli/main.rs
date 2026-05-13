@@ -400,6 +400,7 @@ fn show_object_file_info(path: &str) {
     }
     let unwind_info = CompactUnwindInfoBuilder::with_callback(path, None, |_| {});
     println!("- unwind info: {:?}", unwind_info.unwrap().process());
+    println!("- debug info (dwarf): {:?}", object_file.has_debug_info());
     println!(
         "- go: {:?} {:?}",
         object_file.is_go(),
