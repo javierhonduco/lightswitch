@@ -335,15 +335,18 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
             return 1;
         }
 
-        if (mapping->type == MAPPING_TYPE_VDSO) {
-            LOG("vDSO section");
-            bump_unwind_vdso_encountered();
-        }
 
         u64 object_relative_pc = unwind_state->ip - mapping->load_address;
         u64 object_relative_pc_high = HIGH_PC(object_relative_pc);
         u16 object_relative_pc_low = LOW_PC(object_relative_pc);
 
+        if (mapping->type == MAPPING_TYPE_VDSO) {
+            bpf_printk("vDSO section");
+            bpf_printk("ip %llx, load address %llx, pc high %llx, pc low %llx (object_relative_pc: %llx)", unwind_state->ip, mapping->load_address, object_relative_pc_high, object_relative_pc_low, object_relative_pc);
+            bump_unwind_vdso_encountered();
+        } else {
+            //return 0;
+        }
         u64 low_index = 0;
         u64 high_index = 0;
         void *inner = find_page(mapping, object_relative_pc_high, &low_index, &high_index);

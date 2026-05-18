@@ -247,6 +247,7 @@ fn has_non_prealloc_hash_maps_in_tracing() -> bool {
 
 fn check_bpf_features(btf_custom_path: Option<String>) -> Result<BpfFeatures> {
     let mut skel_builder = FeaturesSkelBuilder::default();
+    skel_builder.obj_builder.debug(true);
     let mut a = MaybeUninit::uninit();
 
     if let Some(btf_custom_path) = btf_custom_path {

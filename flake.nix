@@ -77,6 +77,7 @@
           devShells.default = mkShell {
             nativeBuildInputs = nativeBuildInputs;
             buildInputs = buildInputs ++ [
+              llvmPackages_19.llvm
               (rust-toolchain.override {
                 extensions = [
                   "rust-src"

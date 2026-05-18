@@ -1,0 +1,22 @@
+## .text and .eh_frame were copied from the linked output of arm64-cases.s.
+--- !ELF
+FileHeader:
+  Class: ELFCLASS64
+  Data: ELFDATA2LSB
+  Type: ET_EXEC
+  Machine: EM_AARCH64
+  Entry: 0x4000
+Sections:
+  - Name: .text
+    Type: SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Address: 0x4000
+    AddressAlign: 0x4
+    Content: "fd7bbfa9fd0300911f2003d5fd7bc1a8c0035fd6ff8300d1fd0300f9fe0f00f91f2003d5ff830091c0035fd61f2003d5c0035fd61f2003d5c0035fd6"
+  - Name: .eh_frame
+    Type: SHT_PROGBITS
+    Flags: [ SHF_ALLOC ]
+    Address: 0x14040
+    AddressAlign: 0x8
+    Content: "1000000000000000017a5200017c1e011b0c1f001c00000018000000a4fffeff1400000000440e109d049e02440d1d480c1f00001c0000003800000098fffeff1800000000440e20449d08449e02480e00000000100000005800000090fffeff0800000000000000140000006c00000084fffeff08000000009d904e9e8e4e0000000000"
+...

@@ -1676,9 +1676,10 @@ impl Profiler {
             Runtime::CLike => {
                 if needs_synthesis {
                     debug!("synthetising arm64 unwind information using frame pointers for vDSO");
+                    println!("--- {}", end_address - start_address);
                     Ok(vec![
-                        CompactUnwindRow::frame_pointer(start_address, is_arm64),
-                        CompactUnwindRow::stop_unwinding(end_address),
+                        CompactUnwindRow::frame_pointer(0x310, is_arm64),
+                        CompactUnwindRow::stop_unwinding(0xc80),
                     ])
                 } else {
                     let _span = span!(
@@ -2189,6 +2190,34 @@ impl Profiler {
                                     continue;
                                 };
                                 self.vdso_extraction = Some((Instant::now(), executable_id));
+
+                                let load_address = |map_start: u64, first_elf_load: &ElfLoad| {
+                                    let page_mask = !(page_size() - 1) as u64;
+                                    map_start.saturating_sub(first_elf_load.p_vaddr & page_mask)
+                                };
+
+                                let computed_load = load_address(
+                                    map.address.0,
+                                    object.elf_load_segments().unwrap().first().unwrap(),
+                                );
+                                if computed_load != map.address.0 {
+                                    println!(
+                                        "!!!!! computed_load {:x}, map.start {:x}",
+                                        computed_load, map.address.0
+                                    );
+                                } else {
+                                    println!(
+                                        "👍 load {:x} offset {:x} first load {:x}",
+                                        computed_load,
+                                        map.offset,
+                                        object
+                                            .elf_load_segments()
+                                            .unwrap()
+                                            .first()
+                                            .unwrap()
+                                            .p_vaddr
+                                    );
+                                }
                             }
                             Err(e) => {
                                 error!("failed to fetch vDSO due to {:?}", e);

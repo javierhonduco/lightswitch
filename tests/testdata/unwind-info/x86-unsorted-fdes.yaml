@@ -1,0 +1,22 @@
+## Derived from the first two functions in x86-cases.s with FDE order reversed.
+--- !ELF
+FileHeader:
+  Class: ELFCLASS64
+  Data: ELFDATA2LSB
+  Type: ET_EXEC
+  Machine: EM_X86_64
+  Entry: 0x1000
+Sections:
+  - Name: .text
+    Type: SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Address: 0x1000
+    AddressAlign: 0x4
+    Content: "554889e590c9c34883ec20904883c420c3"
+  - Name: .eh_frame
+    Type: SHT_PROGBITS
+    Flags: [ SHF_ALLOC ]
+    Address: 0x2028
+    AddressAlign: 0x8
+    Content: "1400000000000000017a5200017810011b0c070890010000140000001c000000bfefffff0a00000000440e28450e08001c00000034000000a0efffff0700000000410e108602430d06420c070800000000000000"
+...

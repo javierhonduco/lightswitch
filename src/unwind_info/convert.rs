@@ -365,3 +365,187 @@ pub fn compact_unwind_info(
 
     Ok(unwind_info)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use anyhow::Result;
+
+    use super::*;
+
+    fn fixture_path(name: &str) -> String {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/testdata/unwind-info")
+            .join(name)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn collect_unwind_data(
+        name: &str,
+        first_frame_override: Option<(u64, u64)>,
+    ) -> Result<(Vec<(u64, u64)>, Vec<CompactUnwindRow>)> {
+        let path = fixture_path(name);
+        let mut functions = Vec::new();
+        let mut rows = Vec::new();
+
+        CompactUnwindInfoBuilder::with_callback(&path, first_frame_override, |unwind_data| {
+            match unwind_data {
+                UnwindData::Function(start_addr, end_addr) => {
+                    functions.push((*start_addr, *end_addr))
+                }
+                UnwindData::Instruction(row) => rows.push(*row),
+            }
+        })?
+        .process()?;
+
+        Ok((functions, rows))
+    }
+
+    #[test]
+    fn x86_yaml_fixture_covers_conversion_cases() -> Result<()> {
+        let (_functions, rows) = collect_unwind_data("x86-cases.elf", None)?;
+
+        assert!(rows.iter().copied().any(|row| {
+            row.cfa_type == CfaType::FramePointerOffset
+                && row.rbp_type == RbpType::CfaOffset
+                && row.cfa_offset == 16
+                && row.rbp_offset == -16
+        }));
+        assert!(rows
+            .iter()
+            .copied()
+            .any(|row| row.cfa_type == CfaType::StackPointerOffset && row.cfa_offset == 40));
+        assert!(rows
+            .iter()
+            .copied()
+            .any(|row| row.cfa_type == CfaType::UnsupportedRegisterOffset));
+        assert!(rows
+            .iter()
+            .copied()
+            .any(|row| row.cfa_type == CfaType::OffsetDidNotFit));
+        assert!(rows
+            .iter()
+            .copied()
+            .any(|row| row.cfa_type == CfaType::UnsupportedExpression));
+        assert!(rows
+            .iter()
+            .copied()
+            .any(|row| row.cfa_type == CfaType::Plt1));
+        assert!(rows
+            .iter()
+            .copied()
+            .any(|row| row.cfa_type == CfaType::Plt2));
+        assert!(rows.iter().copied().any(|row| {
+            row.cfa_type == CfaType::DerefAndAdd && row.cfa_offset == ((8u16 << 8) | 16)
+        }));
+        assert!(rows.iter().copied().any(|row| {
+            row.cfa_type == CfaType::DerefAndAdd && row.cfa_offset == ((8u16 << 8) | 48)
+        }));
+        assert!(rows
+            .iter()
+            .copied()
+            .any(|row| row.rbp_type == RbpType::Register));
+        assert!(rows
+            .iter()
+            .copied()
+            .any(|row| row.rbp_type == RbpType::Expression));
+        assert!(rows
+            .iter()
+            .copied()
+            .any(|row| row.rbp_type == RbpType::OffsetDidNotFit));
+        assert!(rows
+            .iter()
+            .copied()
+            .any(|row| row.rbp_type == RbpType::UndefinedReturnAddress));
+
+        Ok(())
+    }
+
+    #[test]
+    fn arm64_yaml_fixture_covers_return_address_cases() -> Result<()> {
+        let (_functions, rows) = collect_unwind_data("arm64-cases.elf", None)?;
+
+        assert!(rows.iter().copied().any(|row| {
+            row.cfa_type == CfaType::FramePointerOffset
+                && row.rbp_type == RbpType::Arm64ReturnAddressFrame
+                && row.cfa_offset == 16
+                && row.rbp_offset == -16
+        }));
+        assert!(rows.iter().copied().any(|row| {
+            row.rbp_type == RbpType::Arm64ReturnAddressElsewhere && row.rbp_offset == -8
+        }));
+        assert!(rows
+            .iter()
+            .copied()
+            .any(|row| row.rbp_type == RbpType::Arm64ReturnAddressLr));
+        assert!(rows
+            .iter()
+            .copied()
+            .any(|row| row.rbp_type == RbpType::OffsetDidNotFit));
+
+        Ok(())
+    }
+
+    #[test]
+    fn fdes_are_sorted_before_conversion() -> Result<()> {
+        let (functions, rows) = collect_unwind_data("x86-unsorted-fdes.elf", None)?;
+
+        assert_eq!(functions, vec![(0x1000, 0x1007), (0x1007, 0x1011)]);
+        let first_row = rows.first().copied().unwrap();
+        let last_row = rows.last().copied().unwrap();
+        let first_pc = first_row.pc;
+        let last_pc = last_row.pc;
+        assert_eq!(first_pc, 0x1000);
+        assert_eq!(last_pc, 0x1010);
+
+        Ok(())
+    }
+
+    #[test]
+    fn first_frame_override_rewrites_matching_row() -> Result<()> {
+        let (_functions, rows) = collect_unwind_data("x86-cases.elf", Some((0x1000, 0)))?;
+
+        assert_eq!(
+            rows.first().copied().unwrap(),
+            CompactUnwindRow::stop_unwinding(0x1000)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn compact_unwind_info_errors_when_no_fdes_are_present() {
+        let path = fixture_path("x86-no-fde.elf");
+        let err = compact_unwind_info(&path, None).unwrap_err();
+
+        assert!(matches!(
+            err.downcast_ref::<UnwindInfoError>(),
+            Some(UnwindInfoError::NoFunctionsFoundInEhFrameData)
+        ));
+    }
+
+    #[test]
+    fn builder_errors_when_required_sections_are_missing() {
+        let no_eh_frame = fixture_path("x86-no-eh-frame.elf");
+        let err = CompactUnwindInfoBuilder::with_callback(&no_eh_frame, None, |_| {})
+            .unwrap()
+            .process()
+            .unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<UnwindInfoError>(),
+            Some(UnwindInfoError::NoEhFrameSection)
+        ));
+
+        let no_text = fixture_path("x86-no-text.elf");
+        let err = CompactUnwindInfoBuilder::with_callback(&no_text, None, |_| {})
+            .unwrap()
+            .process()
+            .unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<UnwindInfoError>(),
+            Some(UnwindInfoError::NoTextSection)
+        ));
+    }
+}

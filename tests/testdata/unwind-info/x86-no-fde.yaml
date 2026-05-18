@@ -1,0 +1,22 @@
+## Derived from the CIE emitted for x86-cases.s, with all FDEs removed.
+--- !ELF
+FileHeader:
+  Class: ELFCLASS64
+  Data: ELFDATA2LSB
+  Type: ET_EXEC
+  Machine: EM_X86_64
+  Entry: 0x1000
+Sections:
+  - Name: .text
+    Type: SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Address: 0x1000
+    AddressAlign: 0x4
+    Content: "c3"
+  - Name: .eh_frame
+    Type: SHT_PROGBITS
+    Flags: [ SHF_ALLOC ]
+    Address: 0x2028
+    AddressAlign: 0x8
+    Content: "1400000000000000017a5200017810011b0c07089001000000000000"
+...
