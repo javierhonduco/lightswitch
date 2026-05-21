@@ -479,6 +479,41 @@ mod tests {
     }
 
     #[test]
+    fn collected_at_label_round_trips_through_pprof() {
+        let mut pprof = PprofBuilder::new(SystemTime::now(), Duration::from_secs(1), 19);
+        let mapping_id = pprof.add_mapping(0x1000, 0x2000, 0, "test.so", "build-id-abc");
+        let location_id = pprof.add_location(0x1500, mapping_id, vec![]);
+
+        let ms_timestamp: i64 = 1_748_865_070_123;
+        let label =
+            pprof.new_label("collected_at", LabelStringOrNumber::Number(ms_timestamp, "milliseconds".into()));
+        pprof.add_sample(vec![location_id], 1, &[label]);
+
+        let profile = pprof.build();
+
+        // Verify in memory
+        assert_eq!(profile.sample.len(), 1);
+        let sample = &profile.sample[0];
+        assert_eq!(sample.label.len(), 1);
+        let lbl = &sample.label[0];
+        assert_eq!(lbl.num, ms_timestamp);
+        assert_ne!(lbl.num_unit, 0, "num_unit must be set for numeric labels");
+        let key_str = &profile.string_table[lbl.key as usize];
+        assert_eq!(key_str, "collected_at");
+        let unit_str = &profile.string_table[lbl.num_unit as usize];
+        assert_eq!(unit_str, "milliseconds");
+
+        // Verify after encode/decode round-trip
+        let mut buf = bytes::BytesMut::new();
+        profile.encode(&mut buf).expect("encode failed");
+        let decoded = pprof::Profile::decode(buf.freeze()).expect("decode failed");
+        let decoded_lbl = &decoded.sample[0].label[0];
+        assert_eq!(decoded_lbl.num, ms_timestamp);
+        let decoded_key = &decoded.string_table[decoded_lbl.key as usize];
+        assert_eq!(decoded_key, "collected_at");
+    }
+
+    #[test]
     fn test_encode_decode() {
         let mut pprof = PprofBuilder::new(SystemTime::now(), Duration::from_secs(5), 27);
         pprof.add_function("func1", None);

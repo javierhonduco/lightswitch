@@ -199,7 +199,7 @@ pub fn to_pprof(
             // todo: maybe append an error frame for debugging?
             continue;
         };
-        let labels = task_to_labels.entry(task_key).or_insert_with(|| {
+        let task_labels = task_to_labels.entry(task_key).or_insert_with(|| {
             let metadata = metadata_provider.lock().unwrap().get_metadata(task_key);
             metadata
                 .into_iter()
@@ -212,7 +212,13 @@ pub fn to_pprof(
                 })
                 .collect()
         });
-        pprof.add_sample(location_ids, sample.count as i64, labels);
+        let timestamp_label = pprof.new_label(
+            "collected_at",
+            LabelStringOrNumber::Number(sample.collected_at as i64, "milliseconds".into()),
+        );
+        let mut sample_labels = task_labels.clone();
+        sample_labels.push(timestamp_label);
+        pprof.add_sample(location_ids, sample.count as i64, &sample_labels);
     }
 
     pprof.build()
@@ -324,6 +330,7 @@ pub fn symbolize_profile(
             pid: sample.pid,
             tid: sample.tid,
             count: sample.count,
+            collected_at: sample.collected_at,
             ustack: symbolize_user_stack(
                 &addresses_per_sample,
                 procs,
