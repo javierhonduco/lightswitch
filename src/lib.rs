@@ -1,5 +1,7 @@
 pub mod aggregator;
 pub mod bpf;
+pub mod bpf_objects;
+pub mod bpf_poller;
 pub mod collector;
 pub mod debug_info;
 pub mod deletion_scheduler;
