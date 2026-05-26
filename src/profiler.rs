@@ -118,18 +118,19 @@ pub struct Profiler {
     // Channel for tracer events such as munmaps and process exits.
     tracers_chan_send: Arc<Sender<TracerEvent>>,
     tracers_chan_receive: Arc<Receiver<TracerEvent>>,
-    /// Profiler stop channel. Used to receive signals from users to stop
-    /// profiling.
+    /// Profiler stop notification channel.
     stop_chan_receive: Receiver<()>,
-    pub native_unwind_state: NativeUnwindState,
+    native_unwind_state: NativeUnwindState,
     /// Pids excluded from profiling.
     filter_pids: HashMap<Pid, bool>,
-    // Profile channel
+    /// Profile channels.
     profile_send: Arc<Sender<RawAggregatedProfile>>,
     profile_receive: Arc<Receiver<RawAggregatedProfile>>,
-    // A vector of raw samples received from bpf in the current profiling session
+    /// A vector of raw samples received from bpf in the current profiling
+    /// session
     raw_samples: Vec<RawSample>,
-    // Raw samples channel. Used for receiving raw samples from the ringbuf/perfbuf poll thread
+    /// Raw samples channels. Used for receiving raw samples from the
+    /// ringbuf/perfbuf poll thread
     raw_sample_send: Arc<Sender<RawSample>>,
     raw_sample_receive: Arc<Receiver<RawSample>>,
     /// For how long to profile.
@@ -153,15 +154,15 @@ pub struct Profiler {
     use_ring_buffers: bool,
     aggregator: Aggregator,
     metadata_provider: ThreadSafeGlobalMetadataProvider,
-    // Baseline for calculating raw_sample collection wall clock time
-    // as bpf currently only supports getting the offset since system boot.
+    /// Baseline for calculating raw_sample collection wall clock time
+    /// as BPF currently only supports getting the offset since system boot.
     walltime_at_system_boot: u64,
     preload_thread_metadata: bool,
     file_id_to_info: LruCache<FileId, ExecutableId>,
     afflicted_processes: LruCache<Pid, ()>,
     vdso_extraction: Option<(Instant, ExecutableId)>,
     deletion_scheduler: DeletionScheduler,
-    // Prevent the links from being removed.
+    /// Prevent the BPF attached programs from being removed.
     _links: Vec<Link>,
 }
 
