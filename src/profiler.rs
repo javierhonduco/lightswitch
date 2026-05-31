@@ -558,7 +558,6 @@ impl Profiler {
                             }
                         }
                     },
-                default(Duration::from_millis(100)) => {},
             }
         }
 
