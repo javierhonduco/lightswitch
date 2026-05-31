@@ -243,6 +243,63 @@ enum AddUnwindInformationError {
     StrippedGo,
 }
 
+// mmap'ed data is always page aligned but the load segment information
+// might not be. As we need to account for
+// any randomisation added by ASLR, by
+// subtracting the virtual address from the
+// first load segment once it's been page aligned we'll get the offset
+// at which the executable has been loaded.
+//
+// Note: this doesn't take into consideration the mmap'ed or load
+// offsets.
+fn previous_load_address(map_start: u64, elf_loads: &[ElfLoad]) -> u64 {
+    let page_mask = !(page_size() - 1) as u64; // round down
+    map_start.saturating_sub(elf_loads.first().unwrap().p_vaddr & page_mask)
+}
+
+fn align_down(value: u64, align: u64) -> u64 {
+    value & !(align - 1)
+}
+
+fn align_up(value: u64, align: u64) -> Option<u64> {
+    value
+        .checked_add(align - 1)
+        .map(|value| align_down(value, align))
+}
+
+fn load_address_for_mapping(map_start: u64, map_offset: u64, elf_loads: &[ElfLoad]) -> Option<u64> {
+    let page_size = page_size() as u64;
+
+    elf_loads.iter().find_map(|load| {
+        let file_start = align_down(load.p_offset, page_size);
+        let file_end = align_up(load.p_offset.checked_add(load.p_filesz)?, page_size)?;
+
+        if !(file_start..file_end).contains(&map_offset) {
+            return None;
+        }
+
+        let vaddr_start = align_down(load.p_vaddr, page_size);
+        let object_vaddr_at_map_start = map_offset
+            .checked_sub(file_start)?
+            .checked_add(vaddr_start)?;
+        map_start.checked_sub(object_vaddr_at_map_start)
+    })
+}
+
+fn load_address(comm: &str, map_start: u64, map_offset: u64, elf_loads: &[ElfLoad]) -> u64 {
+    let old = previous_load_address(map_start, elf_loads);
+    let new = load_address_for_mapping(map_start, map_offset, elf_loads);
+    let Some(new) = new else {
+        println!("new LOAD is empty!! comm {comm}");
+        return old;
+    };
+    if old != new {
+        println!("LOAD old {:x}, new {:x} comm {comm}", old, new);
+    }
+
+    new
+}
+
 impl Profiler {
     pub fn new(
         profiler_config: ProfilerConfig,
@@ -832,19 +889,19 @@ impl Profiler {
         // Store all mappings in BPF maps.
         if let Err(e) = self.bpf.add_mappings(pid, &bpf_mappings) {
             errored = true;
-            debug!("failed to add BPF mappings due to {:?}", e);
+            error!("failed to add BPF mappings due to {:?}", e);
         }
         // Add entry just with the pid to signal processes that we already know about.
         if let Err(e) = self.bpf.add_process(pid) {
             errored = true;
-            debug!("failed to add BPF process due to {:?}", e);
+            error!("failed to add BPF process due to {:?}", e);
         }
 
         if errored {
             // Remove partially written data.
             self.handle_process_exit(pid, true);
             // Evict a process to make room for more.
-            debug!("eviction result {}", self.maybe_evict_process(false));
+            error!("eviction result {}", self.maybe_evict_process(false));
         }
     }
 
@@ -1224,7 +1281,7 @@ impl Profiler {
         object_file: &ObjectFile,
         exe_path: &Path,
         is_vdso: bool,
-    ) -> Result<(Option<BuildId>, ElfLoad)> {
+    ) -> Result<(Option<BuildId>, Vec<ElfLoad>)> {
         let build_id = object_file.build_id();
         let executable_id = build_id.id()?;
 
@@ -1259,16 +1316,12 @@ impl Profiler {
             return Err(anyhow::anyhow!("no elf load segments"));
         };
 
-        let Some(first_elf_load) = elf_loads.first().cloned() else {
-            return Err(anyhow::anyhow!("empty elf load segments"));
-        };
-
         self.object_files.write().insert(
             executable_id,
             ObjectFileInfo {
                 build_id: Some(build_id.clone()),
                 path: exe_path.to_path_buf(),
-                elf_load_segments: elf_loads,
+                elf_load_segments: elf_loads.clone(),
                 is_dyn: object_file.is_dynamic(),
                 references: 1,
                 native_unwind_info_size: None,
@@ -1277,7 +1330,7 @@ impl Profiler {
             },
         );
 
-        Ok((Some(build_id.clone()), first_elf_load))
+        Ok((Some(build_id.clone()), elf_loads))
     }
 
     /// Returns the information needed to fill in a process
@@ -1287,7 +1340,7 @@ impl Profiler {
         opened_exe_path: &Path,
         exe_path: &Path,
         is_vdso: bool,
-    ) -> Result<(Option<BuildId>, ElfLoad)> {
+    ) -> Result<(Option<BuildId>, Vec<ElfLoad>)> {
         let file_id = FileId::new(opened_exe_path)?;
         let cached_executable_id = self.file_id_to_info.get(&file_id);
         let (object, executable_id) = match cached_executable_id {
@@ -1312,11 +1365,7 @@ impl Profiler {
                 let obj = entry.get_mut();
                 obj.references += 1;
 
-                let Some(first_load_segment) = obj.elf_load_segments.first() else {
-                    return Err(anyhow::anyhow!("empty load segments"));
-                };
-
-                Ok((obj.build_id.clone(), first_load_segment.clone()))
+                Ok((obj.build_id.clone(), obj.elf_load_segments.clone()))
             }
         };
 
@@ -1356,32 +1405,26 @@ impl Profiler {
                         pid
                     );
 
-                    // mmap'ed data is always page aligned but the load segment information
-                    // might not be. As we need to account for
-                    // any randomisation added by ASLR, by
-                    // subtracting the virtual address from the
-                    // first load segment once it's been page aligned we'll get the offset
-                    // at which the executable has been loaded.
-                    //
-                    // Note: this doesn't take into consideration the mmap'ed or load
-                    // offsets.
-                    let load_address = |map_start: u64, first_elf_load: &ElfLoad| {
-                        let page_mask = !(page_size() - 1) as u64;
-                        map_start.saturating_sub(first_elf_load.p_vaddr & page_mask)
-                    };
-
-                    if let Ok((Some(build_id), first_elf_load)) = info {
+                    if let Ok((Some(build_id), elf_loads)) = info {
                         mappings.push(ExecutableMapping {
                             executable_id: build_id.id().expect("executable id"),
                             kind: ExecutableMappingType::FileBacked,
                             start_addr: map.address.0,
                             end_addr: map.address.1,
                             offset: map.offset,
-                            load_address: load_address(map.address.0, &first_elf_load),
+                            load_address: load_address(
+                                &comm,
+                                map.address.0,
+                                map.offset,
+                                &elf_loads,
+                            ),
                             soft_delete: false,
                         });
                     } else {
-                        debug!("could not insert object file due to {:?}", info);
+                        error!(
+                            "could not insert object file due to {:?} for process {}",
+                            info, pid
+                        );
                     }
                 }
                 procfs::process::MMapPath::Anonymous => {

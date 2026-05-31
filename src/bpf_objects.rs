@@ -510,8 +510,11 @@ impl Bpf {
             if let Err(e) = res {
                 if !partial_write {
                     error!(
-                        "failed to delete bpf mappings for process {} with {:?}",
-                        pid, e
+                        "failed to delete bpf mappings for process {} with {:?} [{:x}-{:x})",
+                        pid,
+                        e,
+                        mapping_begin,
+                        mapping_end - 1
                     );
                 }
             }
