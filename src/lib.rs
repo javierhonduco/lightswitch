@@ -7,6 +7,7 @@ pub mod debug_info;
 pub mod deletion_scheduler;
 pub mod kernel;
 pub mod ksym;
+pub mod native_unwind_state;
 pub mod perf_events;
 pub mod process;
 pub mod profile;
