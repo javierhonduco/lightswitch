@@ -3,6 +3,9 @@ use crate::bpf_objects::Bpf;
 use crate::bpf_poller::start_poll_thread;
 use crate::deletion_scheduler::DeletionScheduler;
 use crate::deletion_scheduler::ToDelete;
+use crate::native_unwind_state::unwind_info_size_bytes;
+use crate::native_unwind_state::KnownExecutableInfo;
+use crate::native_unwind_state::NativeUnwindState;
 use crate::perf_events::setup_perf_event;
 use crate::process::opened_exe_path;
 use crate::util::get_online_cpus;
@@ -65,46 +68,6 @@ const MAX_UNWIND_INFO_SIZE: usize = 7_000_000;
 pub enum TracerEvent {
     ProcessExit(Pid),
     Munmap(Pid, u64),
-}
-
-pub struct KnownExecutableInfo {
-    unwind_info_len: usize,
-    pub(crate) unwind_info_start_address: u64,
-    pub(crate) unwind_info_end_address: u64,
-    last_used: Instant,
-}
-
-pub struct NativeUnwindState {
-    known_executables: HashMap<ExecutableId, KnownExecutableInfo>,
-    last_executable_eviction: Instant,
-    last_process_eviction: Instant,
-}
-
-impl NativeUnwindState {
-    fn new() -> Self {
-        NativeUnwindState {
-            known_executables: HashMap::new(),
-            last_executable_eviction: Instant::now(),
-            last_process_eviction: Instant::now(),
-        }
-    }
-
-    /// Checks whether the given `executable_id` is loaded in the BPF maps.
-    fn is_known(&self, executable_id: ExecutableId) -> bool {
-        self.known_executables.contains_key(&executable_id)
-    }
-
-    /// Checks if the last eviction happened long ago enough to prevent
-    /// excessive overhead.
-    fn can_evict_executable(&self) -> bool {
-        self.last_executable_eviction.elapsed() >= Duration::from_millis(500)
-    }
-
-    /// Checks if the last eviction happened long ago enough to prevent
-    /// excessive overhead.
-    fn can_evict_process(&self) -> bool {
-        self.last_process_eviction.elapsed() >= Duration::from_millis(500)
-    }
 }
 
 pub struct Profiler {
@@ -661,10 +624,8 @@ impl Profiler {
                         self.deletion_scheduler
                             .add(ToDelete::ObjectFile(Instant::now(), mapping.executable_id));
 
-                        if let Entry::Occupied(entry) = self
-                            .native_unwind_state
-                            .known_executables
-                            .entry(mapping.executable_id)
+                        if let Entry::Occupied(entry) =
+                            self.native_unwind_state.get(mapping.executable_id)
                         {
                             self.bpf
                                 .delete_native_unwind_all(mapping, entry, partial_write);
@@ -698,10 +659,8 @@ impl Profiler {
                             self.deletion_scheduler
                                 .add(ToDelete::ObjectFile(Instant::now(), mapping.executable_id));
 
-                            if let Entry::Occupied(entry) = self
-                                .native_unwind_state
-                                .known_executables
-                                .entry(mapping.executable_id)
+                            if let Entry::Occupied(entry) =
+                                self.native_unwind_state.get(mapping.executable_id)
                             {
                                 self.bpf.delete_native_unwind_all(mapping, entry, false);
                             }
@@ -742,28 +701,11 @@ impl Profiler {
                 let Some(proc) = proc else { continue };
                 let mapping = proc.mappings.for_address(virtual_address);
                 if let Some(mapping) = mapping {
-                    if let Some(executable) = self
-                        .native_unwind_state
-                        .known_executables
-                        .get_mut(&mapping.executable_id)
-                    {
-                        executable.last_used = now;
-                    }
+                    self.native_unwind_state
+                        .executable_seen(mapping.executable_id, now);
                 }
             }
         }
-    }
-
-    /// Returns the executables sorted by when they were used last.
-    pub fn last_used_executables(&self) -> Vec<(ExecutableId, &KnownExecutableInfo)> {
-        let mut last_used_executable_ids = Vec::new();
-
-        for (executable_id, executable_info) in &self.native_unwind_state.known_executables {
-            last_used_executable_ids.push((*executable_id, executable_info));
-        }
-
-        last_used_executable_ids.sort_by_key(|e| e.1.last_used);
-        last_used_executable_ids
     }
 
     /// Clear the `percpu_stats` maps one entry at a time.
@@ -894,13 +836,6 @@ impl Profiler {
             // Evict a process to make room for more.
             debug!("eviction result {}", self.maybe_evict_process(false));
         }
-    }
-
-    /// Returns the approximate size of _n_ rows of unwind
-    /// information in a BPF map in bytes.
-    fn unwind_info_size_bytes(unwind_info_len: usize) -> u64 {
-        let overhead = 1.02; // Account for internal overhead of the BPF maps
-        ((unwind_info_len * 8) as f64 * overhead) as u64
     }
 
     fn add_unwind_information_for_executable(
@@ -1044,7 +979,7 @@ impl Profiler {
             .map_err(|e| AddUnwindInformationError::BpfPages(e.to_string()))?;
         let unwind_info_start_address = unwind_info.first().unwrap().pc;
         let unwind_info_end_address = unwind_info.last().unwrap().pc;
-        self.native_unwind_state.known_executables.insert(
+        self.native_unwind_state.insert(
             executable_id,
             KnownExecutableInfo {
                 unwind_info_len: unwind_info.len(),
@@ -1060,7 +995,7 @@ impl Profiler {
     /// Returns whether the BPF map that stores unwind information entries is
     /// full.
     fn is_outer_map_full(&self) -> bool {
-        self.native_unwind_state.known_executables.len() >= MAX_OUTER_UNWIND_MAP_ENTRIES as usize
+        self.native_unwind_state.executable_count() >= MAX_OUTER_UNWIND_MAP_ENTRIES as usize
     }
 
     /// Evict executables if the 'outer' map is full or if the max memory is
@@ -1077,7 +1012,7 @@ impl Profiler {
         // Check if outer map is full.
         if self.is_outer_map_full() {
             debug!("unwind info outer map is full",);
-            let last_used = self.last_used_executables();
+            let last_used = self.native_unwind_state.last_used_executables();
             let last_used_ids: Vec<_> = last_used.iter().map(|el| el.0).collect();
             let last_used_id = last_used_ids
                 .first()
@@ -1090,8 +1025,8 @@ impl Profiler {
         // limit.
         const MB_TO_BYTES: u64 = 1_000_000;
         let max_memory_bytes = max_memory_mb as u64 * MB_TO_BYTES;
-        let total_memory_used_bytes = self.unwind_info_memory_usage();
-        let this_unwind_info_bytes = Self::unwind_info_size_bytes(unwind_info_len);
+        let total_memory_used_bytes = self.native_unwind_state.unwind_info_memory_usage();
+        let this_unwind_info_bytes = unwind_info_size_bytes(unwind_info_len);
         let total_memory_used_after_bytes = total_memory_used_bytes + this_unwind_info_bytes;
         let to_free_bytes = total_memory_used_after_bytes.saturating_sub(max_memory_bytes);
         let should_evict = !executables_to_evict.is_empty() || to_free_bytes != 0;
@@ -1115,8 +1050,8 @@ impl Profiler {
         // Figure out what are the unwind info we should evict to stay below the memory
         // limit.
         let mut could_be_freed_bytes = 0;
-        for (executable_id, executable_info) in self.last_used_executables() {
-            let unwind_size_bytes = Self::unwind_info_size_bytes(executable_info.unwind_info_len);
+        for (executable_id, executable_info) in self.native_unwind_state.last_used_executables() {
+            let unwind_size_bytes = unwind_info_size_bytes(executable_info.unwind_info_len);
             if could_be_freed_bytes >= to_free_bytes {
                 break;
             }
@@ -1130,10 +1065,7 @@ impl Profiler {
             executables_to_evict.len()
         );
         for executable_id in executables_to_evict {
-            let entry = self
-                .native_unwind_state
-                .known_executables
-                .entry(executable_id);
+            let entry = self.native_unwind_state.get(executable_id);
             if let Entry::Occupied(entry) = entry {
                 debug!(
                     "evicting executable_id {} last seen {:?} ago",
@@ -1155,21 +1087,10 @@ impl Profiler {
                 entry.remove_entry();
             }
 
-            self.native_unwind_state.last_executable_eviction = Instant::now();
+            self.native_unwind_state.executable_eviction();
         }
 
         true
-    }
-
-    /// Returns the approximate size of the BPF unwind maps in bytes.
-    fn unwind_info_memory_usage(&self) -> u64 {
-        let mut total_bytes = 0;
-
-        for executable_info in self.native_unwind_state.known_executables.values() {
-            total_bytes += Self::unwind_info_size_bytes(executable_info.unwind_info_len);
-        }
-
-        total_bytes
     }
 
     fn should_profile(&self, pid: Pid) -> bool {
@@ -1275,7 +1196,7 @@ impl Profiler {
         if let Some(pid) = to_evict {
             debug!("evicting pid {}", pid);
             self.handle_process_exit(pid, false);
-            self.native_unwind_state.last_process_eviction = Instant::now();
+            self.native_unwind_state.process_eviction();
         }
 
         true
@@ -1621,12 +1542,6 @@ mod tests {
     use crate::{bpf::profiler_skel::ProfilerMaps, profiler::*};
 
     #[test]
-    fn test_unwind_info_size() {
-        assert_eq!(Profiler::unwind_info_size_bytes(1), 8);
-        assert_eq!(Profiler::unwind_info_size_bytes(100), 816);
-    }
-
-    #[test]
     fn test_bpf_cleanup() {
         // Helper function to make code more succinct.
         fn maps(profiler: &Profiler) -> &ProfilerMaps<'_> {
@@ -1639,36 +1554,21 @@ mod tests {
         assert_eq!(maps(&profiler).exec_mappings.keys().count(), 0);
         assert_eq!(maps(&profiler).outer_map.keys().count(), 0);
         assert_eq!(maps(&profiler).executable_to_page.keys().count(), 0);
-        assert_eq!(
-            profiler
-                .native_unwind_state
-                .known_executables
-                .keys()
-                .count(),
-            0
-        );
+        assert_eq!(profiler.native_unwind_state.executable_count(), 0);
 
         // Add our own process.
         profiler.event_new_proc(std::process::id() as i32);
         let self_exec_mappings_count = maps(&profiler).exec_mappings.keys().count();
         let self_outer_map_count = maps(&profiler).outer_map.keys().count();
         let self_executable_to_page_count = maps(&profiler).executable_to_page.keys().count();
-        let self_known_executables_count = profiler
-            .native_unwind_state
-            .known_executables
-            .keys()
-            .count();
+        let self_known_executables_count = profiler.native_unwind_state.executable_count();
 
         // Add init process.
         profiler.event_new_proc(1_i32);
         let all_exec_mappings_count = maps(&profiler).exec_mappings.keys().count();
         let all_outer_map_count = maps(&profiler).outer_map.keys().count();
         let all_executable_to_page_count = maps(&profiler).executable_to_page.keys().count();
-        let all_known_executables_count = profiler
-            .native_unwind_state
-            .known_executables
-            .keys()
-            .count();
+        let all_known_executables_count = profiler.native_unwind_state.executable_count();
 
         assert!(all_exec_mappings_count > self_exec_mappings_count);
         assert!(all_outer_map_count > self_outer_map_count);
@@ -1684,12 +1584,8 @@ mod tests {
         let after_init_exit_outer_map_count = maps(&profiler).outer_map.keys().count();
         let after_init_exit_executable_to_page_count =
             maps(&profiler).executable_to_page.keys().count();
-        let after_init_exit_known_executables_count = profiler
-            .native_unwind_state
-            .known_executables
-            .keys()
-            .count();
-
+        let after_init_exit_known_executables_count =
+            profiler.native_unwind_state.executable_count();
         assert_eq!(
             after_init_exit_exec_mappings_count,
             self_exec_mappings_count
@@ -1711,13 +1607,6 @@ mod tests {
         assert_eq!(maps(&profiler).exec_mappings.keys().count(), 0);
         assert_eq!(maps(&profiler).outer_map.keys().count(), 0);
         assert_eq!(maps(&profiler).executable_to_page.keys().count(), 0);
-        assert_eq!(
-            profiler
-                .native_unwind_state
-                .known_executables
-                .keys()
-                .count(),
-            0
-        );
+        assert_eq!(profiler.native_unwind_state.executable_count(), 0);
     }
 }

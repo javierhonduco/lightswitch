@@ -15,8 +15,9 @@ use crate::{
         profiler_skel::{OpenProfilerSkel, ProfilerSkel, ProfilerSkelBuilder},
         tracers_skel::{OpenTracersSkel, TracersSkel, TracersSkelBuilder},
     },
+    native_unwind_state::KnownExecutableInfo,
     process::{ExecutableMapping, Pid},
-    profiler::{KnownExecutableInfo, ProfilerConfig},
+    profiler::ProfilerConfig,
     unwind_info::types::CompactUnwindRow,
     util::{get_online_cpus, roundup_page, summarize_address_range},
 };
@@ -610,10 +611,8 @@ impl Bpf {
             let total_value = per_cpu_value
                 .iter()
                 .map(|value| {
-                    let stats: unwinder_stats_t = *plain::from_bytes(value).expect(
-                        "failed serde of bpf
-        stats",
-                    );
+                    let stats: unwinder_stats_t =
+                        *plain::from_bytes(value).expect("failed serde of bpf stats");
                     stats
                 })
                 .fold(unwinder_stats_t::default(), |a, b| a + b);
@@ -622,11 +621,7 @@ impl Bpf {
             if total_value.total != 0 {
                 let success_pct =
                     100.0 * total_value.success_dwarf as f64 / total_value.total as f64;
-                info!(
-                    "stacks successfully
-        unwound: {:.2}%",
-                    success_pct
-                );
+                info!("stacks successfully unwound: {:.2}%", success_pct);
                 if success_pct < 75.0 {
                     raise_log_level = true;
                 }
