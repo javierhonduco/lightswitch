@@ -168,14 +168,16 @@ impl ObjectFile {
             let mut zig_first_frame = None;
 
             for symbol in self.object.symbols() {
-                let Ok(name) = symbol.name() else { continue };
-                if name.starts_with("_ZZN2v88internal") {
+                let Ok(name) = symbol.name_bytes() else {
+                    continue;
+                };
+                if name.starts_with(b"_ZZN2v88internal") {
                     return Runtime::V8;
                 }
-                if name.starts_with("__zig") {
+                if name.starts_with(b"__zig") {
                     is_zig = true;
                 }
-                if name == "_start" {
+                if name == b"_start" {
                     zig_first_frame = Some((symbol.address(), symbol.address() + symbol.size()));
                 }
 
@@ -197,10 +199,10 @@ impl ObjectFile {
 
     pub fn is_go(&self) -> bool {
         for section in self.object.sections() {
-            if let Ok(section_name) = section.name()
-                && (section_name == ".gosymtab"
-                    || section_name == ".gopclntab"
-                    || section_name == ".note.go.buildid")
+            if let Ok(section_name) = section.name_bytes()
+                && (section_name == b".gosymtab"
+                    || section_name == b".gopclntab"
+                    || section_name == b".note.go.buildid")
             {
                 return true;
             }
@@ -212,18 +214,20 @@ impl ObjectFile {
         let mut r = Vec::new();
 
         for symbol in self.object.symbols() {
-            let Ok(name) = symbol.name() else { continue };
+            let Ok(name) = symbol.name_bytes() else {
+                continue;
+            };
             for func in [
-                "runtime.mcall",
-                "runtime.goexit",
-                "runtime.mstart",
-                "runtime.systemstack",
+                b"runtime.mcall".as_slice(),
+                b"runtime.goexit".as_slice(),
+                b"runtime.mstart".as_slice(),
+                b"runtime.systemstack".as_slice(),
             ] {
                 // In some occasions functions might get some suffixes added to them like
                 // `runtime.mcall0`.
                 if name.starts_with(func) {
                     r.push(StopUnwindingFrames {
-                        name: name.to_string(),
+                        name: String::from_utf8_lossy(name).into_owned(),
                         start_address: symbol.address(),
                         end_address: symbol.address() + symbol.size(),
                     });
@@ -288,11 +292,11 @@ impl ObjectFile {
 
 pub fn code_hash(object: &object::File) -> Option<Digest> {
     for section in object.sections() {
-        let Ok(section_name) = section.name() else {
+        let Ok(section_name) = section.name_bytes() else {
             continue;
         };
 
-        if section_name == ".text"
+        if section_name == b".text"
             && let Ok(section) = section.data()
         {
             return Some(sha256_digest(section));
@@ -311,7 +315,7 @@ fn sha256_digest(data: &[u8]) -> Digest {
 /// Read a GO build id (`.note.go.buildid`), if present
 fn go_build_id<'object>(object: &'object object::File<'static>) -> Result<Option<&'object [u8]>> {
     for section in object.sections() {
-        if section.name()? == ".note.go.buildid"
+        if section.name_bytes()? == b".note.go.buildid"
             && let Ok(data) = section.data()
         {
             let notes: NoteIterator<'_, FileHeader32<Endianness>> =
