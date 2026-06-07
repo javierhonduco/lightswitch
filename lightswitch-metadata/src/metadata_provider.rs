@@ -115,7 +115,7 @@ impl GlobalMetadataProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::taskname::TaskName;
+    use crate::taskname::ThreadInfo;
     use crate::types::MetadataLabelValue;
     use nix::unistd;
 
@@ -125,31 +125,26 @@ mod tests {
         let tid = unistd::gettid().as_raw();
         let pid = unistd::getpgrp().as_raw();
         let mut metadata_provider = GlobalMetadataProvider::default();
-        let expected = TaskName::for_task(tid).unwrap();
+        let expected = ThreadInfo::for_task(tid).unwrap().comm;
 
         // When
         let labels = metadata_provider.get_metadata(TaskKey { tid, pid });
 
         // Then
-        assert_eq!(labels[0].key, "pid");
+        assert_eq!(labels[0].key, "tid");
         assert_eq!(
             labels[0].value,
-            MetadataLabelValue::Number(tid.into(), "task-id".into())
+            MetadataLabelValue::Number(tid.into(), "".into())
         );
         assert_eq!(labels[1].key, "thread.name");
         assert_eq!(
             labels[1].value,
-            MetadataLabelValue::String(expected.current_thread)
+            MetadataLabelValue::String(expected.clone())
         );
-        assert_eq!(labels[2].key, "process.name");
+        assert_eq!(labels[2].key, "pid");
         assert_eq!(
             labels[2].value,
-            MetadataLabelValue::String(expected.main_thread)
-        );
-        assert_eq!(labels[3].key, "pid");
-        assert_eq!(
-            labels[3].value,
-            MetadataLabelValue::Number(pid.into(), "task-tgid".into())
+            MetadataLabelValue::Number(pid.into(), "".into())
         );
     }
 }

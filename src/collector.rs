@@ -419,7 +419,7 @@ impl Collector for LiveCollector {
 
         let profile = raw_to_processed(&raw_profile, procs, objs);
         let profile = symbolize_profile(&profile, procs, objs);
-        let folded = fold_profile(profile, true);
+        let folded = fold_profile(procs, profile, true);
 
         if !folded.trim().is_empty() {
             let _ = self.tx.send(folded);

@@ -190,6 +190,8 @@ typedef struct {
     enum event_type type;
     int pid;  // use right name here (tgid?)
     u64 address;
+    // Not using char as it's signed in arm64.
+    u8 comm[16];
 } Event;
 
 enum program {

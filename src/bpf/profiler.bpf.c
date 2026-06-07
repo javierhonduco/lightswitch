@@ -68,7 +68,7 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, MAX_PROCESSES);
-    __type(key, Event);
+    __type(key, u64);
     __type(value, bool);
 } rate_limits SEC(".maps");
 
@@ -136,7 +136,8 @@ find_page(mapping_t *mapping, u64 object_relative_pc, u64 *low_index, u64 *high_
 }
 
 static __always_inline void send_event(Event *event, struct bpf_perf_event_data *ctx) {
-    bool *is_rate_limited = bpf_map_lookup_elem(&rate_limits, event);
+    u64 event_id = ((u64)event->pid << 32 | event->type);
+    bool *is_rate_limited = bpf_map_lookup_elem(&rate_limits, &event_id);
     if (is_rate_limited != NULL && *is_rate_limited) {
         LOG("[debug] send_event was rate limited for process %d", event->pid);
         return;
@@ -161,7 +162,7 @@ static __always_inline void send_event(Event *event, struct bpf_perf_event_data 
     LOG("[debug] event type %d sent for process %d", event->type, event->pid);
     bool rate_limited = true;
 
-    bpf_map_update_elem(&rate_limits, event, &rate_limited, BPF_ANY);
+    bpf_map_update_elem(&rate_limits, &event_id, &rate_limited, BPF_ANY);
 }
 
 // The return address points as the the instruction at which execution
@@ -662,6 +663,8 @@ int on_event(struct bpf_perf_event_data *ctx) {
         .type = EVENT_NEW_PROCESS,
         .pid = per_process_id,
     };
+    // Send the main thread's name.
+    BPF_CORE_READ_STR_INTO(&event.comm, task, group_leader, comm);
     send_event(&event, ctx);
     return 0;
 }

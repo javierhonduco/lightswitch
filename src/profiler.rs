@@ -20,6 +20,7 @@ use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::env::temp_dir;
+use std::ffi::CStr;
 use std::fs;
 use std::fs::read_link;
 use std::fs::File;
@@ -370,6 +371,7 @@ impl Profiler {
                 self.procs.write().insert(
                     KERNEL_PID,
                     ProcessInfo {
+                        comm: "kernel".to_string(),
                         status: ProcessStatus::Running,
                         mappings: ExecutableMappings(
                             kernel_code_ranges
@@ -543,7 +545,11 @@ impl Profiler {
                 recv(self.new_proc_chan_receive) -> read => {
                         if let Ok(event) = read {
                             if event.type_ == event_type_EVENT_NEW_PROCESS {
-                                self.event_new_proc(event.pid);
+                                let comm = match CStr::from_bytes_until_nul(&event.comm) {
+                                    Ok(comm) => comm.to_string_lossy().to_string(),
+                                    Err(e) => format!("failed with get process name with `{e}`")
+                                };
+                                self.event_new_proc(event.pid, comm);
                                 // Ensure we only remove the rate limits only if the above works.
                                 // This is probably suited for a batched operation.
                                 // let _ = self
@@ -1104,7 +1110,7 @@ impl Profiler {
         self.filter_pids.contains_key(&pid)
     }
 
-    fn event_new_proc(&mut self, pid: Pid) {
+    fn event_new_proc(&mut self, pid: Pid, comm: String) {
         if !self.should_profile(pid) {
             return;
         }
@@ -1116,7 +1122,7 @@ impl Profiler {
             return;
         }
 
-        match self.add_proc(pid) {
+        match self.add_proc(pid, comm) {
             Ok(()) => {
                 self.add_unwind_info_for_process(pid);
             }
@@ -1316,7 +1322,7 @@ impl Profiler {
         info
     }
 
-    pub fn add_proc(&mut self, pid: Pid) -> Result<(), AddProcessError> {
+    pub fn add_proc(&mut self, pid: Pid, comm: String) -> Result<(), AddProcessError> {
         let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
         let maps = proc.maps().map_err(|_| AddProcessError::ProcfsRace)?;
         if !self.maybe_evict_process(true) {
@@ -1449,6 +1455,7 @@ impl Profiler {
         }
 
         let proc_info = ProcessInfo {
+            comm: comm.to_owned(),
             status: ProcessStatus::Running,
             mappings: ExecutableMappings(mappings),
             last_used: Instant::now(),
@@ -1556,14 +1563,14 @@ mod tests {
         assert_eq!(profiler.native_unwind_state.executable_count(), 0);
 
         // Add our own process.
-        profiler.event_new_proc(std::process::id() as i32);
+        profiler.event_new_proc(std::process::id() as i32, "test-proc".into());
         let self_exec_mappings_count = maps(&profiler).exec_mappings.keys().count();
         let self_outer_map_count = maps(&profiler).outer_map.keys().count();
         let self_executable_to_page_count = maps(&profiler).executable_to_page.keys().count();
         let self_known_executables_count = profiler.native_unwind_state.executable_count();
 
         // Add init process.
-        profiler.event_new_proc(1_i32);
+        profiler.event_new_proc(1_i32, "test-proc".into());
         let all_exec_mappings_count = maps(&profiler).exec_mappings.keys().count();
         let all_outer_map_count = maps(&profiler).outer_map.keys().count();
         let all_executable_to_page_count = maps(&profiler).executable_to_page.keys().count();

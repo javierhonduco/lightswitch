@@ -324,6 +324,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     match args.profile_format {
         ProfileFormat::FlameGraph => {
             let folded = fold_profile(
+                procs,
                 profile,
                 args.flamegraph_aggregation == FlamegraphAggregation::Function,
             );

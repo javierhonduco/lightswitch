@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
-
 use tracing::debug;
 
 use lightswitch_object::BuildId;
@@ -31,6 +30,7 @@ pub enum ProcessStatus {
 
 #[derive(Debug, Clone)]
 pub struct ProcessInfo {
+    pub comm: String,
     pub status: ProcessStatus,
     pub mappings: ExecutableMappings,
     pub last_used: Instant,
