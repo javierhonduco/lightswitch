@@ -442,7 +442,7 @@ mod tests {
         "20",
         "Sample frequency 20 is not prime - use 19 (before) or 23 (after) instead"
     )]
-    #[case::non_prime_out_of_range1010("1010", "sample frequency not in allowed range")]
+    #[case::non_prime_out_of_range1010("20000", "sample frequency not in allowed range")]
     #[trace]
     fn sample_freq_successes(#[case] desired_freq: String, #[case] expected_msg: String) {
         let execname = env!("CARGO_PKG_NAME");
