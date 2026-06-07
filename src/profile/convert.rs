@@ -1,6 +1,7 @@
 use lightswitch_metadata::metadata_provider::ThreadSafeGlobalMetadataProvider;
-use lightswitch_metadata::taskname::TaskName;
-use lightswitch_metadata::types::{MetadataLabelValue, TaskKey};
+use lightswitch_metadata::task_metadata::PROCESS_NAME_KEY;
+use lightswitch_metadata::taskname::ThreadInfo;
+use lightswitch_metadata::types::{MetadataLabel, MetadataLabelValue, TaskKey};
 
 use lightswitch_proto::profile::pprof::Label;
 use lightswitch_proto::profile::{pprof, LabelStringOrNumber, PprofBuilder};
@@ -192,10 +193,19 @@ pub fn to_pprof(
             tid: sample.tid,
             pid: sample.pid,
         };
+
+        let Some(info) = procs.get(&sample.pid) else {
+            // todo: maybe append an error frame for debugging?
+            continue;
+        };
         let labels = task_to_labels.entry(task_key).or_insert_with(|| {
             let metadata = metadata_provider.lock().unwrap().get_metadata(task_key);
             metadata
                 .into_iter()
+                .chain(vec![MetadataLabel::from_string_value(
+                    PROCESS_NAME_KEY.into(),
+                    info.comm.clone(),
+                )])
                 .map(|label| {
                     pprof.new_label(&label.key, ProfileLabel { value: label.value }.into())
                 })
@@ -217,7 +227,11 @@ pub fn to_pprof(
 /// The frame names are separated by semicolons and the count is at the end
 /// separated with a space. We insert some synthetic frames to quickly identify
 /// the thread and process names and other pieces of metadata.
-pub fn fold_profile(profile: AggregatedProfile, only_show_function_names: bool) -> String {
+pub fn fold_profile(
+    procs: &HashMap<i32, ProcessInfo>,
+    profile: AggregatedProfile,
+    only_show_function_names: bool,
+) -> String {
     let mut folded = String::new();
 
     for sample in profile {
@@ -239,13 +253,20 @@ pub fn fold_profile(profile: AggregatedProfile, only_show_function_names: bool) 
         let kstack = kstack.join(";");
         let count: String = sample.count.to_string();
 
-        let task_and_process_names = TaskName::for_task(sample.tid).unwrap_or(TaskName::errored());
+        let process_name = match procs.get(&sample.pid) {
+            Some(sample) => sample.comm.clone(),
+            None => "<process not known>".into(),
+        };
+
+        let thread_name = ThreadInfo::for_task(sample.tid)
+            .unwrap_or(ThreadInfo::errored())
+            .comm;
 
         writeln!(
             folded,
             "{};{}{}{} {}",
-            task_and_process_names.main_thread,
-            task_and_process_names.current_thread,
+            process_name,
+            thread_name,
             if ustack.trim().is_empty() {
                 "".to_string()
             } else {
