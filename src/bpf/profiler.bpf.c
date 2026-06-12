@@ -308,6 +308,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
         return 1;
     }
 
+#pragma unroll
     for (int i = 0; i < MAX_STACK_DEPTH_PER_PROGRAM; i++) {
         // LOG("[debug] Within unwinding machinery loop");
         LOG("## frame: %d", unwind_state->sample.stack.ulen);
