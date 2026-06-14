@@ -69,6 +69,7 @@ pub(crate) enum Commands {
 }
 
 #[derive(Parser, Debug)]
+#[command(version)]
 pub(crate) struct CliArgs {
     /// Specific PIDs to profile
     #[arg(long)]
