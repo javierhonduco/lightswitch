@@ -183,10 +183,6 @@ impl RawAggregatedSample {
             });
         }
 
-        if processed_sample.ustack.is_empty() && processed_sample.kstack.is_empty() {
-            return Err(anyhow!("no user or kernel stack present"));
-        }
-
         Ok(processed_sample)
     }
 }
@@ -234,7 +230,7 @@ impl fmt::Display for AggregatedSample {
             format!("[{}]", res.join(","))
         };
 
-        fmt.debug_struct("SymbolizedAggregatedSample")
+        fmt.debug_struct("AggregatedSample")
             .field("pid", &self.pid)
             .field("tid", &self.tid)
             .field("ustack", &format_symbolized_stack(&self.ustack))
@@ -398,7 +394,7 @@ mod tests {
             kstack: kstack_data.clone(),
             count: 128,
         };
-        insta::assert_yaml_snapshot!(format!("{}", sample), @r#""SymbolizedAggregatedSample { pid: 1234567, tid: 1234568, ustack: \"[  0: ufunc3,  1: ufunc2,  2: ufunc1]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 128 }""#);
+        insta::assert_yaml_snapshot!(format!("{}", sample), @r#""AggregatedSample { pid: 1234567, tid: 1234568, ustack: \"[  0: ufunc3,  1: ufunc2,  2: ufunc1]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 128 }""#);
 
         let ustack_data = vec![];
 
@@ -409,6 +405,6 @@ mod tests {
             kstack: kstack_data.clone(),
             count: 1001,
         };
-        insta::assert_yaml_snapshot!(format!("{}", sample), @r#""SymbolizedAggregatedSample { pid: 98765, tid: 98766, ustack: \"[NONE]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 1001 }""#);
+        insta::assert_yaml_snapshot!(format!("{}", sample), @r#""AggregatedSample { pid: 98765, tid: 98766, ustack: \"[NONE]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 1001 }""#);
     }
 }

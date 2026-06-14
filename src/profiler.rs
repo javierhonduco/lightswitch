@@ -39,7 +39,6 @@ use itertools::Itertools;
 use procfs;
 use tracing::{debug, error, info, span, warn, Level};
 
-use crate::aggregator::Aggregator;
 use crate::bpf::profiler_bindings::*;
 use crate::bpf::tracers_bindings::*;
 use crate::collector::*;
@@ -88,8 +87,8 @@ pub struct Profiler {
     /// Pids excluded from profiling.
     filter_pids: HashMap<Pid, bool>,
     /// Profile channels.
-    profile_send: Arc<Sender<RawAggregatedProfile>>,
-    profile_receive: Arc<Receiver<RawAggregatedProfile>>,
+    profile_send: Arc<Sender<Vec<RawSample>>>,
+    profile_receive: Arc<Receiver<Vec<RawSample>>>,
     /// A vector of raw samples received from bpf in the current profiling
     /// session
     raw_samples: Vec<RawSample>,
@@ -116,7 +115,6 @@ pub struct Profiler {
     max_native_unwind_info_size_mb: i32,
     unwind_info_manager: UnwindInfoManager,
     use_ring_buffers: bool,
-    aggregator: Aggregator,
     metadata_provider: ThreadSafeGlobalMetadataProvider,
     /// Baseline for calculating raw_sample collection wall clock time
     /// as BPF currently only supports getting the offset since system boot.
@@ -323,7 +321,6 @@ impl Profiler {
             max_native_unwind_info_size_mb: profiler_config.max_native_unwind_info_size_mb,
             unwind_info_manager: UnwindInfoManager::new(&unwind_cache_dir, None),
             use_ring_buffers: profiler_config.use_ring_buffers,
-            aggregator: Aggregator::default(),
             metadata_provider,
             walltime_at_system_boot,
             preload_thread_metadata: profiler_config.preload_thread_metadata,
@@ -345,7 +342,7 @@ impl Profiler {
         }
     }
 
-    pub fn send_profile(&mut self, profile: RawAggregatedProfile) {
+    pub fn send_profile(&mut self, profile: Vec<RawSample>) {
         if let Err(e) = self.profile_send.send(profile) {
             debug!("failed to send profile with: `{:?}`", e);
         }
@@ -686,12 +683,12 @@ impl Profiler {
 
     /// Updates the last time processes and executables were seen. This is used
     /// during evictions.
-    pub fn bump_last_used(&mut self, raw_aggregated_samples: &[RawAggregatedSample]) {
+    pub fn bump_last_used(&mut self, raw_samples: &[RawSample]) {
         let now = Instant::now();
 
-        for aggregated_sample in raw_aggregated_samples {
-            let pid = aggregated_sample.sample.pid;
-            let ustack = &aggregated_sample.sample.ustack;
+        for raw_sample in raw_samples {
+            let pid = raw_sample.pid;
+            let ustack = &raw_sample.ustack;
             {
                 let mut procs = self.procs.write();
                 let proc = procs.get_mut(&pid);
@@ -728,15 +725,13 @@ impl Profiler {
         clear_map(&rate_limits_map);
     }
 
-    pub fn collect_profile(&mut self) -> RawAggregatedProfile {
+    pub fn collect_profile(&mut self) -> Vec<RawSample> {
         debug!("collecting profile");
-        let result = self.aggregator.aggregate(self.raw_samples.clone());
-        self.raw_samples.clear();
-
-        self.bump_last_used(&result);
+        let raw_samples = std::mem::take(&mut self.raw_samples);
+        self.bump_last_used(&raw_samples);
         self.bpf.show_unwinder_stats();
         self.clear_maps();
-        result
+        raw_samples
     }
 
     fn process_is_known(&self, pid: Pid) -> bool {

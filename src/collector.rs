@@ -4,28 +4,33 @@ use flate2::Compression;
 use prost::Message;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::{debug, span, Level};
+use tracing::{debug, span, warn, Level};
 use uuid::Uuid;
 
+use lightswitch_metadata::{
+    metadata_provider::ThreadSafeGlobalMetadataProvider,
+    types::{MetadataLabelValue, TaskKey},
+};
+use lightswitch_object::ExecutableId;
+use std::fs::File;
+
+use crate::aggregator::Aggregator;
 use crate::process::ObjectFileInfo;
 use crate::process::ProcessInfo;
-use crate::profile::raw_to_processed;
-use crate::profile::AggregatedProfile;
-use crate::profile::AggregatedSample;
-use crate::profile::RawAggregatedProfile;
-use crate::profile::{fold_profile, symbolize_profile, to_pprof};
-use lightswitch_object::ExecutableId;
-
-use lightswitch_metadata::metadata_provider::ThreadSafeGlobalMetadataProvider;
+use crate::profile::{
+    fold_profile, symbolize_profile, to_pprof, AggregatedSample, SymbolizedFrame,
+};
+use crate::profile::{raw_to_processed, RawSample};
+use crate::profile::{AggregatedProfile, RawAggregatedSample};
 
 pub trait Collector {
     fn collect(
         &mut self,
-        profile: RawAggregatedProfile,
+        profile: Vec<RawSample>,
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     );
@@ -56,7 +61,7 @@ impl NullCollector {
 impl Collector for NullCollector {
     fn collect(
         &mut self,
-        _profile: RawAggregatedProfile,
+        _profile: Vec<RawSample>,
         _procs: &HashMap<i32, ProcessInfo>,
         _objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
@@ -117,13 +122,13 @@ impl StreamingCollector {
 impl Collector for StreamingCollector {
     fn collect(
         &mut self,
-        profile: RawAggregatedProfile,
+        profile: Vec<RawSample>,
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
         let _span = span!(Level::DEBUG, "StreamingCollector.collect").entered();
 
-        let mut profile = raw_to_processed(&profile, procs, objs);
+        let mut profile = raw_to_processed(&Aggregator::default().aggregate(profile), procs, objs);
         if self.local_symbolizer {
             profile = symbolize_profile(&profile, procs, objs);
         }
@@ -244,13 +249,13 @@ struct PyroscopeSample {
 impl Collector for PyroscopeCollector {
     fn collect(
         &mut self,
-        profile: RawAggregatedProfile,
+        profile: Vec<RawSample>,
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
         let _span = span!(Level::DEBUG, "PyroscopeCollector.collect").entered();
 
-        let mut profile = raw_to_processed(&profile, procs, objs);
+        let mut profile = raw_to_processed(&Aggregator::default().aggregate(profile), procs, objs);
         if self.local_symbolizer {
             profile = symbolize_profile(&profile, procs, objs);
         }
@@ -339,12 +344,15 @@ impl AggregatorCollector {
 impl Collector for AggregatorCollector {
     fn collect(
         &mut self,
-        raw_profile: RawAggregatedProfile,
+        raw_profile: Vec<RawSample>,
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
-        self.profiles
-            .push(raw_to_processed(&raw_profile, procs, objs));
+        self.profiles.push(raw_to_processed(
+            &Aggregator::default().aggregate(raw_profile),
+            procs,
+            objs,
+        ));
 
         for (k, v) in procs {
             self.procs.insert(*k, v.clone());
@@ -411,13 +419,13 @@ impl LiveCollector {
 impl Collector for LiveCollector {
     fn collect(
         &mut self,
-        raw_profile: RawAggregatedProfile,
+        raw_profile: Vec<RawSample>,
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
         let _span = span!(Level::DEBUG, "LiveCollector.collect").entered();
 
-        let profile = raw_to_processed(&raw_profile, procs, objs);
+        let profile = raw_to_processed(&Aggregator::default().aggregate(raw_profile), procs, objs);
         let profile = symbolize_profile(&profile, procs, objs);
         let folded = fold_profile(procs, profile, true);
 
@@ -433,6 +441,190 @@ impl Collector for LiveCollector {
         &HashMap<i32, ProcessInfo>,
         &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
+        (AggregatedProfile::new(), &self.procs, &self.objs)
+    }
+}
+
+pub struct FirefoxProfilerCollector {
+    profile_name: String,
+    sample_freq: u64,
+    samples: Vec<AggregatedSample>,
+    timestamps: Vec<u64>,
+    meta: ThreadSafeGlobalMetadataProvider,
+    procs: HashMap<i32, ProcessInfo>,
+    objs: HashMap<ExecutableId, ObjectFileInfo>,
+    pid_to_comm: HashMap<i32, String>,
+}
+
+impl FirefoxProfilerCollector {
+    pub fn new(
+        profile_name: &str,
+        sample_freq: u64,
+        meta: ThreadSafeGlobalMetadataProvider,
+    ) -> Self {
+        FirefoxProfilerCollector {
+            profile_name: profile_name.to_string(),
+            sample_freq,
+            samples: vec![],
+            timestamps: vec![],
+            meta,
+            procs: HashMap::new(),
+            objs: HashMap::new(),
+            pid_to_comm: HashMap::new(),
+        }
+    }
+}
+
+impl Collector for FirefoxProfilerCollector {
+    fn collect(
+        &mut self,
+        samples: Vec<RawSample>,
+        procs: &HashMap<i32, ProcessInfo>,
+        objs: &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        // Add timestamps
+        for sample in &samples {
+            self.timestamps.push(sample.collected_at);
+        }
+
+        // fake agg + normalize
+        let profile = samples
+            .iter()
+            .map(|e| RawAggregatedSample {
+                sample: e.clone(),
+                count: 1,
+            })
+            .collect::<Vec<_>>();
+
+        for (pid, proc_info) in procs {
+            self.pid_to_comm
+                .entry(*pid)
+                .or_insert(proc_info.comm.clone());
+        }
+
+        let profile = raw_to_processed(&profile, procs, objs);
+        let mut profile = symbolize_profile(&profile, procs, objs);
+        self.samples.append(&mut profile);
+    }
+
+    fn finish(
+        &self,
+    ) -> (
+        AggregatedProfile,
+        &HashMap<i32, ProcessInfo>,
+        &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        use fxprof_processed_profile::*;
+
+        if self.timestamps.is_empty() {
+            warn!("got no samples");
+            return (AggregatedProfile::new(), &self.procs, &self.objs);
+        }
+
+        let reference_timestamp = *self.timestamps.first().expect("check above");
+        let mut ff_processes: HashMap<i32, ProcessHandle> = HashMap::new();
+        let mut ff_threads: HashMap<i32, ThreadHandle> = HashMap::new();
+        let mut ff_profile = Profile::new(
+            "lightswitch",
+            ReferenceTimestamp::from_duration_since_unix_epoch(Duration::from_nanos(
+                reference_timestamp,
+            )),
+            SamplingInterval::from_hz(self.sample_freq as f32),
+        );
+        let userspace_category = ff_profile.add_category("userspace", CategoryColor::Blue);
+        let kernel_category = ff_profile.add_category("kernel", CategoryColor::Gray);
+
+        for (timestamp, sample) in self.timestamps.iter().zip(&self.samples) {
+            let meta = self
+                .meta
+                .lock()
+                .expect("acquire metadata lock")
+                .get_metadata(TaskKey {
+                    pid: sample.pid,
+                    tid: sample.tid,
+                });
+
+            let process_name = &self
+                .pid_to_comm
+                .get(&sample.pid)
+                .expect("process to have a name");
+            let thread_name = match &meta.iter().find(|e| e.key == "thread.name").unwrap().value {
+                MetadataLabelValue::String(a) => a,
+                MetadataLabelValue::Number(_, _) => todo!(),
+            };
+
+            let ff_process = match ff_processes.entry(sample.pid) {
+                std::collections::hash_map::Entry::Occupied(occupied_entry) => {
+                    *occupied_entry.get()
+                }
+                std::collections::hash_map::Entry::Vacant(vacant_entry) => {
+                    let p = ff_profile.add_process(
+                        process_name,
+                        sample.pid as u32,
+                        Timestamp::from_nanos_since_reference(timestamp - reference_timestamp),
+                    );
+                    vacant_entry.insert(p);
+                    p
+                }
+            };
+
+            let ff_thread = match ff_threads.entry(sample.tid) {
+                std::collections::hash_map::Entry::Occupied(occupied_entry) => {
+                    *occupied_entry.get()
+                }
+                std::collections::hash_map::Entry::Vacant(vacant_entry) => {
+                    let t = ff_profile.add_thread(
+                        ff_process,
+                        sample.tid as u32,
+                        Timestamp::from_nanos_since_reference(timestamp - reference_timestamp),
+                        sample.pid == sample.tid,
+                    );
+                    ff_profile.set_thread_name(t, thread_name);
+                    vacant_entry.insert(t);
+                    t
+                }
+            };
+
+            let frames = sample
+                .ustack
+                .iter()
+                .rev()
+                .map(|e| (e, userspace_category))
+                .chain(sample.kstack.iter().rev().map(|e| (e, kernel_category)))
+                .map(|(e, cat)| FrameInfo {
+                    frame: Frame::Label(
+                        ff_profile.intern_string(
+                            &e.symbolization_result
+                                .as_ref()
+                                .unwrap()
+                                .as_ref()
+                                .unwrap_or(&SymbolizedFrame {
+                                    name: "not found".to_string(),
+                                    inlined: false,
+                                    filename: None,
+                                    line: None,
+                                })
+                                .name,
+                        ),
+                    ),
+                    category_pair: cat.into(),
+                    flags: FrameFlags::empty(),
+                })
+                .collect::<Vec<_>>();
+
+            let stack = ff_profile.intern_stack_frames(ff_thread, frames.into_iter());
+            ff_profile.add_sample(
+                ff_thread,
+                Timestamp::from_nanos_since_reference(timestamp - reference_timestamp),
+                stack,
+                CpuDelta::ZERO,
+                1,
+            );
+        }
+
+        let file = File::create(&self.profile_name).unwrap();
+        serde_json::to_writer(&mut BufWriter::new(file), &ff_profile).unwrap();
+
         (AggregatedProfile::new(), &self.procs, &self.objs)
     }
 }

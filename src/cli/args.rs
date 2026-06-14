@@ -42,6 +42,7 @@ pub(crate) enum ProfileSender {
     LocalDisk,
     Remote,
     Pyroscope,
+    Firefox,
 }
 
 #[derive(PartialEq, clap::ValueEnum, Debug, Clone, Default)]
@@ -64,6 +65,7 @@ pub(crate) enum Commands {
     ObjectInfo { path: String },
     ShowUnwind { path: String },
     SystemInfo,
+    Server,
 }
 
 #[derive(Parser, Debug)]
