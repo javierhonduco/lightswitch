@@ -114,6 +114,8 @@ const volatile struct lightswitch_config_t lightswitch_config = {
     .verbose_logging = false,
     .use_ring_buffers = false,
     .use_task_pt_regs_helper = false,
+    .use_btf_helpers = false,
+    .userspace_pid_ns_level = -1,
 };
 
 #define LOG(fmt, ...)                             \

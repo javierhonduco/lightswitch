@@ -2,7 +2,7 @@ use std::{
     collections::hash_map::OccupiedEntry,
     iter,
     mem::{ManuallyDrop, MaybeUninit},
-    os::fd::{AsFd, AsRawFd},
+    os::fd::{AsFd, AsRawFd, BorrowedFd},
 };
 
 use crate::{
@@ -101,34 +101,8 @@ impl Bpf {
             .open(&mut tracers_open_object)
             .expect("open skel");
 
-        open_tracers
-            .maps
-            .exec_mappings
-            .reuse_fd(exec_mappings_fd)
-            .expect("reuse exec_mappings");
-
-        let rodata = open_tracers
-            .maps
-            .rodata_data
-            .as_mut()
-            .expect(".rodata must be present");
-        rodata
-            .lightswitch_config
-            .verbose_logging
-            .write(profiler_config.bpf_logging);
-        rodata
-            .lightswitch_config
-            .use_ring_buffers
-            .write(profiler_config.use_ring_buffers);
-
-        // Disable BTF helpers if a BTF custom path is selected since
-        // it will not load in machines that don't have one. TODO add override?
-        rodata
-            .lightswitch_config
-            .use_btf_helpers
-            .write(profiler_config.btf_custom_path.is_none());
         Self::set_tracers_map_sizes(&mut open_tracers, profiler_config);
-
+        Self::setup_tracers_maps(&mut open_tracers, profiler_config, exec_mappings_fd);
         let tracers = ManuallyDrop::new(open_tracers.load().expect("load skel"));
         // SAFETY: tracers never outlives tracers_open_object
         let tracers = unsafe {
@@ -210,7 +184,42 @@ impl Bpf {
         roundup_page(max_entries_bytes as usize) as u32
     }
 
-    pub fn setup_profiler_maps(open_skel: &mut OpenProfilerSkel, profiler_config: &ProfilerConfig) {
+    fn setup_tracers_maps(
+        open_tracers: &mut OpenTracersSkel,
+        profiler_config: &ProfilerConfig,
+        exec_mappings_fd: BorrowedFd,
+    ) {
+        open_tracers
+            .maps
+            .exec_mappings
+            .reuse_fd(exec_mappings_fd)
+            .expect("reuse exec_mappings");
+
+        let rodata = open_tracers
+            .maps
+            .rodata_data
+            .as_mut()
+            .expect(".rodata must be present");
+        rodata
+            .lightswitch_config
+            .verbose_logging
+            .write(profiler_config.bpf_logging);
+        rodata
+            .lightswitch_config
+            .use_ring_buffers
+            .write(profiler_config.use_ring_buffers);
+
+        rodata.lightswitch_config.userspace_pid_ns_level = profiler_config.userspace_pid_ns_level;
+
+        // Disable BTF helpers if a BTF custom path is selected since
+        // it will not load in machines that don't have one. TODO add override?
+        rodata
+            .lightswitch_config
+            .use_btf_helpers
+            .write(profiler_config.btf_custom_path.is_none());
+    }
+
+    fn setup_profiler_maps(open_skel: &mut OpenProfilerSkel, profiler_config: &ProfilerConfig) {
         open_skel
             .maps
             .rate_limits

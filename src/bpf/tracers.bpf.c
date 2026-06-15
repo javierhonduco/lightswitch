@@ -8,7 +8,7 @@
 #include <bpf/bpf_core_read.h>
 
 typedef struct {
-    u64 pid_tgid;
+    u32 tid;
 } mmap_data_key_t;
 
 struct {
@@ -45,7 +45,7 @@ struct munmap_entry_args {
 SEC("tracepoint/sched/sched_process_exit")
 int tracer_process_exit(void *ctx) {
     struct task_struct *task = current_task();
-    unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
+    unsigned int level = lightswitch_config.userspace_pid_ns_level;
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
     int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
 
@@ -60,7 +60,7 @@ int tracer_process_exit(void *ctx) {
 
     tracer_event_t event = {
         .type = TRACER_EVENT_TYPE_PROCESS_EXIT,
-        .pid = bpf_get_current_pid_tgid() >> 32,
+        .pid = per_process_id,
         .start_address = 0,
     };
 
@@ -83,7 +83,7 @@ SEC("tracepoint/syscalls/sys_enter_munmap")
 int tracer_enter_munmap(struct munmap_entry_args *args) {
     u64 start_address = args->addr;
     struct task_struct *task = current_task();
-    unsigned int level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
+    unsigned int level = lightswitch_config.userspace_pid_ns_level;
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
 
     // We might not know about some mappings, but also we definitely don't want to notify
@@ -98,8 +98,9 @@ int tracer_enter_munmap(struct munmap_entry_args *args) {
         return 0;
     }
 
+    int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
     mmap_data_key_t key = {
-        .pid_tgid = bpf_get_current_pid_tgid(),
+        .tid = per_thread_id,
     };
     bpf_map_update_elem(&tracked_munmap, &key, &start_address, BPF_ANY);
 
@@ -108,8 +109,12 @@ int tracer_enter_munmap(struct munmap_entry_args *args) {
 
 SEC("tracepoint/syscalls/sys_exit_munmap")
 int tracer_exit_munmap(struct syscall_trace_exit *ctx) {
+    struct task_struct *task = current_task();
+    unsigned int level = lightswitch_config.userspace_pid_ns_level;
+    int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
+
     mmap_data_key_t key = {
-        .pid_tgid = bpf_get_current_pid_tgid(),
+        .tid = per_thread_id,
     };
 
     u64 *start_address = bpf_map_lookup_elem(&tracked_munmap, &key);
@@ -124,9 +129,10 @@ int tracer_exit_munmap(struct syscall_trace_exit *ctx) {
 
     LOG("[debug] sending munmap event");
 
+    int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
     tracer_event_t event = {
         .type = TRACER_EVENT_TYPE_MUNMAP,
-        .pid = bpf_get_current_pid_tgid() >> 32,
+        .pid = per_process_id,
         .start_address = *start_address,
     };
 
