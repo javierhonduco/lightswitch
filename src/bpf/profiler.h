@@ -167,9 +167,25 @@ typedef struct {
     u64 addresses[MAX_STACK_DEPTH * 2];
 } native_stack_t;
 
+enum sample_result {
+    SAMPLE_STARTED = 0,
+    SAMPLE_SUCCESS = 1,
+    SAMPLE_TRUNCATED = 2,
+    SAMPLE_WAITING_FOR_USERSPACE = 3,
+    SAMPLE_RATE_LIMITED = 4,
+    SAMPLE_UNWINDING_ERROR = 5,
+    SAMPLE_MAPPING_NOT_FOUND = 6,
+    SAMPLE_MAPPING_DOES_NOT_CONTAIN_PC = 7,
+    SAMPLE_MAPPING_JIT = 8,
+    SAMPLE_MAPPING_MISSING_UNWIND_INFO = 9,
+    SAMPLE_MEM_READ_ERROR = 10,
+    SAMPLE_UNSUPPORTED_UNWIND_RULE = 11,
+};
+
 typedef struct {
     int pid;
     int tid;
+    enum sample_result result;
     u64 collected_at;
     native_stack_t stack;
 } sample_t;

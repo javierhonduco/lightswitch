@@ -544,10 +544,8 @@ impl Collector for FirefoxProfilerCollector {
                     tid: sample.tid,
                 });
 
-            let process_name = &self
-                .pid_to_comm
-                .get(&sample.pid)
-                .expect("process to have a name");
+            let default_name = "process to have a name".to_string();
+            let process_name = &self.pid_to_comm.get(&sample.pid).unwrap_or(&default_name);
             let thread_name = match &meta.iter().find(|e| e.key == "thread.name").unwrap().value {
                 MetadataLabelValue::String(a) => a,
                 MetadataLabelValue::Number(_, _) => todo!(),
@@ -599,7 +597,7 @@ impl Collector for FirefoxProfilerCollector {
                                 .unwrap()
                                 .as_ref()
                                 .unwrap_or(&SymbolizedFrame {
-                                    name: "not found".to_string(),
+                                    name: format!("error/generic: {:?}", e.symbolization_result),
                                     inlined: false,
                                     filename: None,
                                     line: None,

@@ -1,7 +1,7 @@
 use std::hash::DefaultHasher;
 use std::{collections::HashMap, hash::Hash, hash::Hasher};
 
-use tracing::debug;
+use tracing::trace;
 
 use crate::profile::{RawAggregatedProfile, RawAggregatedSample, RawSample};
 
@@ -17,11 +17,11 @@ impl Aggregator {
         let mut sample_hash_to_aggregated: HashMap<u64, RawAggregatedSample> = HashMap::new();
         for sample in raw_samples {
             if sample.ustack.is_empty() && sample.kstack.is_empty() {
-                debug!(
-                    "No stack present in provided sample={}, skipping...",
-                    sample
+                trace!(
+                    "No stack present in provided sample for process {} with result {:?}",
+                    sample.pid,
+                    sample.result
                 );
-                continue;
             }
 
             let mut hasher = DefaultHasher::new();
@@ -41,12 +41,14 @@ impl Aggregator {
 mod tests {
     use crate::aggregator::Aggregator;
     use crate::profile::RawSample;
+    use crate::profile::SampleResult;
 
     #[test]
     fn test_aggregate_raw_samples() {
         let raw_sample_1 = RawSample {
             pid: 1234,
             tid: 1235,
+            result: SampleResult::Started,
             collected_at: 1748865070,
             ustack: vec![0xffff, 0xffff],
             kstack: vec![0xffff, 0xdddd, 0xaaaa, 0xeeee, 0xaaae],
@@ -55,6 +57,7 @@ mod tests {
         let raw_sample_2 = RawSample {
             pid: 1234,
             tid: 1235,
+            result: SampleResult::Started,
             collected_at: 1748865070,
             ustack: vec![0xdddd, 0xfeedbee, 0xddddef, 0xbeefdad],
             kstack: vec![],
@@ -90,6 +93,7 @@ mod tests {
         let raw_sample_1 = RawSample {
             pid: 1234,
             tid: 1235,
+            result: SampleResult::Started,
             collected_at: 1748865070,
             ustack: vec![0xffff, 0xdeadbeef],
             kstack: vec![0xffff, 0xdddd, 0xaaaa, 0xeeee, 0xaaae],
@@ -98,6 +102,7 @@ mod tests {
         let raw_sample_2 = RawSample {
             pid: 1234,
             tid: 1235,
+            result: SampleResult::Started,
             collected_at: 1748865070,
             ustack: raw_sample_1.ustack.clone(),
             kstack: vec![],
@@ -130,6 +135,7 @@ mod tests {
         let raw_sample_1 = RawSample {
             pid: 1234,
             tid: 1235,
+            result: SampleResult::Started,
             collected_at: 1748865070,
             ustack: vec![0xffff, 0xdeadbeef],
             kstack: vec![0xffff, 0xdddd, 0xaaaa, 0xeeee, 0xaaae],
@@ -138,6 +144,7 @@ mod tests {
         let raw_sample_2 = RawSample {
             pid: 1234,
             tid: 1235,
+            result: SampleResult::Started,
             collected_at: 1748865070,
             ustack: vec![0xdddd, 0xfeedbee, 0xddddef, 0xbeefdad],
             kstack: raw_sample_1.kstack.clone(),
@@ -175,6 +182,7 @@ mod tests {
         let raw_sample_1 = RawSample {
             pid: 1234,
             tid: 1235,
+            result: SampleResult::Started,
             collected_at: 1748865070,
             ustack: ustack.clone(),
             kstack: kstack.clone(),
@@ -183,6 +191,7 @@ mod tests {
         let raw_sample_2 = RawSample {
             pid: 1234,
             tid: 1236,
+            result: SampleResult::Started,
             collected_at: 1748865070,
             ustack: ustack.clone(),
             kstack: kstack.clone(),
@@ -191,6 +200,7 @@ mod tests {
         let raw_sample_3 = RawSample {
             pid: 123,
             tid: 124,
+            result: SampleResult::Started,
             collected_at: 1748865070,
             ustack: ustack.clone(),
             kstack: kstack.clone(),
