@@ -83,7 +83,7 @@ impl Bpf {
         // BPF map sizes can be overridden, this is a debugging option to print the
         // actual size once the maps are created and the BPF program is loaded.
         if profiler_config.mapsize_info {
-            Self::show_actual_profiler_map_sizes(&native_unwinder);
+            let _ = Self::show_actual_profiler_map_sizes(&native_unwinder);
         }
 
         let mut tracers_builder = TracersSkelBuilder::default();
@@ -148,13 +148,8 @@ impl Bpf {
     }
 
     pub(crate) fn attach_perf_event(&mut self, perf_fd: i32) -> Link {
-        let prog = self
-            .native_unwinder
-            .object_mut()
-            .progs_mut()
-            .find(|prog| prog.name() == "on_event")
-            .expect("get prog");
-        prog.attach_perf_event(perf_fd).unwrap()
+        let prog = &self.native_unwinder.progs.on_event;
+        prog.attach_perf_event(perf_fd).expect("attach perf")
     }
 
     pub(crate) fn attach_tracers(&mut self) {
@@ -172,7 +167,7 @@ impl Bpf {
                 &native_unwinder_prog_fd.to_le_bytes(),
                 MapFlags::ANY,
             )
-            .expect("update map");
+            .expect("update programs map");
     }
 
     fn create_unwind_info_maps(open_skel: &mut OpenProfilerSkel) -> MapHandle {
@@ -186,12 +181,10 @@ impl Bpf {
                 .expect("should never fail");
 
         open_skel
-            .open_object_mut()
-            .maps_mut()
-            .find(|map| map.name().to_string_lossy() == "outer_map")
-            .unwrap()
+            .maps
+            .outer_map
             .set_inner_map_fd(inner_map_shape.as_fd())
-            .expect("should never fail");
+            .expect("set inner map fd");
 
         inner_map_shape
     }
@@ -339,12 +332,14 @@ impl Bpf {
         }
     }
 
-    pub fn show_actual_profiler_map_sizes(bpf: &ProfilerSkel) {
+    pub fn show_actual_profiler_map_sizes(bpf: &ProfilerSkel) -> Result<(), libbpf_rs::Error> {
         info!("BPF map sizes:");
         info!(
             "rate_limits: {}",
-            bpf.maps.rate_limits.info().unwrap().info.max_entries
+            bpf.maps.rate_limits.info()?.info.max_entries
         );
+
+        Ok(())
     }
 
     pub(crate) fn add_unwind_info(
@@ -529,10 +524,8 @@ impl Bpf {
         executable_id: u64,
     ) -> Result<(), libbpf_rs::Error> {
         self.native_unwinder
-            .object_mut()
-            .maps_mut()
-            .find(|maps| maps.name().to_string_lossy() == "outer_map")
-            .unwrap()
+            .maps
+            .outer_map
             .delete(&executable_id.to_le_bytes())
     }
 
@@ -565,7 +558,7 @@ impl Bpf {
         &mut self,
         executable_id: u64,
         unwind_info_len: usize,
-    ) -> MapHandle {
+    ) -> Result<MapHandle, libbpf_rs::Error> {
         let opts = libbpf_sys::bpf_map_create_opts {
             sz: size_of::<libbpf_sys::bpf_map_create_opts>() as libbpf_sys::size_t,
             map_flags: libbpf_sys::BPF_F_MMAPABLE | libbpf_sys::BPF_F_INNER_MAP,
@@ -577,24 +570,19 @@ impl Bpf {
             Some("inner_map"),
             4,
             8,
-            unwind_info_len.try_into().unwrap(),
+            unwind_info_len
+                .try_into()
+                .expect("fit unwind info size in u32"),
             &opts,
-        )
-        .unwrap();
+        )?;
 
-        self.native_unwinder
-            .object_mut()
-            .maps_mut()
-            .find(|map| map.name().to_string_lossy() == "outer_map")
-            .unwrap()
-            .update(
-                &executable_id.to_le_bytes(),
-                &inner_map.as_fd().as_raw_fd().to_le_bytes(),
-                MapFlags::ANY,
-            )
-            .unwrap();
+        self.native_unwinder.maps.outer_map.update(
+            &executable_id.to_le_bytes(),
+            &inner_map.as_fd().as_raw_fd().to_le_bytes(),
+            MapFlags::ANY,
+        )?;
 
-        inner_map
+        Ok(inner_map)
     }
 
     /// Collect the BPF unwinder statistics and aggregate the per CPU values.
