@@ -969,7 +969,8 @@ impl Profiler {
 
         let inner_map = self
             .bpf
-            .create_and_insert_unwind_info_map(executable_id.into(), unwind_info.len());
+            .create_and_insert_unwind_info_map(executable_id.into(), unwind_info.len())
+            .expect("create inner map");
 
         // Add all unwind information and its pages.
         Bpf::add_unwind_info(&inner_map, &unwind_info)
