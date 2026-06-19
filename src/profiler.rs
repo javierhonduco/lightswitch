@@ -67,7 +67,7 @@ const MAX_UNWIND_INFO_SIZE: usize = 7_000_000;
 
 pub enum TracerEvent {
     ProcessExit(Pid),
-    Munmap(Pid, u64),
+    Munmap(Pid, u64, u64),
 }
 
 pub struct Profiler {
@@ -530,8 +530,8 @@ impl Profiler {
                 },
                 recv(self.tracers_chan_receive) -> read => {
                     match read {
-                        Ok(TracerEvent::Munmap(pid, start_address)) => {
-                                self.handle_munmap(pid, start_address);
+                        Ok(TracerEvent::Munmap(pid, start_address, end_address)) => {
+                                self.handle_munmap(pid, start_address, end_address);
                         },
                         Ok(TracerEvent::ProcessExit(pid)) => {
                                 self.handle_process_exit(pid, false);
@@ -641,14 +641,26 @@ impl Profiler {
         }
     }
 
-    pub fn handle_munmap(&mut self, pid: Pid, start_address: u64) {
+    pub fn handle_munmap(&mut self, pid: Pid, start_address: u64, end_address: u64) {
         let mut procs = self.procs.write();
 
         match procs.get_mut(&pid) {
             Some(proc_info) => {
-                for mapping in &mut proc_info.mappings.0 {
-                    if mapping.start_addr <= start_address && start_address <= mapping.end_addr {
-                        debug!("found memory mapping starting at {:x} for pid {} while handling munmap", start_address, pid);
+                let found_mapping = proc_info.mappings.0.iter_mut().find(|mapping| {
+                    mapping.start_addr <= start_address && start_address < mapping.end_addr
+                });
+
+                match found_mapping {
+                    Some(mapping) => {
+                        if mapping.end_addr != end_address {
+                            debug!("partial munmaps aren't supported");
+                            return;
+                        }
+
+                        debug!(
+                            "found memory mapping starting at {:x} for pid {} while handling munmap",
+                            start_address, pid
+                        );
                         self.bpf.delete_process_mapping(
                             pid,
                             mapping.start_addr,
@@ -668,12 +680,10 @@ impl Profiler {
                             }
                         }
                     }
+                    None => {
+                        debug!("could not find memory mapping starting at {:x} for pid {} while handling munmap", start_address, pid);
+                    }
                 }
-
-                debug!(
-                    "could not find memory mapping starting at {:x} for pid {} while handling munmap",
-                    start_address, pid
-                );
             }
             None => {
                 debug!("could not find pid {} while handling munmap", pid);
