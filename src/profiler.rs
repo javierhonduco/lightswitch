@@ -1381,7 +1381,7 @@ impl Profiler {
                             soft_delete: false,
                         });
                     } else {
-                        error!("could not insert object file due to {:?}", info);
+                        debug!("could not insert object file due to {:?}", info);
                     }
                 }
                 procfs::process::MMapPath::Anonymous => {
