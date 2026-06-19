@@ -87,6 +87,18 @@ fn start_deadlock_detector() {
     });
 }
 
+fn open_browser(url: &str) {
+    if let Ok(browser_bin) = std::env::var("BROWSER") {
+        if let Ok(output) = Command::new(browser_bin).arg(url).output() {
+            if output.status.success() {
+                return;
+            }
+        }
+    }
+
+    let _ = Command::new("xdg-open").arg(url).output();
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     panic_thread_hook();
     let args = CliArgs::parse();
@@ -136,7 +148,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             return Ok(());
         }
-        Some(Commands::Server) => {
+        Some(Commands::Server { no_open }) => {
             // If root, change user to the one that invoked `sudo` as we want to
             // open the browser with that user.
             if nix::unistd::geteuid().is_root() {
@@ -148,16 +160,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 nix::unistd::setuid(Uid::from_raw(target_uid)).unwrap();
             }
 
-            let cmd = Command::new("xdg-open")
-                .arg("http://localhost:3000")
-                .output()
-                .unwrap();
-            if !cmd.status.success() {
-                println!("`xdg-open` failed with `{:?}`", cmd);
-            }
-
             let port = 3000;
-            println!("Listening on http://localhost:{port}");
+            let url = format!("http://localhost:{port}");
+            println!("Listening on {url}");
+            if !no_open {
+                open_browser(&url);
+            }
             start_server(port);
             return Ok(());
         }

@@ -62,10 +62,17 @@ pub(crate) enum DebugInfoBackend {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum Commands {
-    ObjectInfo { path: String },
-    ShowUnwind { path: String },
+    ObjectInfo {
+        path: String,
+    },
+    ShowUnwind {
+        path: String,
+    },
     SystemInfo,
-    Server,
+    Server {
+        #[arg(long)]
+        no_open: bool,
+    },
 }
 
 #[derive(Parser, Debug)]
