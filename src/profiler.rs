@@ -253,8 +253,8 @@ enum AddUnwindInformationError {
 // Note: this doesn't take into consideration the mmap'ed or load
 // offsets.
 fn previous_load_address(map_start: u64, elf_loads: &[ElfLoad]) -> u64 {
-    let page_mask = !(page_size() - 1) as u64; // round down
-    map_start.saturating_sub(elf_loads.first().unwrap().p_vaddr & page_mask)
+    let page_size = page_size() as u64;
+    map_start.saturating_sub(align_down(elf_loads.first().unwrap().p_vaddr, page_size))
 }
 
 fn align_down(value: u64, align: u64) -> u64 {
@@ -290,11 +290,11 @@ fn load_address(comm: &str, map_start: u64, map_offset: u64, elf_loads: &[ElfLoa
     let old = previous_load_address(map_start, elf_loads);
     let new = load_address_for_mapping(map_start, map_offset, elf_loads);
     let Some(new) = new else {
-        println!("new LOAD is empty!! comm {comm}");
+        warn!("new LOAD is empty!! comm {comm}");
         return old;
     };
     if old != new {
-        println!("LOAD old {:x}, new {:x} comm {comm}", old, new);
+        warn!("LOAD old {:x}, new {:x} comm {comm}", old, new);
     }
 
     new
@@ -1659,5 +1659,48 @@ mod tests {
         assert_eq!(maps(&profiler).outer_map.keys().count(), 0);
         assert_eq!(maps(&profiler).executable_to_page.keys().count(), 0);
         assert_eq!(profiler.native_unwind_state.executable_count(), 0);
+    }
+
+    #[test]
+    fn test_load_address_for_zero_offset_mapping() {
+        let load = ElfLoad {
+            p_offset: 0,
+            p_vaddr: 0,
+            p_filesz: 0x2000,
+        };
+
+        assert_eq!(
+            load_address_for_mapping(0x7f00_0000, 0, &[load]),
+            Some(0x7f00_0000)
+        );
+    }
+
+    #[test]
+    fn test_load_address_for_non_zero_offset_mapping() {
+        let load = ElfLoad {
+            p_offset: 0,
+            p_vaddr: 0,
+            p_filesz: 0x0242_58d8,
+        };
+
+        let load_address = load_address_for_mapping(0x7af9_eba0_0000, 0x400000, &[load]);
+        assert_eq!(load_address, Some(0x7af9_eb60_0000));
+
+        let object_relative_pc = 0x7af9_ec3b_9b29 - load_address.unwrap();
+        assert_eq!(object_relative_pc, 0x00db_9b29);
+    }
+
+    #[test]
+    fn test_load_address_for_non_zero_segment_vaddr() {
+        let load = ElfLoad {
+            p_offset: 0x2000,
+            p_vaddr: 0x8000,
+            p_filesz: 0x3000,
+        };
+
+        assert_eq!(
+            load_address_for_mapping(0x7000_0000, 0x3000, &[load]),
+            Some(0x6fff_7000)
+        );
     }
 }
