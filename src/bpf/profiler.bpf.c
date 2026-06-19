@@ -548,7 +548,6 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
             return 1;
         }
 
-
         LOG("\tprevious ip: %llx (@ %llx)", previous_rip, previous_rip_addr);
         LOG("\tprevious sp: %llx", previous_rsp);
         // Set rsp and rip registers
