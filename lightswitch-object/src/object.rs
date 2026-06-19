@@ -45,10 +45,6 @@ pub enum Runtime {
     },
     /// Golang
     Go(Vec<StopUnwindingFrames>),
-    /// V8, used by Node.js which is always compiled with frame pointers and has
-    /// handwritten code sections that aren't covered by the unwind
-    /// information
-    V8,
 }
 
 impl fmt::Debug for Runtime {
@@ -70,7 +66,6 @@ impl fmt::Debug for Runtime {
                 )
                 .finish(),
             Runtime::Go(frames) => f.debug_tuple("Go").field(frames).finish(),
-            Runtime::V8 => write!(f, "V8"),
         }
     }
 }
@@ -171,9 +166,6 @@ impl ObjectFile {
                 let Ok(name) = symbol.name_bytes() else {
                     continue;
                 };
-                if name.starts_with(b"_ZZN2v88internal") {
-                    return Runtime::V8;
-                }
                 if name.starts_with(b"__zig") {
                     is_zig = true;
                 }
@@ -432,12 +424,6 @@ mod tests {
     fn test_runtime_debug_clike() {
         let r = Runtime::CLike;
         assert_eq!(format!("{:?}", r), "CLike");
-    }
-
-    #[test]
-    fn test_runtime_debug_v8() {
-        let r = Runtime::V8;
-        assert_eq!(format!("{:?}", r), "V8");
     }
 
     #[test]

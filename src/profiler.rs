@@ -930,10 +930,6 @@ impl Profiler {
                     )
                 }
             }
-            Runtime::V8 => Ok(vec![
-                CompactUnwindRow::frame_pointer(start_address, is_arm64),
-                CompactUnwindRow::stop_unwinding(end_address),
-            ]),
         };
 
         let unwind_info = match unwind_info {
