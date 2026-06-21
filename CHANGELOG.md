@@ -3,6 +3,21 @@ Unreleased
 - Fix bug preventing profiling of processes in a different pid namespace than lightswitch's
 - Add support for Pyroscope
 - Cache object files by file_id to avoid reparsing them
+- Fix profiling of processes in other pid namespaces 
+- Add Pyroscope support
+- lightswitch-object: Fix Go build id parsing 
+- Arm64 unwinding fixes without frame pointers 
+- Avoid re-parsing object files
+- Remove old process on schedule
+- Clean object files with zero references
+- Add support for OCaml
+- cli: show if an object file has DWARF debug info
+- Refactor BPF and native unwind state code
+- Bump max allowed profiling frequency 
+- Read process name in BPF
+- Add support for Firefox Profiler
+- object: Stop treating v8 as a special case
+- Increase maximum stack size to 200 frames
 
 v0.4.0
 ------
