@@ -290,8 +290,8 @@ fn load_address(comm: &str, map_start: u64, map_offset: u64, elf_loads: &[ElfLoa
     let old = previous_load_address(map_start, elf_loads);
     let new = load_address_for_mapping(map_start, map_offset, elf_loads);
     let Some(new) = new else {
-        warn!("new LOAD is empty!! comm {comm}");
-        return old;
+        panic!("new LOAD is empty!! comm {comm}");
+        return 0;
     };
     if old != new {
         warn!("LOAD old {:x}, new {:x} comm {comm}", old, new);
@@ -299,6 +299,9 @@ fn load_address(comm: &str, map_start: u64, map_offset: u64, elf_loads: &[ElfLoa
 
     new
 }
+// zed
+// - load segments: Ok([ElfLoad { p_offset: 8671232, p_vaddr: 8671232, p_filesz:
+//   221606077 }])
 
 impl Profiler {
     pub fn new(
