@@ -44,7 +44,7 @@ impl RawSample {
         if sample_len < 24 {
             return Err(RawSampleParsingError::BeforeStackTooSmall);
         }
-        if sample_len > 24 + 127 * 2 * 8 {
+        if sample_len > 24 + 200 * 2 * 8 {
             return Err(RawSampleParsingError::SampleTooLarge);
         }
 
@@ -267,7 +267,7 @@ mod tests {
             stack: native_stack_t {
                 ulen: 2,
                 klen: 1,
-                addresses: [0; 254],
+                addresses: [0; 400],
             },
         };
         assert_eq!(
@@ -285,7 +285,7 @@ mod tests {
             stack: native_stack_t {
                 ulen: 2,
                 klen: 1,
-                addresses: [0; 254],
+                addresses: [0; 400],
             },
         };
         let bytes = unsafe { plain::as_bytes(&c_sample) };
@@ -307,7 +307,7 @@ mod tests {
             stack: native_stack_t {
                 ulen: 2,
                 klen: 1,
-                addresses: [0; 254],
+                addresses: [0; 400],
             },
         };
 
