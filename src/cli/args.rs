@@ -25,6 +25,7 @@ pub(crate) enum ProfileFormat {
     #[default]
     FlameGraph,
     Pprof,
+    Firefox,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Default, PartialEq)]
@@ -42,7 +43,6 @@ pub(crate) enum ProfileSender {
     LocalDisk,
     Remote,
     Pyroscope,
-    Firefox,
 }
 
 #[derive(PartialEq, clap::ValueEnum, Debug, Clone, Default)]

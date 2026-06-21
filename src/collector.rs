@@ -326,14 +326,19 @@ impl Collector for PyroscopeCollector {
     }
 }
 
+use std::path::PathBuf;
+use tracing::info;
+
 #[derive(Default)]
-pub struct AggregatorCollector {
+pub struct AggregatingCollector {
     profiles: Vec<AggregatedProfile>,
     procs: HashMap<i32, ProcessInfo>,
     objs: HashMap<ExecutableId, ObjectFileInfo>,
+    symbolize: bool,
+    profile_path: PathBuf,
 }
 
-impl AggregatorCollector {
+impl AggregatingCollector {
     pub fn new() -> Self {
         Self::default()
     }
@@ -341,7 +346,7 @@ impl AggregatorCollector {
 
 /// Aggregates the samples in memory, which might be acceptable when profiling
 /// for short amounts of time.
-impl Collector for AggregatorCollector {
+impl Collector for AggregatingCollector {
     fn collect(
         &mut self,
         raw_profile: Vec<RawSample>,
@@ -370,7 +375,7 @@ impl Collector for AggregatorCollector {
         &HashMap<i32, ProcessInfo>,
         &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
-        let _span = span!(Level::DEBUG, "AggregatorCollector.finish").entered();
+        let _span = span!(Level::DEBUG, "AggregatingCollector.finish").entered();
 
         let mut samples_count = HashMap::new();
         for profile in &self.profiles {
@@ -386,7 +391,7 @@ impl Collector for AggregatorCollector {
         }
 
         debug!("found {} unique samples", samples_count.len());
-        let profile = samples_count
+        let mut profile = samples_count
             .iter()
             .map(|(sample, count)| AggregatedSample {
                 count: *count,
@@ -395,6 +400,12 @@ impl Collector for AggregatorCollector {
                 ..*sample
             })
             .collect();
+
+
+        if self.symbolize {
+            info!("Symbolizing profile...");
+            profile = symbolize_profile(&profile, &self.procs, &self.objs);
+        }
 
         (profile, &self.procs, &self.objs)
     }
@@ -454,6 +465,7 @@ pub struct FirefoxProfilerCollector {
     procs: HashMap<i32, ProcessInfo>,
     objs: HashMap<ExecutableId, ObjectFileInfo>,
     pid_to_comm: HashMap<i32, String>,
+    // @nocommit profile_path
 }
 
 impl FirefoxProfilerCollector {

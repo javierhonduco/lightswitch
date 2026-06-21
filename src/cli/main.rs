@@ -1,8 +1,6 @@
 use core::str;
 use std::error::Error;
-use std::fs::File;
 use std::io::IsTerminal;
-use std::io::Write;
 use std::panic;
 use std::path::PathBuf;
 use std::process::Command;
@@ -14,14 +12,12 @@ use std::time::Duration;
 use clap::Parser;
 use crossbeam_channel::bounded;
 use crossbeam_channel::tick;
-use inferno::flamegraph;
 use lightswitch::collector::FirefoxProfilerCollector;
 use lightswitch::collector::{
-    AggregatorCollector, Collector, LiveCollector, NullCollector, PyroscopeCollector,
+    AggregatingCollector, Collector, LiveCollector, NullCollector, PyroscopeCollector,
     StreamingCollector,
 };
 use lightswitch::debug_info::DebugInfoManager;
-use lightswitch::profile::symbolize_profile;
 use nix::unistd::Uid;
 use tracing::{debug, error, info, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -36,7 +32,6 @@ use lightswitch::debug_info::{
     DebugInfoBackendFilesystem, DebugInfoBackendNull, DebugInfoBackendRemote,
 };
 use lightswitch::kernel::kernel_build_id;
-use lightswitch::profile::{fold_profile, to_pprof};
 use lightswitch::profiler::{Profiler, ProfilerConfig};
 use lightswitch::server::start_server;
 use lightswitch::unwind_info::compact_unwind_info;
@@ -51,7 +46,6 @@ mod validators;
 use crate::args::CliArgs;
 use crate::args::Commands;
 use crate::args::DebugInfoBackend;
-use crate::args::FlamegraphAggregation;
 use crate::args::LoggingLevel;
 use crate::args::ProfileFormat;
 use crate::args::ProfileSender;
@@ -311,7 +305,23 @@ fn main() -> Result<(), Box<dyn Error>> {
     let collector: Arc<Mutex<Box<dyn Collector + Send>>> =
         Arc::new(Mutex::new(match args.sender {
             ProfileSender::None => Box::new(NullCollector::new()),
-            ProfileSender::LocalDisk => Box::new(AggregatorCollector::new()),
+            ProfileSender::LocalDisk => {
+                let collector:Box<dyn Collector + Send> = match args.profile_format {
+                    ProfileFormat::Firefox => {
+                        Box::new(FirefoxProfilerCollector::new(
+                            "firefox-profiler.json",
+                            args.sample_freq,
+                            metadata_provider.clone(),
+                        ))
+                    },
+                    ProfileFormat::Pprof | ProfileFormat::FlameGraph => {
+                        Box::new(AggregatingCollector::new())
+                    },
+                    _ => {todo!()}
+                };
+
+                collector
+            },
             ProfileSender::Remote => Box::new(StreamingCollector::new(
                 token,
                 args.symbolizer == Symbolizer::Local,
@@ -329,11 +339,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 args.sample_freq,
                 metadata_provider.clone(),
             )),
-            ProfileSender::Firefox => Box::new(FirefoxProfilerCollector::new(
-                "firefox-profiler.json",
-                args.sample_freq,
-                metadata_provider.clone(),
-            )),
         }));
 
     let mut p = Profiler::new(
@@ -342,83 +347,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         metadata_provider.clone(),
     );
     p.profile_pids(args.pids);
-    let profile_duration = p.run(collector.clone());
-
-    let collector = collector.lock().unwrap();
-    let (mut profile, procs, objs) = collector.finish();
-
-    // The senders below send the profiles directly.
-    match args.sender {
-        ProfileSender::Remote
-        | ProfileSender::Pyroscope
-        | ProfileSender::Firefox
-        | ProfileSender::None => {
-            return Ok(());
-        }
-        _ => {}
-    }
-
-    // Otherwise let's symbolize the profile and write it to disk.
-    if args.symbolizer == Symbolizer::Local {
-        info!("Symbolizing profile...");
-        profile = symbolize_profile(&profile, procs, objs);
-    }
-
-    let profile_path = args.profile_path.unwrap_or(PathBuf::from(""));
-
-    match args.profile_format {
-        ProfileFormat::FlameGraph => {
-            let folded = fold_profile(
-                procs,
-                profile,
-                args.flamegraph_aggregation == FlamegraphAggregation::Function,
-            );
-            let mut options: flamegraph::Options<'_> = flamegraph::Options::default();
-            let data = folded.as_bytes();
-            let profile_name = args.profile_name.unwrap_or_else(|| "flame.svg".into());
-            let profile_path = profile_path.join(profile_name);
-            let f = File::create(&profile_path).unwrap();
-            match flamegraph::from_reader(&mut options, data, f) {
-                Ok(_) => {
-                    eprintln!(
-                        "Flamegraph profile successfully written to {}",
-                        profile_path.to_string_lossy()
-                    );
-                }
-                Err(e) => {
-                    error!("Failed to generate flamegraph: {:?}", e);
-                }
-            }
-        }
-        ProfileFormat::Pprof => {
-            let mut buffer = Vec::new();
-            let pprof_profile = to_pprof(
-                profile,
-                procs,
-                objs,
-                &metadata_provider,
-                profile_duration,
-                args.sample_freq,
-            );
-            pprof_profile.encode(&mut buffer).unwrap();
-            let profile_name = args.profile_name.unwrap_or_else(|| "profile.pb".into());
-            let profile_path = profile_path.join(profile_name);
-            let mut pprof_file = File::create(&profile_path).unwrap();
-
-            match pprof_file.write_all(&buffer) {
-                Ok(_) => {
-                    eprintln!(
-                        "Pprof profile successfully written to {}",
-                        profile_path.to_string_lossy()
-                    );
-                }
-                Err(e) => {
-                    error!("Failed to generate pprof: {:?}", e);
-                }
-            }
-        }
-        ProfileFormat::None => {}
-    }
+    p.run(collector.clone());
 
     Ok(())
 }
