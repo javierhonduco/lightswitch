@@ -1,17 +1,22 @@
+<p align="center">
+<img src="https://github.com/user-attachments/assets/a02e125d-055d-4962-8722-65be25d44575" width="40%">
+</p>
+
 [![ci](https://github.com/javierhonduco/lightswitch/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/javierhonduco/lightswitch/actions/workflows/build.yml)
 
 lightswitch
 ===========
-**lightswitch** is a profiler as a library for Linux suitable for on-demand and continuous on-CPU profiling. It's mostly written in Rust but the unwinders are written in C and run in BPF. Currently C, C++, Rust, Zig, and Go are fully supported on x86_64 and arm64.
+**lightswitch** is a profiler as a library for Linux suitable for on-demand and continuous on-CPU profiling. It's written in Rust with sprinkles of C for eBPF. Currently C, C++, Rust, Zig, and Go are fully supported on x86_64 and arm64.
 
-Features / design goals:
+Features / design goals
+-----------------------
 
-* **Minimal overhead**: currently targeting 3% CPU utilization and 500MB of memory across user and kernel space.
-* **No need for frame pointers**: works with code without frame pointers and produces more accurate profiles.
+* **Minimal overhead**: currently targeting 3% CPU utilization and 500MB of memory.
+* **Works without frame pointers**: no need to recompile code.
 * **Detailed metrics**: no more guessing around if profiles are broken and why.
-* **Works with processes with deep stacks**: by not relying on [`PERF_SAMPLE_STACK_USER`](https://man7.org/linux/man-pages/man2/perf_event_open.2.html).
+* **Support for deeper process stacks**: by using a bespoke unwinding implementation and not relying on [`PERF_SAMPLE_STACK_USER`](https://man7.org/linux/man-pages/man2/perf_event_open.2.html).
 * **Support for modern kernels**: (>=5.15), released approximately 4y ago.
-* **Automatic selection of BPF features**: to further reduce overhead in newer kernels.
+* **Automatic selection of BPF features**: to run faster and more accurately in newer kernels.
 
 Installation
 ------------
@@ -25,7 +30,7 @@ As a CLI, **lightswitch** can be run with:
 $ sudo lightswitch
 ```
 
-Stop it with <kbd>Ctrl</kbd>+<kbd>C</kbd>, or alternatively, pass a `--duration` in seconds. A flamegraph in SVG format will be written to disk. Pprof is also supported with `--profile-format=pprof`. By default the whole machine will be profiled. To profile individual processes you can use `--pids`.
+Stop it with <kbd>Ctrl</kbd>+<kbd>C</kbd>, or alternatively, pass a `--duration` in seconds. By default, a flamegraph in SVG format will be written to disk. Pprof is also supported with `--profile-format=pprof`. By default the whole machine will be profiled which can be overriden with `--pids`.
 
 With Docker:
 
