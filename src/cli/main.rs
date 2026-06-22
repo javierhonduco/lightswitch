@@ -272,6 +272,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .available_bpf_features
                 .has_non_prealloc_hash_maps_in_tracing,
         userspace_pid_ns_level: system_info.available_bpf_features.userspace_pid_ns_level,
+        ts_per_sample: args.enable_ts_per_sample,
         ..Default::default()
     };
 
@@ -350,6 +351,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 ProfilerConfig::default().session_duration,
                 args.sample_freq,
                 metadata_provider.clone(),
+                args.enable_ts_per_sample,
             )),
             ProfileSender::Pyroscope => Box::new(PyroscopeCollector::new(
                 args.symbolizer == Symbolizer::Local,
@@ -360,6 +362,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 args.sample_freq,
                 metadata_provider.clone(),
                 args.node_name.clone().unwrap_or_default(),
+                args.enable_ts_per_sample,
             )),
             ProfileSender::Firefox => Box::new(FirefoxProfilerCollector::new(
                 "firefox-profiler.json",
@@ -431,6 +434,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &metadata_provider,
                 profile_duration,
                 args.sample_freq,
+                args.enable_ts_per_sample,
             );
             pprof_profile.encode(&mut buffer).unwrap();
             let profile_name = args.profile_name.unwrap_or_else(|| "profile.pb".into());

@@ -45,6 +45,7 @@ pub fn to_pprof(
     metadata_provider: &ThreadSafeGlobalMetadataProvider,
     profile_duration: Duration,
     profile_frequency_hz: u64,
+    ts_per_sample: bool,
 ) -> pprof::Profile {
     // Not exactly when the profile session really started but works for now.
     let profile_start = SystemTime::now();
@@ -212,12 +213,14 @@ pub fn to_pprof(
                 })
                 .collect()
         });
-        let timestamp_label = pprof.new_label(
-            "collected_at",
-            LabelStringOrNumber::Number(sample.collected_at as i64, "milliseconds".into()),
-        );
         let mut sample_labels = task_labels.clone();
-        sample_labels.push(timestamp_label);
+        if ts_per_sample {
+            let timestamp_label = pprof.new_label(
+                "collected_at",
+                LabelStringOrNumber::Number(sample.collected_at as i64, "milliseconds".into()),
+            );
+            sample_labels.push(timestamp_label);
+        }
         pprof.add_sample(location_ids, sample.count as i64, &sample_labels);
     }
 

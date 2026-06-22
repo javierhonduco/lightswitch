@@ -183,7 +183,11 @@ mod tests {
         };
         let aggregator = Aggregator::default();
         let result = aggregator.aggregate(vec![stack, later]);
-        assert_eq!(result.len(), 2, "samples in different ms buckets must stay separate");
+        assert_eq!(
+            result.len(),
+            2,
+            "samples in different ms buckets must stay separate"
+        );
     }
 
     #[test]

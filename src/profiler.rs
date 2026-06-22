@@ -147,6 +147,7 @@ pub struct ProfilerConfig {
     pub no_prealloc_bpf_hash_maps: bool,
     pub preload_thread_metadata: bool,
     pub userspace_pid_ns_level: u32,
+    pub ts_per_sample: bool,
 }
 
 impl Default for ProfilerConfig {
@@ -170,6 +171,7 @@ impl Default for ProfilerConfig {
             no_prealloc_bpf_hash_maps: false,
             preload_thread_metadata: false,
             userspace_pid_ns_level: 0, // Assumes running in the root pid namespace by default
+            ts_per_sample: false,
         }
     }
 }

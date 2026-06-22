@@ -349,7 +349,10 @@ mod tests {
             kstack: vec![],
         };
         // 2 ms later = different ms bucket
-        let later = RawSample { collected_at: 1_002_000_000, ..base.clone() };
+        let later = RawSample {
+            collected_at: 1_002_000_000,
+            ..base.clone()
+        };
         assert_ne!(hash_of(&base), hash_of(&later));
     }
 
@@ -363,7 +366,10 @@ mod tests {
             kstack: vec![],
         };
         // 999 µs later — same ms bucket
-        let b = RawSample { collected_at: 1_000_999_000, ..a.clone() };
+        let b = RawSample {
+            collected_at: 1_000_999_000,
+            ..a.clone()
+        };
         assert_eq!(hash_of(&a), hash_of(&b));
     }
 
@@ -376,7 +382,10 @@ mod tests {
             ustack: vec![0xdead],
             kstack: vec![],
         };
-        let b = RawSample { ustack: vec![0xbeef], ..a.clone() };
+        let b = RawSample {
+            ustack: vec![0xbeef],
+            ..a.clone()
+        };
         assert_ne!(hash_of(&a), hash_of(&b));
     }
 

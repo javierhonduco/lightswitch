@@ -89,6 +89,7 @@ pub struct StreamingCollector {
     procs: HashMap<i32, ProcessInfo>,
     objs: HashMap<ExecutableId, ObjectFileInfo>,
     metadata_provider: ThreadSafeGlobalMetadataProvider,
+    ts_per_sample: bool,
 }
 
 impl StreamingCollector {
@@ -99,6 +100,7 @@ impl StreamingCollector {
         profile_duration: Duration,
         profile_frequency_hz: u64,
         metadata_provider: ThreadSafeGlobalMetadataProvider,
+        ts_per_sample: bool,
     ) -> Self {
         let client_builder = reqwest::blocking::Client::builder().timeout(Duration::from_secs(30));
         let client = client_builder
@@ -113,6 +115,7 @@ impl StreamingCollector {
             profile_duration,
             profile_frequency_hz,
             metadata_provider,
+            ts_per_sample,
             ..Default::default()
         }
     }
@@ -140,6 +143,7 @@ impl Collector for StreamingCollector {
             &self.metadata_provider,
             self.profile_duration,
             self.profile_frequency_hz,
+            self.ts_per_sample,
         );
 
         let mut request = self
@@ -182,6 +186,7 @@ pub struct PyroscopeCollector {
     objs: HashMap<ExecutableId, ObjectFileInfo>,
     metadata_provider: ThreadSafeGlobalMetadataProvider,
     node_name: String,
+    ts_per_sample: bool,
 }
 
 impl PyroscopeCollector {
@@ -195,6 +200,7 @@ impl PyroscopeCollector {
         profile_frequency_hz: u64,
         metadata_provider: ThreadSafeGlobalMetadataProvider,
         node_name: String,
+        ts_per_sample: bool,
     ) -> Self {
         let push_url = format!("{}/push.v1.PusherService/Push", server_url);
         let client_builder = reqwest::blocking::Client::builder().timeout(Duration::from_secs(30));
@@ -209,6 +215,7 @@ impl PyroscopeCollector {
             profile_frequency_hz,
             metadata_provider,
             node_name,
+            ts_per_sample,
             ..Default::default()
         }
     }
@@ -315,6 +322,7 @@ impl PyroscopeCollector {
             &self.metadata_provider,
             self.profile_duration,
             self.profile_frequency_hz,
+            self.ts_per_sample,
         );
 
         let mut buffer = Vec::new();

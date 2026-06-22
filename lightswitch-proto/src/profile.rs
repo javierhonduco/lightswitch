@@ -485,8 +485,10 @@ mod tests {
         let location_id = pprof.add_location(0x1500, mapping_id, vec![]);
 
         let ms_timestamp: i64 = 1_748_865_070_123;
-        let label =
-            pprof.new_label("collected_at", LabelStringOrNumber::Number(ms_timestamp, "milliseconds".into()));
+        let label = pprof.new_label(
+            "collected_at",
+            LabelStringOrNumber::Number(ms_timestamp, "milliseconds".into()),
+        );
         pprof.add_sample(vec![location_id], 1, &[label]);
 
         let profile = pprof.build();
