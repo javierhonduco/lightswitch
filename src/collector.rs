@@ -25,7 +25,7 @@ use crate::profile::{
     fold_profile, symbolize_profile, to_pprof, AggregatedSample, SymbolizedFrame,
 };
 use crate::profile::{raw_to_processed, RawSample};
-use crate::profile::{AggregatedProfile, RawAggregatedSample};
+use crate::profile::{AggregatedProfile, RawAggregatedProfile, RawAggregatedSample};
 
 pub trait Collector {
     fn collect(
@@ -245,26 +245,21 @@ struct PyroscopeSample {
     raw_profile: String,
 }
 
-/// POSTs pprof-encoded profiles to a Pyroscope server's Push endpoint.
-impl Collector for PyroscopeCollector {
-    fn collect(
-        &mut self,
-        profile: Vec<RawSample>,
+impl PyroscopeCollector {
+    fn build_series(
+        &self,
+        raw_profile: RawAggregatedProfile,
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
-    ) {
-        let _span = span!(Level::DEBUG, "PyroscopeCollector.collect").entered();
-
-        let mut profile = raw_to_processed(&Aggregator::default().aggregate(profile), procs, objs);
+        service_name: &str,
+    ) -> Option<PyroscopeSeries> {
+        let mut profile = raw_to_processed(&raw_profile, procs, objs);
         if self.local_symbolizer {
             profile = symbolize_profile(&profile, procs, objs);
         }
         if profile.is_empty() {
-            return;
+            return None;
         }
-
-        let mut series = Vec::new();
-        let mut buffer = Vec::new();
 
         let pprof_profile = to_pprof(
             profile,
@@ -275,33 +270,38 @@ impl Collector for PyroscopeCollector {
             self.profile_frequency_hz,
         );
 
+        let mut buffer = Vec::new();
         let mut gz_encoder = GzEncoder::new(&mut buffer, Compression::default());
         if let Err(e) = gz_encoder.write_all(&pprof_profile.encode_to_vec()) {
             tracing::error!("failed to write gzipped pprof with {:?}", e);
-            return;
+            return None;
         }
         let gzipped_profile = match gz_encoder.finish() {
             Ok(prof) => prof,
             Err(e) => {
                 tracing::error!("failed to gzip pprof with {:?}", e);
-                return;
+                return None;
             }
         };
 
         let base64_profile = base64::engine::general_purpose::STANDARD.encode(gzipped_profile);
-        series.push(PyroscopeSeries {
+        Some(PyroscopeSeries {
             labels: vec![
                 PyroscopeLabel::new("__name__", "process_cpu"),
-                PyroscopeLabel::new("service_name", self.service_name.clone()),
+                PyroscopeLabel::new("service_name", service_name),
             ],
             samples: vec![PyroscopeSample {
                 id: Uuid::new_v4().to_string().to_uppercase(),
                 raw_profile: base64_profile,
             }],
-        });
+        })
+    }
 
+    fn push_series(&self, series: Vec<PyroscopeSeries>) {
+        if series.is_empty() {
+            return;
+        }
         let payload = PyroscopePushRequest { series };
-
         let mut request = self.client.post(self.push_url.clone()).json(&payload);
         if let Some(tenant_id) = &self.tenant_id {
             request = request.header("X-Scope-OrgID", tenant_id.clone());
@@ -313,6 +313,24 @@ impl Collector for PyroscopeCollector {
             Ok(_) => {}
             Err(e) => tracing::error!("pyroscope push error: {:?}", e),
         }
+    }
+}
+
+/// POSTs pprof-encoded profiles to a Pyroscope server's Push endpoint.
+impl Collector for PyroscopeCollector {
+    fn collect(
+        &mut self,
+        profile: Vec<RawSample>,
+        procs: &HashMap<i32, ProcessInfo>,
+        objs: &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        let _span = span!(Level::DEBUG, "PyroscopeCollector.collect").entered();
+        let profile = Aggregator::default().aggregate(profile);
+        let series: Vec<_> = self
+            .build_series(profile, procs, objs, &self.service_name)
+            .into_iter()
+            .collect();
+        self.push_series(series);
     }
 
     fn finish(
@@ -482,12 +500,10 @@ impl Collector for FirefoxProfilerCollector {
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
-        // Add timestamps
         for sample in &samples {
             self.timestamps.push(sample.collected_at);
         }
 
-        // fake agg + normalize
         let profile = samples
             .iter()
             .map(|e| RawAggregatedSample {

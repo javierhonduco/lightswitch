@@ -38,12 +38,56 @@ With Docker:
 $ docker run -it --privileged --pid=host -v /sys:/sys -v $PWD:/profiles -v /tmp/lightswitch ghcr.io/javierhonduco/lightswitch:main-$LIGHTSWITCH_SHA1 --profile-path=/profiles
 ```
 
+With Kubernetes from Nix:
+
+```shell
+$ nix build .#k8s
+$ sudo ctr --namespace k8s.io images import result/container.tar.gz
+$ kubectl apply -f result/manifest.yaml
+```
+
+The manifest runs lightswitch as a privileged `DaemonSet` with host PID access and
+pod `get/list/watch` RBAC. It defaults to the Nix-built image name
+`lightswitch:latest` and sends profiles to `http://pyroscope:4040`; override that
+from Nix with:
+
+```nix
+inputs.lightswitch.lib.mkK8sManifest {
+  inherit pkgs;
+  pyroscopeUrl = "http://pyroscope.monitoring.svc.cluster.local:4040";
+}
+```
+
+On a NixOS/k3s node, the same pieces can be wired into the system config:
+
+```nix
+{ config, inputs, pkgs, ... }:
+{
+  systemd.services.lightswitch-k8s-image = {
+    wantedBy = [ "multi-user.target" ];
+    after = [ "k3s.service" ];
+    serviceConfig.Type = "oneshot";
+    path = [ config.services.k3s.package ];
+    script = ''
+      k3s ctr images import ${inputs.lightswitch.packages.${pkgs.system}.container}
+    '';
+  };
+
+  services.k3s.manifests.lightswitch.source =
+    inputs.lightswitch.lib.mkK8sManifest {
+      inherit pkgs;
+      pyroscopeUrl = "http://pyroscope.monitoring.svc.cluster.local:4040";
+    };
+}
+```
+
 Development
 -----------
 We use `nix` for the development environment and the building system. It can be installed with [the official installer](https://nixos.org/download/#nix-install-linux) (make sure to enable support for flakes) or with the [Determinate Systems installer](https://github.com/DeterminateSystems/nix-installer?tab=readme-ov-file#usage). Once `nix` is installed, you can
 
 * start a developer environment with `nix develop` and then you'll be able to build the project with cargo with `cargo build`. This might take a little while the first time.
 * generate a container image `nix build .#container` will write a symlink to the container image to `./result`.
+* generate Kubernetes assets with `nix build .#k8s`; `./result` contains the container archive and manifest together.
 
 ### Building
 ```shell
