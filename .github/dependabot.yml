@@ -3,11 +3,13 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
     groups:
       github-actions:
         patterns:
           - "*"
+    cooldown:
+      default-days: 7
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:

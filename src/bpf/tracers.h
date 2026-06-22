@@ -9,4 +9,5 @@ typedef struct {
     u32 type;
     int pid;
     u64 start_address;
+    u64 end_address;
 } tracer_event_t;

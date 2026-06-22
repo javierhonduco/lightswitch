@@ -3,9 +3,9 @@
 // Number of frames to walk per tail call iteration.
 #define MAX_STACK_DEPTH_PER_PROGRAM 7
 // Number of BPF tail calls that will be attempted.
-#define MAX_TAIL_CALLS 19
+#define MAX_TAIL_CALLS 30
 // Maximum number of frames.
-#define MAX_STACK_DEPTH 127
+#define MAX_STACK_DEPTH 200
 _Static_assert(MAX_TAIL_CALLS *MAX_STACK_DEPTH_PER_PROGRAM >= MAX_STACK_DEPTH,
                "enough iterations to traverse the whole stack");
 // Number of unique stacks.
@@ -114,6 +114,8 @@ const volatile struct lightswitch_config_t lightswitch_config = {
     .verbose_logging = false,
     .use_ring_buffers = false,
     .use_task_pt_regs_helper = false,
+    .use_btf_helpers = false,
+    .userspace_pid_ns_level = -1,
 };
 
 #define LOG(fmt, ...)                             \
@@ -190,6 +192,8 @@ typedef struct {
     enum event_type type;
     int pid;  // use right name here (tgid?)
     u64 address;
+    // Not using char as it's signed in arm64.
+    u8 comm[16];
 } Event;
 
 enum program {

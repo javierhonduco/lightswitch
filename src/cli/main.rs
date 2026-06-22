@@ -5,6 +5,7 @@ use std::io::IsTerminal;
 use std::io::Write;
 use std::panic;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -14,11 +15,13 @@ use clap::Parser;
 use crossbeam_channel::bounded;
 use crossbeam_channel::tick;
 use inferno::flamegraph;
+use lightswitch::collector::FirefoxProfilerCollector;
 use lightswitch::collector::{
     AggregatorCollector, Collector, LiveCollector, NullCollector, PyroscopeCollector,
     StreamingCollector,
 };
 use lightswitch::debug_info::DebugInfoManager;
+use lightswitch::profile::symbolize_profile;
 use nix::unistd::Uid;
 use tracing::{debug, error, info, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -33,9 +36,9 @@ use lightswitch::debug_info::{
     DebugInfoBackendFilesystem, DebugInfoBackendNull, DebugInfoBackendRemote,
 };
 use lightswitch::kernel::kernel_build_id;
-use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::{fold_profile, to_pprof};
 use lightswitch::profiler::{Profiler, ProfilerConfig};
+use lightswitch::server::start_server;
 use lightswitch::unwind_info::compact_unwind_info;
 use lightswitch::unwind_info::CompactUnwindInfoBuilder;
 use lightswitch_object::kernel::kaslr_offset;
@@ -82,6 +85,18 @@ fn start_deadlock_detector() {
             }
         }
     });
+}
+
+fn open_browser(url: &str) {
+    if let Ok(browser_bin) = std::env::var("BROWSER") {
+        if let Ok(output) = Command::new(browser_bin).arg(url).output() {
+            if output.status.success() {
+                return;
+            }
+        }
+    }
+
+    let _ = Command::new("xdg-open").arg(url).output();
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -131,6 +146,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!("- kernel ASLR offset: 0x{aslr_offset:x}");
             }
 
+            return Ok(());
+        }
+        Some(Commands::Server { no_open }) => {
+            // If root, change user to the one that invoked `sudo` as we want to
+            // open the browser with that user.
+            if nix::unistd::geteuid().is_root() {
+                let target_uid = std::env::var("SUDO_UID")
+                    .expect("SUDO_UID not set")
+                    .parse::<u32>()
+                    .expect("SUDO_UID could not be parsed");
+
+                nix::unistd::setuid(Uid::from_raw(target_uid)).unwrap();
+            }
+
+            let port = 3000;
+            let url = format!("http://localhost:{port}");
+            println!("Listening on {url}");
+            if !no_open {
+                open_browser(&url);
+            }
+            start_server(port);
             return Ok(());
         }
     }
@@ -293,9 +329,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 args.sample_freq,
                 metadata_provider.clone(),
             )),
+            ProfileSender::Firefox => Box::new(FirefoxProfilerCollector::new(
+                "firefox-profiler.json",
+                args.sample_freq,
+                metadata_provider.clone(),
+            )),
         }));
 
-    let mut p: Profiler = Profiler::new(
+    let mut p = Profiler::new(
         profiler_config,
         stop_signal_receive,
         metadata_provider.clone(),
@@ -306,13 +347,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     let collector = collector.lock().unwrap();
     let (mut profile, procs, objs) = collector.finish();
 
-    // If we need to send the profile to the backend there's nothing else to do.
+    // The senders below send the profiles directly.
     match args.sender {
-        ProfileSender::Remote | ProfileSender::Pyroscope | ProfileSender::None => {
+        ProfileSender::Remote
+        | ProfileSender::Pyroscope
+        | ProfileSender::Firefox
+        | ProfileSender::None => {
             return Ok(());
         }
         _ => {}
     }
+
     // Otherwise let's symbolize the profile and write it to disk.
     if args.symbolizer == Symbolizer::Local {
         info!("Symbolizing profile...");
@@ -324,6 +369,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     match args.profile_format {
         ProfileFormat::FlameGraph => {
             let folded = fold_profile(
+                procs,
                 profile,
                 args.flamegraph_aggregation == FlamegraphAggregation::Function,
             );
@@ -432,7 +478,7 @@ mod tests {
         cmd.arg("--help");
         cmd.assert().success();
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
-        insta::assert_yaml_snapshot!(actual, @r#""Usage: lightswitch [OPTIONS] [COMMAND]\n\nCommands:\n  object-info  \n  show-unwind  \n  system-info  \n  help         Print this message or the help of the given subcommand(s)\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-debug\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --btf-custom-path <BTF_CUSTOM_PATH>\n          Alternative BTF file\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --flamegraph-aggregation <FLAMEGRAPH_AGGREGATION>\n          What information to show in the flamegraph. Won't do anything for other profile formats\n          \n          [default: function]\n          [possible values: function, all]\n\n      --profile-path <PROFILE_PATH>\n          Path for the generated profile\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n          - pyroscope\n          \n          [default: local-disk]\n\n      --server-url <SERVER_URL>\n          \n\n      --token <TOKEN>\n          \n\n      --pyroscope-app-name <PYROSCOPE_APP_NAME>\n          Application name for Pyroscope\n          \n          [default: lightswitch]\n\n      --pyroscope-tenant-id <PYROSCOPE_TENANT_ID>\n          Tenant ID for multi-tenant Pyroscope (sets `X-Scope-OrgID` header)\n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          max number of rate limit entries\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n      --symbolizer <SYMBOLIZER>\n          [default: local]\n          [possible values: local, none]\n\n      --debug-info-backend <DEBUG_INFO_BACKEND>\n          [default: none]\n          [possible values: none, copy, remote]\n\n      --max-native-unwind-info-size-mb <MAX_NATIVE_UNWIND_INFO_SIZE_MB>\n          approximate max size in megabytes used for the BPF maps that hold unwind information\n          \n          [default: 2147483647]\n\n      --enable-deadlock-detector\n          enable parking_lot's deadlock detector\n\n      --cache-dir-base <CACHE_DIR_BASE>\n          [default: /tmp]\n\n      --killswitch-path-override <KILLSWITCH_PATH_OVERRIDE>\n          Override the default path to the killswitch file (/tmp/lightswitch/killswitch) which prevents the profiler from starting\n\n      --unsafe-start\n          Force the profiler to start even if the system killswitch is enabled\n\n      --force-perf-buffer\n          force perf buffers even if ring buffers can be used\n\n      --no-prealloc-bpf-hash-maps\n          Do not preallocate BPF hash maps\n\n      --preload-thread-metadata\n          Read metadata for all threads when a new process is detected. This might be slow in older kernels.\n\n      --live\n          Launch live flamegraph TUI\n\n  -h, --help\n          Print help (see a summary with '-h')\n""#);
+        insta::assert_yaml_snapshot!(actual, @r#""Usage: lightswitch [OPTIONS] [COMMAND]\n\nCommands:\n  object-info  \n  show-unwind  \n  system-info  \n  server       \n  help         Print this message or the help of the given subcommand(s)\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-debug\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --btf-custom-path <BTF_CUSTOM_PATH>\n          Alternative BTF file\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --flamegraph-aggregation <FLAMEGRAPH_AGGREGATION>\n          What information to show in the flamegraph. Won't do anything for other profile formats\n          \n          [default: function]\n          [possible values: function, all]\n\n      --profile-path <PROFILE_PATH>\n          Path for the generated profile\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n          - pyroscope\n          - firefox\n          \n          [default: local-disk]\n\n      --server-url <SERVER_URL>\n          \n\n      --token <TOKEN>\n          \n\n      --pyroscope-app-name <PYROSCOPE_APP_NAME>\n          Application name for Pyroscope\n          \n          [default: lightswitch]\n\n      --pyroscope-tenant-id <PYROSCOPE_TENANT_ID>\n          Tenant ID for multi-tenant Pyroscope (sets `X-Scope-OrgID` header)\n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          max number of rate limit entries\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n      --symbolizer <SYMBOLIZER>\n          [default: local]\n          [possible values: local, none]\n\n      --debug-info-backend <DEBUG_INFO_BACKEND>\n          [default: none]\n          [possible values: none, copy, remote]\n\n      --max-native-unwind-info-size-mb <MAX_NATIVE_UNWIND_INFO_SIZE_MB>\n          approximate max size in megabytes used for the BPF maps that hold unwind information\n          \n          [default: 2147483647]\n\n      --enable-deadlock-detector\n          enable parking_lot's deadlock detector\n\n      --cache-dir-base <CACHE_DIR_BASE>\n          [default: /tmp]\n\n      --killswitch-path-override <KILLSWITCH_PATH_OVERRIDE>\n          Override the default path to the killswitch file (/tmp/lightswitch/killswitch) which prevents the profiler from starting\n\n      --unsafe-start\n          Force the profiler to start even if the system killswitch is enabled\n\n      --force-perf-buffer\n          force perf buffers even if ring buffers can be used\n\n      --no-prealloc-bpf-hash-maps\n          Do not preallocate BPF hash maps\n\n      --preload-thread-metadata\n          Read metadata for all threads when a new process is detected. This might be slow in older kernels.\n\n      --live\n          Launch live flamegraph TUI\n\n  -h, --help\n          Print help (see a summary with '-h')\n\n  -V, --version\n          Print version\n""#);
     }
 
     #[rstest]
@@ -442,7 +488,7 @@ mod tests {
         "20",
         "Sample frequency 20 is not prime - use 19 (before) or 23 (after) instead"
     )]
-    #[case::non_prime_out_of_range1010("1010", "sample frequency not in allowed range")]
+    #[case::non_prime_out_of_range1010("20000", "sample frequency not in allowed range")]
     #[trace]
     fn sample_freq_successes(#[case] desired_freq: String, #[case] expected_msg: String) {
         let execname = env!("CARGO_PKG_NAME");

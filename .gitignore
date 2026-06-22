@@ -1,6 +1,7 @@
 /target
 flame.svg
 profile.pb
+firefox-profiler.json
 **/bpf/*_skel.rs
 .vmtest.log
 /result

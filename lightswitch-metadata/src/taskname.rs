@@ -1,28 +1,23 @@
 #[derive(Debug, PartialEq, Eq)]
-pub struct TaskName {
-    pub main_thread: String,
-    pub current_thread: String,
+pub struct ThreadInfo {
+    pub main_thread: bool,
+    pub comm: String,
 }
 
-impl TaskName {
+impl ThreadInfo {
     pub fn errored() -> Self {
-        TaskName {
-            main_thread: "<could not fetch process name>".into(),
-            current_thread: "<could not fetch thread name>".into(),
+        ThreadInfo {
+            main_thread: false,
+            comm: "<could not fetch thread name>".into(),
         }
     }
 
-    pub fn for_task(task_id: i32) -> Result<TaskName, anyhow::Error> {
+    pub fn for_task(task_id: i32) -> Result<ThreadInfo, anyhow::Error> {
         let task = procfs::process::Process::new(task_id)?;
         let main_task = procfs::process::Process::new(task.status()?.tgid)?.stat()?;
-        let thread_name = if task.pid == main_task.pid {
-            "<main thread>".to_string()
-        } else {
-            task.stat()?.comm
-        };
-        Ok(TaskName {
-            main_thread: main_task.comm,
-            current_thread: thread_name,
+        Ok(ThreadInfo {
+            main_thread: task.pid == main_task.pid,
+            comm: task.stat()?.comm,
         })
     }
 }
@@ -35,16 +30,19 @@ mod tests {
 
     #[test]
     fn test_thread_name() {
-        let names =
-            TaskName::for_task(unistd::getpgid(Some(unistd::getpid())).unwrap().as_raw()).unwrap();
-        assert_eq!(names.current_thread, "<main thread>");
+        let current_thread = ThreadInfo::for_task(unistd::getpid().as_raw())
+            .unwrap()
+            .comm;
+        assert_eq!(current_thread, "lightswitch_met");
 
         let builder = thread::Builder::new().name("funky-thread-name".to_string());
 
         builder
             .spawn(|| {
-                let names = TaskName::for_task(unistd::gettid().as_raw()).unwrap();
-                assert_eq!(names.current_thread, "funky-thread-na");
+                let current_thread = ThreadInfo::for_task(unistd::gettid().as_raw())
+                    .unwrap()
+                    .comm;
+                assert_eq!(current_thread, "funky-thread-na");
             })
             .unwrap()
             .join()
@@ -54,16 +52,12 @@ mod tests {
     #[test]
     fn test_errored() {
         // Given
-        let task_name = TaskName::errored();
+        let task_name = ThreadInfo::errored();
 
         // When / Then
         assert_eq!(
-            task_name.current_thread,
+            task_name.comm,
             String::from("<could not fetch thread name>")
-        );
-        assert_eq!(
-            task_name.main_thread,
-            String::from("<could not fetch process name>")
         );
     }
 }

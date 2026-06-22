@@ -339,3 +339,28 @@ fn test_do_not_use_pt_regs_helper() {
     let p = Profiler::new(profiler_config, stop_signal_receive, metadata_provider);
     p.run(collector.clone());
 }
+
+#[test]
+fn test_custom_btf_path() {
+    let config = ProfilerConfig {
+        btf_custom_path: Some("/sys/kernel/btf/vmlinux".into()),
+        ..Default::default()
+    };
+    let (_stop_signal_send, stop_signal_receive) = bounded(1);
+    let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+
+    let _profiler = Profiler::new(config, stop_signal_receive, metadata_provider);
+}
+
+#[test]
+#[should_panic(expected = "No such file or directory")]
+fn test_custom_btf_path_bad_path() {
+    let config = ProfilerConfig {
+        btf_custom_path: Some("/non/existent/path".into()),
+        ..Default::default()
+    };
+    let (_stop_signal_send, stop_signal_receive) = bounded(1);
+    let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+
+    let _profiler = Profiler::new(config, stop_signal_receive, metadata_provider);
+}

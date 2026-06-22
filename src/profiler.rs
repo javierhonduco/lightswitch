@@ -1,28 +1,31 @@
+use crate::bpf_objects::clear_map;
+use crate::bpf_objects::Bpf;
+use crate::bpf_poller::start_poll_thread;
 use crate::deletion_scheduler::DeletionScheduler;
 use crate::deletion_scheduler::ToDelete;
+use crate::native_unwind_state::unwind_info_size_bytes;
+use crate::native_unwind_state::KnownExecutableInfo;
+use crate::native_unwind_state::NativeUnwindState;
+use crate::perf_events::setup_perf_event;
 use crate::process::opened_exe_path;
+use crate::util::get_online_cpus;
 use crate::util::FileId;
-use libbpf_rs::MapImpl;
-use libbpf_rs::OpenObject;
-use libbpf_rs::RingBufferBuilder;
+use libbpf_rs::skel::Skel;
+use libbpf_rs::Link;
+use libbpf_rs::MapCore;
 use lightswitch_object::BuildId;
 use lightswitch_object::ElfLoad;
 use lru::LruCache;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
-use std::collections::hash_map::OccupiedEntry;
 use std::collections::HashMap;
 use std::env::temp_dir;
+use std::ffi::CStr;
 use std::fs;
 use std::fs::read_link;
 use std::fs::File;
 use std::io::ErrorKind;
-use std::iter;
-use std::mem::size_of;
-use std::mem::ManuallyDrop;
-use std::mem::MaybeUninit;
 use std::num::NonZeroUsize;
-use std::os::fd::{AsFd, AsRawFd};
 
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
@@ -33,29 +36,16 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
 use itertools::Itertools;
-use libbpf_rs::num_possible_cpus;
-use libbpf_rs::skel::SkelBuilder;
-use libbpf_rs::skel::{OpenSkel, Skel};
-use libbpf_rs::MapCore;
-use libbpf_rs::MapHandle;
-use libbpf_rs::MapType;
-use libbpf_rs::{Link, MapFlags, PerfBufferBuilder};
-use memmap2::MmapOptions;
 use procfs;
 use tracing::{debug, error, info, span, warn, Level};
 
-use crate::aggregator::Aggregator;
 use crate::bpf::profiler_bindings::*;
-use crate::bpf::profiler_skel::{OpenProfilerSkel, ProfilerSkel, ProfilerSkelBuilder};
 use crate::bpf::tracers_bindings::*;
-use crate::bpf::tracers_skel::OpenTracersSkel;
-use crate::bpf::tracers_skel::{TracersSkel, TracersSkelBuilder};
 use crate::collector::*;
 use crate::debug_info::DebugInfoBackendNull;
 use crate::debug_info::DebugInfoManager;
 use crate::kernel::get_all_kernel_modules;
 use crate::kernel::KERNEL_PID;
-use crate::perf_events::setup_perf_event;
 use crate::process::{
     ExecutableMapping, ExecutableMappingType, ExecutableMappings, ObjectFileInfo, Pid, ProcessInfo,
     ProcessStatus,
@@ -63,11 +53,10 @@ use crate::process::{
 use crate::profile::*;
 use crate::unwind_info::manager::UnwindInfoManager;
 use crate::unwind_info::types::CompactUnwindRow;
+use crate::util::architecture;
 use crate::util::executable_path;
 use crate::util::page_size;
-use crate::util::roundup_page;
 use crate::util::Architecture;
-use crate::util::{architecture, get_online_cpus, summarize_address_range};
 use lightswitch_metadata::metadata_provider::{
     GlobalMetadataProvider, ThreadSafeGlobalMetadataProvider,
 };
@@ -78,57 +67,12 @@ const MAX_UNWIND_INFO_SIZE: usize = 7_000_000;
 
 pub enum TracerEvent {
     ProcessExit(Pid),
-    Munmap(Pid, u64),
-}
-
-pub struct KnownExecutableInfo {
-    unwind_info_len: usize,
-    unwind_info_start_address: u64,
-    unwind_info_end_address: u64,
-    last_used: Instant,
-}
-
-pub struct NativeUnwindState {
-    known_executables: HashMap<ExecutableId, KnownExecutableInfo>,
-    last_executable_eviction: Instant,
-    last_process_eviction: Instant,
-}
-
-impl NativeUnwindState {
-    fn new() -> Self {
-        NativeUnwindState {
-            known_executables: HashMap::new(),
-            last_executable_eviction: Instant::now(),
-            last_process_eviction: Instant::now(),
-        }
-    }
-
-    /// Checks whether the given `executable_id` is loaded in the BPF maps.
-    fn is_known(&self, executable_id: ExecutableId) -> bool {
-        self.known_executables.contains_key(&executable_id)
-    }
-
-    /// Checks if the last eviction happened long ago enough to prevent
-    /// excessive overhead.
-    fn can_evict_executable(&self) -> bool {
-        self.last_executable_eviction.elapsed() >= Duration::from_millis(500)
-    }
-
-    /// Checks if the last eviction happened long ago enough to prevent
-    /// excessive overhead.
-    fn can_evict_process(&self) -> bool {
-        self.last_process_eviction.elapsed() >= Duration::from_millis(500)
-    }
+    Munmap(Pid, u64, u64),
 }
 
 pub struct Profiler {
+    bpf: Bpf,
     cache_dir: PathBuf,
-    // Prevent the links from being removed.
-    _links: Vec<Link>,
-    native_unwinder_open_object: ManuallyDrop<Box<MaybeUninit<OpenObject>>>,
-    native_unwinder: ManuallyDrop<ProfilerSkel<'static>>,
-    tracers_open_object: ManuallyDrop<Box<MaybeUninit<OpenObject>>>,
-    tracers: ManuallyDrop<TracersSkel<'static>>,
     procs: Arc<RwLock<HashMap<Pid, ProcessInfo>>>,
     object_files: Arc<RwLock<HashMap<ExecutableId, ObjectFileInfo>>>,
     // Channel for new process events.
@@ -137,18 +81,19 @@ pub struct Profiler {
     // Channel for tracer events such as munmaps and process exits.
     tracers_chan_send: Arc<Sender<TracerEvent>>,
     tracers_chan_receive: Arc<Receiver<TracerEvent>>,
-    /// Profiler stop channel. Used to receive signals from users to stop
-    /// profiling.
+    /// Profiler stop notification channel.
     stop_chan_receive: Receiver<()>,
-    pub(crate) native_unwind_state: NativeUnwindState,
+    native_unwind_state: NativeUnwindState,
     /// Pids excluded from profiling.
     filter_pids: HashMap<Pid, bool>,
-    // Profile channel
-    profile_send: Arc<Sender<RawAggregatedProfile>>,
-    profile_receive: Arc<Receiver<RawAggregatedProfile>>,
-    // A vector of raw samples received from bpf in the current profiling session
+    /// Profile channels.
+    profile_send: Arc<Sender<Vec<RawSample>>>,
+    profile_receive: Arc<Receiver<Vec<RawSample>>>,
+    /// A vector of raw samples received from bpf in the current profiling
+    /// session
     raw_samples: Vec<RawSample>,
-    // Raw samples channel. Used for receiving raw samples from the ringbuf/perfbuf poll thread
+    /// Raw samples channels. Used for receiving raw samples from the
+    /// ringbuf/perfbuf poll thread
     raw_sample_send: Arc<Sender<RawSample>>,
     raw_sample_receive: Arc<Receiver<RawSample>>,
     /// For how long to profile.
@@ -170,16 +115,17 @@ pub struct Profiler {
     max_native_unwind_info_size_mb: i32,
     unwind_info_manager: UnwindInfoManager,
     use_ring_buffers: bool,
-    aggregator: Aggregator,
     metadata_provider: ThreadSafeGlobalMetadataProvider,
-    // Baseline for calculating raw_sample collection wall clock time
-    // as bpf currently only supports getting the offset since system boot.
+    /// Baseline for calculating raw_sample collection wall clock time
+    /// as BPF currently only supports getting the offset since system boot.
     walltime_at_system_boot: u64,
     preload_thread_metadata: bool,
     file_id_to_info: LruCache<FileId, ExecutableId>,
     afflicted_processes: LruCache<Pid, ()>,
     vdso_extraction: Option<(Instant, ExecutableId)>,
     deletion_scheduler: DeletionScheduler,
+    /// Prevent the BPF attached programs from being removed.
+    _links: Vec<Link>,
 }
 
 pub struct ProfilerConfig {
@@ -251,16 +197,6 @@ impl Default for Profiler {
     }
 }
 
-impl Drop for Profiler {
-    fn drop(&mut self) {
-        unsafe { ManuallyDrop::drop(&mut self.native_unwinder) };
-        unsafe { ManuallyDrop::drop(&mut self.native_unwinder_open_object) };
-
-        unsafe { ManuallyDrop::drop(&mut self.tracers) };
-        unsafe { ManuallyDrop::drop(&mut self.tracers_open_object) };
-    }
-}
-
 /// Extract the vdso object file loaded in the address space of each process.
 fn fetch_vdso_info(
     pid: Pid,
@@ -308,178 +244,6 @@ enum AddUnwindInformationError {
 }
 
 impl Profiler {
-    pub fn create_unwind_info_maps(open_skel: &mut OpenProfilerSkel) -> MapHandle {
-        let opts = libbpf_sys::bpf_map_create_opts {
-            sz: size_of::<libbpf_sys::bpf_map_create_opts>() as libbpf_sys::size_t,
-            map_flags: libbpf_sys::BPF_F_MMAPABLE | libbpf_sys::BPF_F_INNER_MAP,
-            ..Default::default()
-        };
-        let inner_map_shape =
-            MapHandle::create(MapType::Array, Some("inner_map_shape"), 4, 8, 10, &opts)
-                .expect("should never fail");
-
-        open_skel
-            .open_object_mut()
-            .maps_mut()
-            .find(|map| map.name().to_string_lossy() == "outer_map")
-            .unwrap()
-            .set_inner_map_fd(inner_map_shape.as_fd())
-            .expect("should never fail");
-
-        inner_map_shape
-    }
-
-    fn get_stacks_ringbuf_max_entries(sample_freq: u32) -> u32 {
-        // The assumption here is that although the ringbuf is shared
-        // by all CPUs, it's not expected to get filled up since
-        // 1. At any "single instance", we expect at most n samples to be written
-        // to the ringbuf where n is the number of online cpus emitting events.
-        // i.e if all the CPUs are busy at that instance. We also account for
-        // the case where the sampling frequency is less than num online CPUs.
-        // 2. The userspace consumer is pretty lightweight. It simply
-        // reads the sample and dispatches it to another thread for processing.
-
-        let num_cpus = get_online_cpus().expect("get online CPUs").len() as u32;
-        let num_expected_entries = std::cmp::max(num_cpus, sample_freq);
-
-        let sample_size_bytes = std::mem::size_of::<sample_t>() as u32;
-        let max_entries_bytes: u32 = sample_size_bytes * num_expected_entries;
-
-        // max_entries for ringbuf is required to be specified in bytes, be a multiple
-        // of the page size and a power of two
-        roundup_page(max_entries_bytes as usize) as u32
-    }
-
-    pub fn setup_profiler_maps(open_skel: &mut OpenProfilerSkel, profiler_config: &ProfilerConfig) {
-        open_skel
-            .maps
-            .rate_limits
-            .set_max_entries(profiler_config.mapsize_rate_limits)
-            .expect("Unable to set rate_limits map max_entries");
-
-        if profiler_config.no_prealloc_bpf_hash_maps {
-            open_skel
-                .maps
-                .rate_limits
-                .set_map_flags(libbpf_sys::BPF_F_NO_PREALLOC)
-                .expect("set rate_limits NO_PREALLOC");
-            open_skel
-                .maps
-                .executable_to_page
-                .set_map_flags(libbpf_sys::BPF_F_NO_PREALLOC)
-                .expect("set executable_to_page NO_PREALLOC");
-            open_skel
-                .maps
-                .outer_map
-                .set_map_flags(libbpf_sys::BPF_F_NO_PREALLOC)
-                .expect("set outer NO_PREALLOC");
-        }
-
-        let rodata = open_skel
-            .maps
-            .rodata_data
-            .as_mut()
-            .expect(".rodata must be present");
-
-        rodata
-            .lightswitch_config
-            .verbose_logging
-            .write(profiler_config.bpf_logging);
-        rodata
-            .lightswitch_config
-            .use_ring_buffers
-            .write(profiler_config.use_ring_buffers);
-        rodata
-            .lightswitch_config
-            .use_task_pt_regs_helper
-            .write(profiler_config.use_task_pt_regs_helper);
-
-        // Disable BTF helpers if a BTF custom path is selected since
-        // it will not load in machines that don't have one. TODO add override?
-        rodata
-            .lightswitch_config
-            .use_btf_helpers
-            .write(profiler_config.btf_custom_path.is_none());
-
-        rodata.lightswitch_config.userspace_pid_ns_level = profiler_config.userspace_pid_ns_level;
-
-        if profiler_config.use_ring_buffers {
-            // Set sample collecting ringbuf size based sampling frequency
-            let profile_sample_max_entries =
-                Self::get_stacks_ringbuf_max_entries(profiler_config.sample_freq as u32);
-            open_skel
-                .maps
-                .stacks_rb
-                .set_max_entries(profile_sample_max_entries)
-                .expect("failed to set stacks_rb max entries");
-
-            // Even set to zero it will create as many entries as CPUs.
-            open_skel
-                .maps
-                .events
-                .set_max_entries(0)
-                .expect("set events perf buffer entries to zero as it's unused");
-
-            open_skel
-                .maps
-                .stacks
-                .set_max_entries(0)
-                .expect("set stacks perf buffer entries to zero as it's unused");
-        } else {
-            // Seems like ring buffers need to have size of at least 1...
-            // It will use at least a page.
-            open_skel
-                .maps
-                .events_rb
-                .set_max_entries(1)
-                .expect("set events ring buffer entries to one as it's unused");
-
-            open_skel
-                .maps
-                .stacks_rb
-                .set_max_entries(1)
-                .expect("set stacks ring buffer entries to one as it's unused");
-        }
-    }
-
-    pub fn set_tracers_map_sizes(
-        open_skel: &mut OpenTracersSkel,
-        profiler_config: &ProfilerConfig,
-    ) {
-        if profiler_config.use_ring_buffers {
-            // Even set to zero it will create as many entries as CPUs.
-            open_skel
-                .maps
-                .tracer_events
-                .set_max_entries(0)
-                .expect("set perf buffer entries to zero as it's unused");
-        } else {
-            // Seems like ring buffers need to have size of at least 1...
-            // It will use at least a page.
-            open_skel
-                .maps
-                .tracer_events_rb
-                .set_max_entries(1)
-                .expect("set ring buffer entries to one as it's unused");
-        }
-
-        if profiler_config.no_prealloc_bpf_hash_maps {
-            open_skel
-                .maps
-                .tracked_munmap
-                .set_map_flags(libbpf_sys::BPF_F_NO_PREALLOC)
-                .expect("set tracked_munmap NO_PREALLOC");
-        }
-    }
-
-    pub fn show_actual_profiler_map_sizes(bpf: &ProfilerSkel) {
-        info!("BPF map sizes:");
-        info!(
-            "rate_limits: {}",
-            bpf.maps.rate_limits.info().unwrap().info.max_entries
-        );
-    }
-
     pub fn new(
         profiler_config: ProfilerConfig,
         stop_signal_receive: Receiver<()>,
@@ -510,96 +274,6 @@ impl Profiler {
             }
         }
 
-        let mut native_unwinder_open_object = ManuallyDrop::new(Box::new(MaybeUninit::uninit()));
-        let mut tracers_open_object = ManuallyDrop::new(Box::new(MaybeUninit::uninit()));
-
-        let mut skel_builder = ProfilerSkelBuilder::default();
-        skel_builder.obj_builder.debug(profiler_config.libbpf_debug);
-        if let Some(btf_custom_path) = &profiler_config.btf_custom_path {
-            skel_builder
-                .obj_builder
-                .btf_custom_path(btf_custom_path)
-                .expect("set btf custom path");
-        }
-        let mut open_skel = skel_builder
-            .open(&mut native_unwinder_open_object)
-            .expect("open skel");
-
-        let _map_handle = Self::create_unwind_info_maps(&mut open_skel);
-        Self::setup_profiler_maps(&mut open_skel, &profiler_config);
-
-        let native_unwinder = ManuallyDrop::new(open_skel.load().expect("load skel"));
-
-        // SAFETY: native_unwinder never outlives native_unwinder_open_object
-        let native_unwinder = unsafe {
-            std::mem::transmute::<ManuallyDrop<ProfilerSkel<'_>>, ManuallyDrop<ProfilerSkel<'static>>>(
-                native_unwinder,
-            )
-        };
-
-        info!("native unwinder BPF program loaded");
-        let native_unwinder_maps = &native_unwinder.maps;
-        let exec_mappings_fd = native_unwinder_maps.exec_mappings.as_fd();
-
-        // BPF map sizes can be overridden, this is a debugging option to print the
-        // actual size once the maps are created and the BPF program is loaded.
-        if profiler_config.mapsize_info {
-            Self::show_actual_profiler_map_sizes(&native_unwinder);
-        }
-
-        let mut tracers_builder = TracersSkelBuilder::default();
-        tracers_builder
-            .obj_builder
-            .debug(profiler_config.libbpf_debug);
-
-        if let Some(btf_custom_path) = &profiler_config.btf_custom_path {
-            tracers_builder
-                .obj_builder
-                .btf_custom_path(btf_custom_path)
-                .expect("set btf custom path");
-        }
-        let mut open_tracers = tracers_builder
-            .open(&mut tracers_open_object)
-            .expect("open skel");
-
-        open_tracers
-            .maps
-            .exec_mappings
-            .reuse_fd(exec_mappings_fd)
-            .expect("reuse exec_mappings");
-
-        let rodata = open_tracers
-            .maps
-            .rodata_data
-            .as_mut()
-            .expect(".rodata must be present");
-        rodata
-            .lightswitch_config
-            .verbose_logging
-            .write(profiler_config.bpf_logging);
-        rodata
-            .lightswitch_config
-            .use_ring_buffers
-            .write(profiler_config.use_ring_buffers);
-
-        // Disable BTF helpers if a BTF custom path is selected since
-        // it will not load in machines that don't have one. TODO add override?
-        rodata
-            .lightswitch_config
-            .use_btf_helpers
-            .write(profiler_config.btf_custom_path.is_none());
-        Self::set_tracers_map_sizes(&mut open_tracers, &profiler_config);
-
-        let tracers = ManuallyDrop::new(open_tracers.load().expect("load skel"));
-        // SAFETY: tracers never outlives tracers_open_object
-        let tracers = unsafe {
-            std::mem::transmute::<ManuallyDrop<TracersSkel<'_>>, ManuallyDrop<TracersSkel<'static>>>(
-                tracers,
-            )
-        };
-
-        info!("munmap and process exit tracing BPF programs loaded");
-
         let (sender, receiver) = unbounded();
         let chan_send = Arc::new(sender);
         let chan_receive = Arc::new(receiver);
@@ -623,11 +297,7 @@ impl Profiler {
 
         Profiler {
             cache_dir,
-            _links: Vec::new(),
-            native_unwinder_open_object,
-            native_unwinder,
-            tracers_open_object,
-            tracers,
+            bpf: Bpf::new(&profiler_config),
             procs: Arc::new(RwLock::new(HashMap::new())),
             object_files: Arc::new(RwLock::new(HashMap::new())),
             new_proc_chan_send: chan_send,
@@ -651,7 +321,6 @@ impl Profiler {
             max_native_unwind_info_size_mb: profiler_config.max_native_unwind_info_size_mb,
             unwind_info_manager: UnwindInfoManager::new(&unwind_cache_dir, None),
             use_ring_buffers: profiler_config.use_ring_buffers,
-            aggregator: Aggregator::default(),
             metadata_provider,
             walltime_at_system_boot,
             preload_thread_metadata: profiler_config.preload_thread_metadata,
@@ -663,6 +332,7 @@ impl Profiler {
             ),
             vdso_extraction: None,
             deletion_scheduler: DeletionScheduler::new(),
+            _links: Vec::new(),
         }
     }
 
@@ -672,74 +342,9 @@ impl Profiler {
         }
     }
 
-    pub fn send_profile(&mut self, profile: RawAggregatedProfile) {
+    pub fn send_profile(&mut self, profile: Vec<RawSample>) {
         if let Err(e) = self.profile_send.send(profile) {
             debug!("failed to send profile with: `{:?}`", e);
-        }
-    }
-
-    /// Starts a thread that polls the given ring or perf buffer, depending on
-    /// the configuration.
-    ///
-    /// Note: `lost_callback` is only used for perf buffers as ring buffers only
-    /// report errors on the sender side.
-    pub fn start_poll_thread<Call: Fn(&[u8]) + 'static, Lost: FnMut(i32, u64) + 'static>(
-        &self,
-        name: &'static str,
-        ring_buf_map: &MapImpl,
-        perf_buf_map: &MapImpl,
-        callback: Call,
-        lost_callback: Lost,
-    ) {
-        if self.use_ring_buffers {
-            let mut ring_buf = RingBufferBuilder::new();
-            ring_buf
-                .add(ring_buf_map, move |data| {
-                    callback(data);
-                    0
-                })
-                .expect("add to ring buffer");
-            let ring_buf = ring_buf.build().expect("build ring buffer");
-            let thread_name = format!("ring-poll-{name}");
-            let _poll_thread = thread::Builder::new()
-                .name(thread_name)
-                .spawn(move || loop {
-                    match ring_buf.poll(Duration::from_millis(100)) {
-                        Ok(_) => {}
-                        Err(err) => {
-                            if err.kind() != libbpf_rs::ErrorKind::Interrupted {
-                                error!("polling {} ring buffer failed with {:?}", name, err);
-                                break;
-                            }
-                        }
-                    }
-                })
-                .expect("spawn poll thread");
-        } else {
-            let perf_buffer = PerfBufferBuilder::new(perf_buf_map)
-                .pages(self.perf_buffer_bytes / page_size())
-                .sample_cb(move |_cpu: i32, data: &[u8]| {
-                    callback(data);
-                })
-                .lost_cb(lost_callback)
-                .build()
-                .expect("set up perf buffer");
-
-            let thread_name = format!("perf-poll-{name}");
-            let _poll_thread = thread::Builder::new()
-                .name(thread_name)
-                .spawn(move || loop {
-                    match perf_buffer.poll(Duration::from_millis(100)) {
-                        Ok(_) => {}
-                        Err(err) => {
-                            if err.kind() != libbpf_rs::ErrorKind::Interrupted {
-                                error!("polling {} perf buffer failed with {:?}", name, err);
-                                break;
-                            }
-                        }
-                    }
-                })
-                .expect("spawn poll thread");
         }
     }
 
@@ -763,6 +368,7 @@ impl Profiler {
                 self.procs.write().insert(
                     KERNEL_PID,
                     ProcessInfo {
+                        comm: "kernel".to_string(),
                         status: ProcessStatus::Running,
                         mappings: ExecutableMappings(
                             kernel_code_ranges
@@ -815,35 +421,43 @@ impl Profiler {
 
     pub fn run(mut self, collector: ThreadSafeCollector) -> Duration {
         self.setup_perf_events();
-        self.set_bpf_map_info();
         self.add_kernel_modules();
-
-        self.tracers.attach().expect("attach tracers");
+        self.bpf.attach_tracers();
 
         let chan_send = self.new_proc_chan_send.clone();
         let raw_sample_send = self.raw_sample_send.clone();
 
-        self.start_poll_thread(
+        let poll_timeout = Duration::from_millis(100);
+
+        start_poll_thread(
+            self.use_ring_buffers,
+            self.perf_buffer_bytes,
             "raw_samples",
-            &self.native_unwinder.maps.stacks_rb,
-            &self.native_unwinder.maps.stacks,
+            &self.bpf.native_unwinder.maps.stacks_rb,
+            &self.bpf.native_unwinder.maps.stacks,
             move |data| Self::handle_sample(&raw_sample_send, data, self.walltime_at_system_boot),
             Self::handle_lost_sample,
+            poll_timeout,
         );
 
-        self.start_poll_thread(
+        start_poll_thread(
+            self.use_ring_buffers,
+            self.perf_buffer_bytes,
             "unwinder_events",
-            &self.native_unwinder.maps.events_rb,
-            &self.native_unwinder.maps.events,
+            &self.bpf.native_unwinder.maps.events_rb,
+            &self.bpf.native_unwinder.maps.events,
             move |data| Self::handle_event(&chan_send, data),
             Self::handle_lost_events,
+            poll_timeout,
         );
 
         let tracers_send = self.tracers_chan_send.clone();
-        self.start_poll_thread(
+        start_poll_thread(
+            self.use_ring_buffers,
+            self.perf_buffer_bytes,
             "tracer_events",
-            &self.tracers.maps.tracer_events_rb,
-            &self.tracers.maps.tracer_events,
+            &self.bpf.tracers.maps.tracer_events_rb,
+            &self.bpf.tracers.maps.tracer_events,
             move |data: &[u8]| {
                 let mut event = tracer_event_t::default();
                 match plain::copy_from_bytes(&mut event, data) {
@@ -860,6 +474,7 @@ impl Profiler {
             |_cpu, lost_count| {
                 warn!("lost {} events from the tracers", lost_count);
             },
+            poll_timeout,
         );
 
         let profile_receive = self.profile_receive.clone();
@@ -915,8 +530,8 @@ impl Profiler {
                 },
                 recv(self.tracers_chan_receive) -> read => {
                     match read {
-                        Ok(TracerEvent::Munmap(pid, start_address)) => {
-                                self.handle_munmap(pid, start_address);
+                        Ok(TracerEvent::Munmap(pid, start_address, end_address)) => {
+                                self.handle_munmap(pid, start_address, end_address);
                         },
                         Ok(TracerEvent::ProcessExit(pid)) => {
                                 self.handle_process_exit(pid, false);
@@ -927,7 +542,11 @@ impl Profiler {
                 recv(self.new_proc_chan_receive) -> read => {
                         if let Ok(event) = read {
                             if event.type_ == event_type_EVENT_NEW_PROCESS {
-                                self.event_new_proc(event.pid);
+                                let comm = match CStr::from_bytes_until_nul(&event.comm) {
+                                    Ok(comm) => comm.to_string_lossy().to_string(),
+                                    Err(e) => format!("failed with get process name with `{e}`")
+                                };
+                                self.event_new_proc(event.pid, comm);
                                 // Ensure we only remove the rate limits only if the above works.
                                 // This is probably suited for a batched operation.
                                 // let _ = self
@@ -942,7 +561,6 @@ impl Profiler {
                             }
                         }
                     },
-                default(Duration::from_millis(100)) => {},
             }
         }
 
@@ -990,14 +608,13 @@ impl Profiler {
                 self.deletion_scheduler
                     .add(ToDelete::Process(Instant::now(), pid));
 
-                let err = Self::delete_bpf_process(&self.native_unwinder, pid);
+                let err = self.bpf.delete_process(pid);
                 if let Err(e) = err {
                     debug!("could not remove bpf process due to {:?}", e);
                 }
 
                 for mapping in &mut proc_info.mappings.0 {
-                    Self::delete_bpf_process_mapping(
-                        &self.native_unwinder,
+                    self.bpf.delete_process_mapping(
                         pid,
                         mapping.start_addr,
                         mapping.end_addr,
@@ -1009,17 +626,11 @@ impl Profiler {
                         self.deletion_scheduler
                             .add(ToDelete::ObjectFile(Instant::now(), mapping.executable_id));
 
-                        if let Entry::Occupied(entry) = self
-                            .native_unwind_state
-                            .known_executables
-                            .entry(mapping.executable_id)
+                        if let Entry::Occupied(entry) =
+                            self.native_unwind_state.get(mapping.executable_id)
                         {
-                            Self::delete_bpf_native_unwind_all(
-                                &mut self.native_unwinder,
-                                mapping,
-                                entry,
-                                partial_write,
-                            );
+                            self.bpf
+                                .delete_native_unwind_all(mapping, entry, partial_write);
                         }
                     }
                 }
@@ -1030,16 +641,27 @@ impl Profiler {
         }
     }
 
-    pub fn handle_munmap(&mut self, pid: Pid, start_address: u64) {
+    pub fn handle_munmap(&mut self, pid: Pid, start_address: u64, end_address: u64) {
         let mut procs = self.procs.write();
 
         match procs.get_mut(&pid) {
             Some(proc_info) => {
-                for mapping in &mut proc_info.mappings.0 {
-                    if mapping.start_addr <= start_address && start_address <= mapping.end_addr {
-                        debug!("found memory mapping starting at {:x} for pid {} while handling munmap", start_address, pid);
-                        Self::delete_bpf_process_mapping(
-                            &self.native_unwinder,
+                let found_mapping = proc_info.mappings.0.iter_mut().find(|mapping| {
+                    mapping.start_addr <= start_address && start_address < mapping.end_addr
+                });
+
+                match found_mapping {
+                    Some(mapping) => {
+                        if mapping.end_addr != end_address {
+                            debug!("partial munmaps aren't supported");
+                            return;
+                        }
+
+                        debug!(
+                            "found memory mapping starting at {:x} for pid {} while handling munmap",
+                            start_address, pid
+                        );
+                        self.bpf.delete_process_mapping(
                             pid,
                             mapping.start_addr,
                             mapping.end_addr,
@@ -1051,26 +673,17 @@ impl Profiler {
                             self.deletion_scheduler
                                 .add(ToDelete::ObjectFile(Instant::now(), mapping.executable_id));
 
-                            if let Entry::Occupied(entry) = self
-                                .native_unwind_state
-                                .known_executables
-                                .entry(mapping.executable_id)
+                            if let Entry::Occupied(entry) =
+                                self.native_unwind_state.get(mapping.executable_id)
                             {
-                                Self::delete_bpf_native_unwind_all(
-                                    &mut self.native_unwinder,
-                                    mapping,
-                                    entry,
-                                    false,
-                                );
+                                self.bpf.delete_native_unwind_all(mapping, entry, false);
                             }
                         }
                     }
+                    None => {
+                        debug!("could not find memory mapping starting at {:x} for pid {} while handling munmap", start_address, pid);
+                    }
                 }
-
-                debug!(
-                    "could not find memory mapping starting at {:x} for pid {} while handling munmap",
-                    start_address, pid
-                );
             }
             None => {
                 debug!("could not find pid {} while handling munmap", pid);
@@ -1078,50 +691,14 @@ impl Profiler {
         }
     }
 
-    /// Clears a BPF map in an iterator-stable way.
-    pub fn clear_map(&self, name: &str) {
-        let map = self
-            .native_unwinder
-            .object()
-            .maps()
-            .find(|map| map.name().to_string_lossy() == name)
-            .expect("map exists");
-
-        let mut total_entries = 0;
-        let mut failures = 0;
-        let mut previous_key: Option<Vec<u8>> = None;
-
-        let mut delete_entry = |previous_key: Option<Vec<u8>>| {
-            if let Some(previous_key) = previous_key {
-                if map.delete(&previous_key).is_err() {
-                    failures += 1;
-                }
-            }
-        };
-
-        for key in map.keys() {
-            delete_entry(previous_key);
-            total_entries += 1;
-            previous_key = Some(key);
-        }
-
-        // Delete last entry.
-        delete_entry(previous_key);
-
-        debug!(
-            "clearing map {} found {} entries, failed to delete {} entries",
-            name, total_entries, failures
-        );
-    }
-
     /// Updates the last time processes and executables were seen. This is used
     /// during evictions.
-    pub fn bump_last_used(&mut self, raw_aggregated_samples: &[RawAggregatedSample]) {
+    pub fn bump_last_used(&mut self, raw_samples: &[RawSample]) {
         let now = Instant::now();
 
-        for aggregated_sample in raw_aggregated_samples {
-            let pid = aggregated_sample.sample.pid;
-            let ustack = &aggregated_sample.sample.ustack;
+        for raw_sample in raw_samples {
+            let pid = raw_sample.pid;
+            let ustack = &raw_sample.ustack;
             {
                 let mut procs = self.procs.write();
                 let proc = procs.get_mut(&pid);
@@ -1136,366 +713,39 @@ impl Profiler {
                 let Some(proc) = proc else { continue };
                 let mapping = proc.mappings.for_address(virtual_address);
                 if let Some(mapping) = mapping {
-                    if let Some(executable) = self
-                        .native_unwind_state
-                        .known_executables
-                        .get_mut(&mapping.executable_id)
-                    {
-                        executable.last_used = now;
-                    }
+                    self.native_unwind_state
+                        .executable_seen(mapping.executable_id, now);
                 }
             }
         }
-    }
-
-    /// Returns the executables sorted by when they were used last.
-    pub fn last_used_executables(&self) -> Vec<(ExecutableId, &KnownExecutableInfo)> {
-        let mut last_used_executable_ids = Vec::new();
-
-        for (executable_id, executable_info) in &self.native_unwind_state.known_executables {
-            last_used_executable_ids.push((*executable_id, executable_info));
-        }
-
-        last_used_executable_ids.sort_by_key(|e| e.1.last_used);
-        last_used_executable_ids
-    }
-
-    /// Collect the BPF unwinder statistics and aggregate the per CPU values.
-    pub fn collect_unwinder_stats(&self) {
-        for key in self.native_unwinder.maps.percpu_stats.keys() {
-            let per_cpu_value = self
-                .native_unwinder
-                .maps
-                .percpu_stats
-                .lookup_percpu(&key, MapFlags::ANY)
-                .expect("failed to lookup stats value")
-                .expect("empty stats");
-
-            let total_value = per_cpu_value
-                .iter()
-                .map(|value| {
-                    let stats: unwinder_stats_t =
-                        *plain::from_bytes(value).expect("failed serde of bpf stats");
-                    stats
-                })
-                .fold(unwinder_stats_t::default(), |a, b| a + b);
-
-            let mut raise_log_level = false;
-            if total_value.total != 0 {
-                let success_pct =
-                    100.0 * total_value.success_dwarf as f64 / total_value.total as f64;
-                info!("stacks successfully unwound: {:.2}%", success_pct);
-                if success_pct < 75.0 {
-                    raise_log_level = true;
-                }
-            }
-            if raise_log_level {
-                warn!("unwinder stats: {:?}", total_value);
-            } else {
-                debug!("unwinder stats: {:?}", total_value);
-            }
-        }
-    }
-
-    pub fn clear_stats_map(&self) {
-        let key = 0_u32.to_le_bytes();
-        let default = unwinder_stats_t::default();
-        let value = unsafe { plain::as_bytes(&default) };
-
-        let mut values: Vec<Vec<u8>> = Vec::new();
-        // This is a place where you need to know the POSSIBLE, not ONLINE CPUs, because
-        // eBPF's internals require setting up certain buffers for all possible
-        // CPUs, even if the CPUs don't all exist.
-        let num_cpus = num_possible_cpus().expect("get possible CPUs") as u64;
-        for _ in 0..num_cpus {
-            values.push(value.to_vec());
-        }
-
-        self.native_unwinder
-            .maps
-            .percpu_stats
-            .update_percpu(&key, &values, MapFlags::ANY)
-            .expect("zero percpu_stats");
     }
 
     /// Clear the `percpu_stats` maps one entry at a time.
     pub fn clear_maps(&mut self) {
         let _span = span!(Level::DEBUG, "clear_maps").entered();
 
-        self.clear_map("rate_limits");
+        let rate_limits_map = self
+            .bpf
+            .native_unwinder
+            .object()
+            .maps()
+            .find(|map| map.name().to_string_lossy() == "rate_limits")
+            .expect("map exists");
+
+        clear_map(&rate_limits_map);
     }
 
-    pub fn collect_profile(&mut self) -> RawAggregatedProfile {
+    pub fn collect_profile(&mut self) -> Vec<RawSample> {
         debug!("collecting profile");
-        let result = self.aggregator.aggregate(self.raw_samples.clone());
-        self.raw_samples.clear();
-
-        self.bump_last_used(&result);
-        self.collect_unwinder_stats();
+        let raw_samples = std::mem::take(&mut self.raw_samples);
+        self.bump_last_used(&raw_samples);
+        self.bpf.show_unwinder_stats();
         self.clear_maps();
-        result
+        raw_samples
     }
 
     fn process_is_known(&self, pid: Pid) -> bool {
         self.procs.read().get(&pid).is_some()
-    }
-
-    fn add_bpf_unwind_info(
-        inner: &MapHandle,
-        unwind_info: &[CompactUnwindRow],
-    ) -> Result<(), anyhow::Error> {
-        let size = inner.value_size() as usize * unwind_info.len();
-        let mut mmap = unsafe {
-            MmapOptions::new()
-                .len(roundup_page(size))
-                .map_mut(&inner.as_fd())
-        }?;
-        let (prefix, middle, suffix) = unsafe { mmap.align_to_mut::<stack_unwind_row_t>() };
-        assert_eq!(prefix.len(), 0);
-        assert_eq!(suffix.len(), 0);
-
-        for (row, write) in unwind_info.iter().zip(middle) {
-            *write = row.into();
-        }
-
-        Ok(())
-    }
-
-    fn add_bpf_pages(
-        bpf: &ProfilerSkel,
-        unwind_info: &[CompactUnwindRow],
-        executable_id: u64,
-    ) -> Result<(), libbpf_rs::Error> {
-        let pages = crate::unwind_info::pages::to_pages(unwind_info);
-        for page in pages {
-            let page_key = page_key_t {
-                file_offset: page.address,
-                executable_id,
-            };
-            let page_value = page_value_t {
-                low_index: page.low_index,
-                high_index: page.high_index,
-            };
-
-            let value = unsafe { plain::as_bytes(&page_value) };
-            bpf.maps.executable_to_page.update(
-                unsafe { plain::as_bytes(&page_key) },
-                value,
-                MapFlags::ANY,
-            )?
-        }
-
-        Ok(())
-    }
-
-    fn delete_bpf_pages(
-        bpf: &ProfilerSkel,
-        start_address: u64,
-        end_address: u64,
-        executable_id: ExecutableId,
-        partial_write: bool,
-    ) {
-        let range = start_address..end_address;
-        let mut success_count = 0;
-        let mut failure_count = 0;
-
-        let page_steps = range
-            .clone()
-            .step_by(UNWIND_INFO_PAGE_SIZE as usize)
-            .chain(iter::once(end_address));
-
-        for file_offset in page_steps {
-            let key = page_key_t {
-                file_offset: file_offset & HIGH_PC_MASK,
-                executable_id: executable_id.into(),
-            };
-
-            let ret = bpf
-                .maps
-                .executable_to_page
-                .delete(unsafe { plain::as_bytes(&key) });
-
-            if ret.is_ok() {
-                success_count += 1;
-            } else {
-                failure_count += 1;
-            }
-        }
-
-        // Some might fail as we prefer to not have to re-read the unwind information
-        // and we might attempt deleting entries that are not present.
-        if success_count == 0 && !partial_write {
-            let total = success_count + failure_count;
-            error!(
-                "failed to remove {} / {} BPF pages (range: {:?}) start_address_high {} end_address_high {}",
-                failure_count, total, range, start_address, end_address
-            );
-        }
-    }
-
-    fn add_bpf_mapping(
-        bpf: &ProfilerSkel,
-        key: &exec_mappings_key,
-        mapping: &mapping_t,
-    ) -> Result<(), libbpf_rs::Error> {
-        bpf.maps.exec_mappings.update(
-            unsafe { plain::as_bytes(key) },
-            unsafe { plain::as_bytes(mapping) },
-            MapFlags::ANY,
-        )
-    }
-
-    fn add_bpf_process(bpf: &ProfilerSkel, pid: Pid) -> Result<(), libbpf_rs::Error> {
-        let key = exec_mappings_key::new(
-            pid, 0x0, 32, // pid bits
-        );
-        Self::add_bpf_mapping(
-            bpf,
-            &key,
-            &mapping_t {
-                // Special values to know if it's a process entry in case of failures
-                // while finding a mapping.
-                begin: 0xb40c,
-                end: 0xb40c,
-                ..mapping_t::default()
-            },
-        )?;
-        Ok(())
-    }
-
-    fn add_bpf_mappings(
-        bpf: &ProfilerSkel,
-        pid: Pid,
-        mappings: &Vec<mapping_t>,
-    ) -> Result<(), libbpf_rs::Error> {
-        for mapping in mappings {
-            for address_range in summarize_address_range(mapping.begin, mapping.end - 1) {
-                let key =
-                    exec_mappings_key::new(pid, address_range.addr, 32 + address_range.prefix_len);
-
-                Self::add_bpf_mapping(bpf, &key, mapping)?
-            }
-        }
-        Ok(())
-    }
-
-    fn delete_bpf_process_mapping(
-        bpf: &ProfilerSkel,
-        pid: Pid,
-        mapping_begin: u64,
-        mapping_end: u64,
-        partial_write: bool,
-    ) {
-        for address_range in summarize_address_range(mapping_begin, mapping_end - 1) {
-            let key =
-                exec_mappings_key::new(pid, address_range.addr, 32 + address_range.prefix_len);
-
-            // TODO keep track of errors
-            let res = bpf
-                .maps
-                .exec_mappings
-                .delete(unsafe { plain::as_bytes(&key) });
-            if let Err(e) = res {
-                if !partial_write {
-                    error!(
-                        "failed to delete bpf mappings for process {} with {:?}",
-                        pid, e
-                    );
-                }
-            }
-        }
-    }
-
-    fn delete_bpf_process(bpf: &ProfilerSkel, pid: Pid) -> Result<(), libbpf_rs::Error> {
-        let key = exec_mappings_key::new(
-            pid, 0x0, 32, // pid bits
-        );
-        bpf.maps
-            .exec_mappings
-            .delete(unsafe { plain::as_bytes(&key) }) // improve error handling
-    }
-
-    fn delete_bpf_unwind_info_map(
-        bpf: &mut ProfilerSkel,
-        executable_id: u64,
-    ) -> Result<(), libbpf_rs::Error> {
-        bpf.object_mut()
-            .maps_mut()
-            .find(|maps| maps.name().to_string_lossy() == "outer_map")
-            .unwrap()
-            .delete(&executable_id.to_le_bytes())
-    }
-
-    /// Deletes the BPF maps that store the unwind information and its pages as
-    /// well as the relevant entry in known_executables.
-    fn delete_bpf_native_unwind_all(
-        native_unwinder: &mut ProfilerSkel,
-        mapping: &ExecutableMapping,
-        entry: OccupiedEntry<ExecutableId, KnownExecutableInfo>,
-        partial_write: bool,
-    ) {
-        Self::delete_bpf_pages(
-            native_unwinder,
-            entry.get().unwind_info_start_address,
-            entry.get().unwind_info_end_address,
-            mapping.executable_id,
-            partial_write,
-        );
-
-        let res = Self::delete_bpf_unwind_info_map(native_unwinder, mapping.executable_id.into());
-        if res.is_err() && !partial_write {
-            error!("deleting the BPF unwind info array failed with {:?}", res);
-        }
-
-        // The object file (`object_files`) is not removed here as we still need it for
-        // normalization before sending the profiles.
-        entry.remove_entry();
-    }
-
-    /// Returns the approximate size of the BPF unwind maps in bytes.
-    fn unwind_info_memory_usage(&self) -> u64 {
-        let mut total_bytes = 0;
-
-        for executable_info in self.native_unwind_state.known_executables.values() {
-            total_bytes += Self::unwind_info_size_bytes(executable_info.unwind_info_len);
-        }
-
-        total_bytes
-    }
-
-    fn create_and_insert_unwind_info_map(
-        bpf: &mut ProfilerSkel,
-        executable_id: u64,
-        unwind_info_len: usize,
-    ) -> MapHandle {
-        let opts = libbpf_sys::bpf_map_create_opts {
-            sz: size_of::<libbpf_sys::bpf_map_create_opts>() as libbpf_sys::size_t,
-            map_flags: libbpf_sys::BPF_F_MMAPABLE | libbpf_sys::BPF_F_INNER_MAP,
-            ..Default::default()
-        };
-
-        let inner_map = MapHandle::create(
-            MapType::Array,
-            Some("inner_map"),
-            4,
-            8,
-            unwind_info_len.try_into().unwrap(),
-            &opts,
-        )
-        .unwrap();
-
-        bpf.object_mut()
-            .maps_mut()
-            .find(|map| map.name().to_string_lossy() == "outer_map")
-            .unwrap()
-            .update(
-                &executable_id.to_le_bytes(),
-                &inner_map.as_fd().as_raw_fd().to_le_bytes(),
-                MapFlags::ANY,
-            )
-            .unwrap();
-
-        inner_map
     }
 
     fn add_unwind_info_for_process(&mut self, pid: Pid) {
@@ -1580,12 +830,12 @@ impl Profiler {
         }
 
         // Store all mappings in BPF maps.
-        if let Err(e) = Self::add_bpf_mappings(&self.native_unwinder, pid, &bpf_mappings) {
+        if let Err(e) = self.bpf.add_mappings(pid, &bpf_mappings) {
             errored = true;
             debug!("failed to add BPF mappings due to {:?}", e);
         }
         // Add entry just with the pid to signal processes that we already know about.
-        if let Err(e) = Self::add_bpf_process(&self.native_unwinder, pid) {
+        if let Err(e) = self.bpf.add_process(pid) {
             errored = true;
             debug!("failed to add BPF process due to {:?}", e);
         }
@@ -1596,13 +846,6 @@ impl Profiler {
             // Evict a process to make room for more.
             debug!("eviction result {}", self.maybe_evict_process(false));
         }
-    }
-
-    /// Returns the approximate size of _n_ rows of unwind
-    /// information in a BPF map in bytes.
-    fn unwind_info_size_bytes(unwind_info_len: usize) -> u64 {
-        let overhead = 1.02; // Account for internal overhead of the BPF maps
-        ((unwind_info_len * 8) as f64 * overhead) as u64
     }
 
     fn add_unwind_information_for_executable(
@@ -1697,10 +940,6 @@ impl Profiler {
                     )
                 }
             }
-            Runtime::V8 => Ok(vec![
-                CompactUnwindRow::frame_pointer(start_address, is_arm64),
-                CompactUnwindRow::stop_unwinding(end_address),
-            ]),
         };
 
         let unwind_info = match unwind_info {
@@ -1734,20 +973,20 @@ impl Profiler {
             ));
         }
 
-        let inner_map = Self::create_and_insert_unwind_info_map(
-            &mut self.native_unwinder,
-            executable_id.into(),
-            unwind_info.len(),
-        );
+        let inner_map = self
+            .bpf
+            .create_and_insert_unwind_info_map(executable_id.into(), unwind_info.len())
+            .expect("create inner map");
 
         // Add all unwind information and its pages.
-        Self::add_bpf_unwind_info(&inner_map, &unwind_info)
+        Bpf::add_unwind_info(&inner_map, &unwind_info)
             .map_err(|e| AddUnwindInformationError::BpfUnwindInfo(e.to_string()))?;
-        Self::add_bpf_pages(&self.native_unwinder, &unwind_info, executable_id.into())
+        self.bpf
+            .add_pages(&unwind_info, executable_id.into())
             .map_err(|e| AddUnwindInformationError::BpfPages(e.to_string()))?;
         let unwind_info_start_address = unwind_info.first().unwrap().pc;
         let unwind_info_end_address = unwind_info.last().unwrap().pc;
-        self.native_unwind_state.known_executables.insert(
+        self.native_unwind_state.insert(
             executable_id,
             KnownExecutableInfo {
                 unwind_info_len: unwind_info.len(),
@@ -1763,7 +1002,7 @@ impl Profiler {
     /// Returns whether the BPF map that stores unwind information entries is
     /// full.
     fn is_outer_map_full(&self) -> bool {
-        self.native_unwind_state.known_executables.len() >= MAX_OUTER_UNWIND_MAP_ENTRIES as usize
+        self.native_unwind_state.executable_count() >= MAX_OUTER_UNWIND_MAP_ENTRIES as usize
     }
 
     /// Evict executables if the 'outer' map is full or if the max memory is
@@ -1780,7 +1019,7 @@ impl Profiler {
         // Check if outer map is full.
         if self.is_outer_map_full() {
             debug!("unwind info outer map is full",);
-            let last_used = self.last_used_executables();
+            let last_used = self.native_unwind_state.last_used_executables();
             let last_used_ids: Vec<_> = last_used.iter().map(|el| el.0).collect();
             let last_used_id = last_used_ids
                 .first()
@@ -1793,8 +1032,8 @@ impl Profiler {
         // limit.
         const MB_TO_BYTES: u64 = 1_000_000;
         let max_memory_bytes = max_memory_mb as u64 * MB_TO_BYTES;
-        let total_memory_used_bytes = self.unwind_info_memory_usage();
-        let this_unwind_info_bytes = Self::unwind_info_size_bytes(unwind_info_len);
+        let total_memory_used_bytes = self.native_unwind_state.unwind_info_memory_usage();
+        let this_unwind_info_bytes = unwind_info_size_bytes(unwind_info_len);
         let total_memory_used_after_bytes = total_memory_used_bytes + this_unwind_info_bytes;
         let to_free_bytes = total_memory_used_after_bytes.saturating_sub(max_memory_bytes);
         let should_evict = !executables_to_evict.is_empty() || to_free_bytes != 0;
@@ -1818,8 +1057,8 @@ impl Profiler {
         // Figure out what are the unwind info we should evict to stay below the memory
         // limit.
         let mut could_be_freed_bytes = 0;
-        for (executable_id, executable_info) in self.last_used_executables() {
-            let unwind_size_bytes = Self::unwind_info_size_bytes(executable_info.unwind_info_len);
+        for (executable_id, executable_info) in self.native_unwind_state.last_used_executables() {
+            let unwind_size_bytes = unwind_info_size_bytes(executable_info.unwind_info_len);
             if could_be_freed_bytes >= to_free_bytes {
                 break;
             }
@@ -1833,10 +1072,7 @@ impl Profiler {
             executables_to_evict.len()
         );
         for executable_id in executables_to_evict {
-            let entry = self
-                .native_unwind_state
-                .known_executables
-                .entry(executable_id);
+            let entry = self.native_unwind_state.get(executable_id);
             if let Entry::Occupied(entry) = entry {
                 debug!(
                     "evicting executable_id {} last seen {:?} ago",
@@ -1844,25 +1080,21 @@ impl Profiler {
                     entry.get().last_used.elapsed()
                 );
 
-                Self::delete_bpf_pages(
-                    &self.native_unwinder,
+                self.bpf.delete_pages(
                     entry.get().unwind_info_start_address,
                     entry.get().unwind_info_end_address,
                     executable_id,
                     false,
                 );
 
-                let ret = Self::delete_bpf_unwind_info_map(
-                    &mut self.native_unwinder,
-                    executable_id.into(),
-                );
+                let ret = self.bpf.delete_unwind_info_map(executable_id.into());
                 if ret.is_err() {
                     error!("failed to evict unwind info map with {:?}", ret);
                 }
                 entry.remove_entry();
             }
 
-            self.native_unwind_state.last_executable_eviction = Instant::now();
+            self.native_unwind_state.executable_eviction();
         }
 
         true
@@ -1880,7 +1112,7 @@ impl Profiler {
         self.filter_pids.contains_key(&pid)
     }
 
-    fn event_new_proc(&mut self, pid: Pid) {
+    fn event_new_proc(&mut self, pid: Pid, comm: String) {
         if !self.should_profile(pid) {
             return;
         }
@@ -1892,7 +1124,7 @@ impl Profiler {
             return;
         }
 
-        match self.add_proc(pid) {
+        match self.add_proc(pid, comm) {
             Ok(()) => {
                 self.add_unwind_info_for_process(pid);
             }
@@ -1971,7 +1203,7 @@ impl Profiler {
         if let Some(pid) = to_evict {
             debug!("evicting pid {}", pid);
             self.handle_process_exit(pid, false);
-            self.native_unwind_state.last_process_eviction = Instant::now();
+            self.native_unwind_state.process_eviction();
         }
 
         true
@@ -2092,7 +1324,7 @@ impl Profiler {
         info
     }
 
-    pub fn add_proc(&mut self, pid: Pid) -> Result<(), AddProcessError> {
+    pub fn add_proc(&mut self, pid: Pid, comm: String) -> Result<(), AddProcessError> {
         let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
         let maps = proc.maps().map_err(|_| AddProcessError::ProcfsRace)?;
         if !self.maybe_evict_process(true) {
@@ -2149,7 +1381,7 @@ impl Profiler {
                             soft_delete: false,
                         });
                     } else {
-                        error!("could not insert object file due to {:?}", info);
+                        debug!("could not insert object file due to {:?}", info);
                     }
                 }
                 procfs::process::MMapPath::Anonymous => {
@@ -2225,6 +1457,7 @@ impl Profiler {
         }
 
         let proc_info = ProcessInfo {
+            comm: comm.to_owned(),
             status: ProcessStatus::Running,
             mappings: ExecutableMappings(mappings),
             last_used: Instant::now(),
@@ -2291,20 +1524,6 @@ impl Profiler {
         error!("lost {count} events on cpu {cpu}");
     }
 
-    pub fn set_bpf_map_info(&mut self) {
-        let native_unwinder_prog_id = program_PROGRAM_NATIVE_UNWINDER;
-        let native_unwinder_prog_fd = self.native_unwinder.progs.dwarf_unwind.as_fd().as_raw_fd();
-        let maps = &self.native_unwinder.maps;
-        let programs = &maps.programs;
-        programs
-            .update(
-                &native_unwinder_prog_id.to_le_bytes(),
-                &native_unwinder_prog_fd.to_le_bytes(),
-                MapFlags::ANY,
-            )
-            .expect("update map");
-    }
-
     pub fn setup_perf_events(&mut self) {
         let mut perf_fds = Vec::new();
         for i in get_online_cpus().expect("get online CPUs") {
@@ -2314,14 +1533,8 @@ impl Profiler {
         }
 
         for perf_fd in perf_fds {
-            let prog = self
-                .native_unwinder
-                .object_mut()
-                .progs_mut()
-                .find(|prog| prog.name() == "on_event")
-                .expect("get prog");
-            let link = prog.attach_perf_event(perf_fd);
-            self._links.push(link.expect("bpf link is present"));
+            let link = self.bpf.attach_perf_event(perf_fd);
+            self._links.push(link);
         }
     }
 
@@ -2332,85 +1545,15 @@ impl Profiler {
 
 #[cfg(test)]
 mod tests {
-    use crate::bpf::profiler_skel::ProfilerMaps;
-    use crate::profiler::*;
+    use libbpf_rs::MapCore;
 
-    #[test]
-    fn test_unwind_info_size() {
-        assert_eq!(Profiler::unwind_info_size_bytes(1), 8);
-        assert_eq!(Profiler::unwind_info_size_bytes(100), 816);
-    }
-
-    #[test]
-    fn test_bpf_mappings_creation_and_deletion() {
-        let profiler_config = ProfilerConfig::default();
-        let mut native_unwinder_open_object = MaybeUninit::uninit();
-        let mut skel_builder = ProfilerSkelBuilder::default();
-        skel_builder.obj_builder.debug(false);
-        let mut open_skel = skel_builder
-            .open(&mut native_unwinder_open_object)
-            .expect("open skel");
-
-        let _map_handle = Profiler::create_unwind_info_maps(&mut open_skel);
-        Profiler::setup_profiler_maps(&mut open_skel, &profiler_config);
-        let native_unwinder = open_skel.load().expect("load skel");
-
-        // add and delete bpf process works
-        assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
-        Profiler::add_bpf_process(&native_unwinder, 0xBADFAD).unwrap();
-        assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 1);
-        Profiler::delete_bpf_process(&native_unwinder, 0xBADFAD).unwrap();
-        assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
-
-        // add and delete bpf mappings works
-        assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
-        Profiler::add_bpf_mappings(
-            &native_unwinder,
-            0xBADFAD,
-            &vec![mapping_t {
-                begin: 0,
-                end: 0xFFFFF,
-                executable_id: 0xBAD,
-                load_address: 0x0,
-                type_: 0,
-            }],
-        )
-        .unwrap();
-        assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 20);
-        Profiler::delete_bpf_process_mapping(&native_unwinder, 0xBADFAD, 0, 0xFFFFF, false);
-        assert_eq!(native_unwinder.maps.exec_mappings.keys().count(), 0);
-    }
-
-    #[test]
-    fn test_custom_btf_path() {
-        let config = ProfilerConfig {
-            btf_custom_path: Some("/sys/kernel/btf/vmlinux".into()),
-            ..Default::default()
-        };
-        let (_stop_signal_send, stop_signal_receive) = bounded(1);
-        let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
-
-        let _profiler = Profiler::new(config, stop_signal_receive, metadata_provider);
-    }
-
-    #[test]
-    #[should_panic(expected = "No such file or directory")]
-    fn test_custom_btf_path_bad_path() {
-        let config = ProfilerConfig {
-            btf_custom_path: Some("/non/existent/path".into()),
-            ..Default::default()
-        };
-        let (_stop_signal_send, stop_signal_receive) = bounded(1);
-        let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
-
-        let _profiler = Profiler::new(config, stop_signal_receive, metadata_provider);
-    }
+    use crate::{bpf::profiler_skel::ProfilerMaps, profiler::*};
 
     #[test]
     fn test_bpf_cleanup() {
         // Helper function to make code more succinct.
         fn maps(profiler: &Profiler) -> &ProfilerMaps<'_> {
-            &profiler.native_unwinder.maps
+            &profiler.bpf.native_unwinder.maps
         }
 
         let mut profiler = Profiler::default();
@@ -2419,36 +1562,21 @@ mod tests {
         assert_eq!(maps(&profiler).exec_mappings.keys().count(), 0);
         assert_eq!(maps(&profiler).outer_map.keys().count(), 0);
         assert_eq!(maps(&profiler).executable_to_page.keys().count(), 0);
-        assert_eq!(
-            profiler
-                .native_unwind_state
-                .known_executables
-                .keys()
-                .count(),
-            0
-        );
+        assert_eq!(profiler.native_unwind_state.executable_count(), 0);
 
         // Add our own process.
-        profiler.event_new_proc(std::process::id() as i32);
+        profiler.event_new_proc(std::process::id() as i32, "test-proc".into());
         let self_exec_mappings_count = maps(&profiler).exec_mappings.keys().count();
         let self_outer_map_count = maps(&profiler).outer_map.keys().count();
         let self_executable_to_page_count = maps(&profiler).executable_to_page.keys().count();
-        let self_known_executables_count = profiler
-            .native_unwind_state
-            .known_executables
-            .keys()
-            .count();
+        let self_known_executables_count = profiler.native_unwind_state.executable_count();
 
         // Add init process.
-        profiler.event_new_proc(1_i32);
+        profiler.event_new_proc(1_i32, "test-proc".into());
         let all_exec_mappings_count = maps(&profiler).exec_mappings.keys().count();
         let all_outer_map_count = maps(&profiler).outer_map.keys().count();
         let all_executable_to_page_count = maps(&profiler).executable_to_page.keys().count();
-        let all_known_executables_count = profiler
-            .native_unwind_state
-            .known_executables
-            .keys()
-            .count();
+        let all_known_executables_count = profiler.native_unwind_state.executable_count();
 
         assert!(all_exec_mappings_count > self_exec_mappings_count);
         assert!(all_outer_map_count > self_outer_map_count);
@@ -2464,12 +1592,8 @@ mod tests {
         let after_init_exit_outer_map_count = maps(&profiler).outer_map.keys().count();
         let after_init_exit_executable_to_page_count =
             maps(&profiler).executable_to_page.keys().count();
-        let after_init_exit_known_executables_count = profiler
-            .native_unwind_state
-            .known_executables
-            .keys()
-            .count();
-
+        let after_init_exit_known_executables_count =
+            profiler.native_unwind_state.executable_count();
         assert_eq!(
             after_init_exit_exec_mappings_count,
             self_exec_mappings_count
@@ -2491,13 +1615,6 @@ mod tests {
         assert_eq!(maps(&profiler).exec_mappings.keys().count(), 0);
         assert_eq!(maps(&profiler).outer_map.keys().count(), 0);
         assert_eq!(maps(&profiler).executable_to_page.keys().count(), 0);
-        assert_eq!(
-            profiler
-                .native_unwind_state
-                .known_executables
-                .keys()
-                .count(),
-            0
-        );
+        assert_eq!(profiler.native_unwind_state.executable_count(), 0);
     }
 }

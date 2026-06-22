@@ -13,6 +13,3 @@ thiserror = { workspace = true }
 [build-dependencies]
 prost-build = "0.14.3"
 protox = "0.9.1"
-
-[package.metadata.cargo-shear]
-ignored = ["prost"]

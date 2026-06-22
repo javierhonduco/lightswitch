@@ -3,7 +3,7 @@ use primal::is_prime;
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
-const SAMPLE_FREQ_RANGE: RangeInclusive<u64> = 1..=1009;
+const SAMPLE_FREQ_RANGE: RangeInclusive<u64> = 1..=10007;
 
 pub(crate) fn parse_duration(arg: &str) -> Result<Duration, std::num::ParseIntError> {
     let seconds = arg.parse()?;
