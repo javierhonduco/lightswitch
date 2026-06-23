@@ -181,18 +181,20 @@ pub struct PyroscopeCollector {
     procs: HashMap<i32, ProcessInfo>,
     objs: HashMap<ExecutableId, ObjectFileInfo>,
     metadata_provider: ThreadSafeGlobalMetadataProvider,
+    node_name: String,
 }
 
 impl PyroscopeCollector {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         local_symbolizer: bool,
         server_url: &str,
-        // We use the same "service" name for all the profiles sent from lightswitch.
         service_name: &str,
         tenant_id: Option<String>,
         profile_duration: Duration,
         profile_frequency_hz: u64,
         metadata_provider: ThreadSafeGlobalMetadataProvider,
+        node_name: String,
     ) -> Self {
         let push_url = format!("{}/push.v1.PusherService/Push", server_url);
         let client_builder = reqwest::blocking::Client::builder().timeout(Duration::from_secs(30));
@@ -206,9 +208,17 @@ impl PyroscopeCollector {
             profile_duration,
             profile_frequency_hz,
             metadata_provider,
+            node_name,
             ..Default::default()
         }
     }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct TaskLabels {
+    namespace: Option<String>,
+    owner: Option<String>,
+    pod: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -246,12 +256,49 @@ struct PyroscopeSample {
 }
 
 impl PyroscopeCollector {
+    fn task_labels(&self, pid: i32, tid: i32) -> TaskLabels {
+        let labels = self
+            .metadata_provider
+            .lock()
+            .unwrap()
+            .get_metadata(TaskKey { pid, tid });
+        let mut namespace = None;
+        let mut pod = None;
+        let mut owner = None;
+        let mut owner_kind = None;
+        for label in labels {
+            let MetadataLabelValue::String(value) = label.value else {
+                continue;
+            };
+            match label.key.as_str() {
+                "k8s.namespace.name" => namespace = Some(value),
+                "k8s.pod.name" => pod = Some(value),
+                "k8s.owner.name" => owner = Some(value),
+                "k8s.owner.kind" => owner_kind = Some(value),
+                _ => {}
+            }
+        }
+        let owner = match (owner, owner_kind.as_deref()) {
+            (Some(name), Some("ReplicaSet")) => Some(
+                name.rsplit_once('-')
+                    .map(|(deployment, _)| deployment.to_string())
+                    .unwrap_or(name),
+            ),
+            (owner, _) => owner,
+        };
+        TaskLabels {
+            namespace,
+            owner,
+            pod,
+        }
+    }
+
     fn build_series(
         &self,
         raw_profile: RawAggregatedProfile,
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
-        service_name: &str,
+        task_labels: &TaskLabels,
     ) -> Option<PyroscopeSeries> {
         let mut profile = raw_to_processed(&raw_profile, procs, objs);
         if self.local_symbolizer {
@@ -285,11 +332,24 @@ impl PyroscopeCollector {
         };
 
         let base64_profile = base64::engine::general_purpose::STANDARD.encode(gzipped_profile);
+        let mut labels = vec![
+            PyroscopeLabel::new("__name__", "process_cpu"),
+            PyroscopeLabel::new("service_name", self.service_name.as_str()),
+        ];
+        if !self.node_name.is_empty() {
+            labels.push(PyroscopeLabel::new("node", self.node_name.as_str()));
+        }
+        if let Some(namespace) = &task_labels.namespace {
+            labels.push(PyroscopeLabel::new("namespace", namespace.as_str()));
+        }
+        if let Some(owner) = &task_labels.owner {
+            labels.push(PyroscopeLabel::new("owner", owner.as_str()));
+        }
+        if let Some(pod) = &task_labels.pod {
+            labels.push(PyroscopeLabel::new("pod", pod.as_str()));
+        }
         Some(PyroscopeSeries {
-            labels: vec![
-                PyroscopeLabel::new("__name__", "process_cpu"),
-                PyroscopeLabel::new("service_name", service_name),
-            ],
+            labels,
             samples: vec![PyroscopeSample {
                 id: Uuid::new_v4().to_string().to_uppercase(),
                 raw_profile: base64_profile,
@@ -325,10 +385,23 @@ impl Collector for PyroscopeCollector {
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
         let _span = span!(Level::DEBUG, "PyroscopeCollector.collect").entered();
-        let profile = Aggregator::default().aggregate(profile);
-        let series: Vec<_> = self
-            .build_series(profile, procs, objs, &self.service_name)
+
+        let mut labels_by_pid: HashMap<i32, TaskLabels> = HashMap::new();
+        let mut samples_by_labels: HashMap<TaskLabels, Vec<RawSample>> = HashMap::new();
+        for sample in profile {
+            let labels = labels_by_pid
+                .entry(sample.pid)
+                .or_insert_with(|| self.task_labels(sample.pid, sample.tid))
+                .clone();
+            samples_by_labels.entry(labels).or_default().push(sample);
+        }
+
+        let series: Vec<_> = samples_by_labels
             .into_iter()
+            .filter_map(|(task_labels, samples)| {
+                let profile = Aggregator::default().aggregate(samples);
+                self.build_series(profile, procs, objs, &task_labels)
+            })
             .collect();
         self.push_series(series);
     }

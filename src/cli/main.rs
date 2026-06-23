@@ -359,6 +359,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 ProfilerConfig::default().session_duration,
                 args.sample_freq,
                 metadata_provider.clone(),
+                args.node_name.clone().unwrap_or_default(),
             )),
             ProfileSender::Firefox => Box::new(FirefoxProfilerCollector::new(
                 "firefox-profiler.json",
