@@ -1,3 +1,0 @@
-FROM lightswitch-builder
-RUN apt-get update && apt-get install -y sudo && rm -rf /var/lib/apt/lists/*
-WORKDIR /src

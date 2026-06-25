@@ -12,15 +12,13 @@
     crane.url = "github:ipetkov/crane";
   };
   outputs = { self, nixpkgs, flake-utils, rust-overlay, crane }:
-    (flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ]
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ]
       (system:
         let
           overlays = [ (import rust-overlay) ];
           pkgs = import nixpkgs {
             inherit system overlays;
           };
-          containerImageName = "lightswitch";
-          containerImageTag = "latest";
           elfutils' = (pkgs.elfutils.override { enableDebuginfod = false; }).overrideAttrs (attrs: {
             doCheck = false;
             doInstallCheck = false;
@@ -58,43 +56,21 @@
               cargoArtifacts = craneLib.buildDepsOnly commonArgs;
             }
           );
-          container = pkgs.dockerTools.buildLayeredImage {
-            name = containerImageName;
-            tag = containerImageTag;
-            contents = [
-              pkgs.cacert
-            ];
-            config = {
-              Entrypoint = [ "${lightswitch}/bin/lightswitch" ];
-              Env = [
-                "RUST_BACKTRACE=1"
-                "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-                "NIX_SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-              ];
-            };
-          };
-          k8sManifest = import ./nix/k8s.nix {
-            inherit pkgs;
-            image = "${containerImageName}:${containerImageTag}";
-          };
         in
         with pkgs;
         {
           formatter = pkgs.nixpkgs-fmt;
           packages = {
             default = lightswitch;
-            inherit container;
-            k8s-manifest = k8sManifest;
-            k8s = pkgs.linkFarm "lightswitch-k8s" [
-              {
-                name = "container.tar.gz";
-                path = container;
-              }
-              {
-                name = "manifest.yaml";
-                path = k8sManifest;
-              }
-            ];
+            container = pkgs.dockerTools.buildLayeredImage {
+              name = "lightswitch";
+              config = {
+                Entrypoint = [ "${lightswitch}/bin/lightswitch" ];
+                Env = [
+                  "RUST_BACKTRACE=1"
+                ];
+              };
+            };
             vmtest = (import ./vm.nix { inherit pkgs; }).run-vmtest lightswitch;
             integration-tests-progs = integration-tests-progs.all-progs;
           };
@@ -136,8 +112,5 @@
           };
 
         }
-      ))
-    // {
-      lib.mkK8sManifest = args: import ./nix/k8s.nix args;
-    };
+      );
 }
