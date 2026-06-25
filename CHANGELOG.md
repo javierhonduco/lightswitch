@@ -19,6 +19,7 @@ Unreleased
 - object: Stop treating v8 as a special case
 - Increase maximum stack size to 200 frames
 - Add opt-in support for fetching Kubernetes metadata
+- Sort kernel symbols obtained from `/proc/kallsyms` and fix kernel module start address parsing
 
 v0.4.0
 ------
