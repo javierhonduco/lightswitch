@@ -18,6 +18,7 @@ Unreleased
 - Add support for Firefox Profiler
 - object: Stop treating v8 as a special case
 - Increase maximum stack size to 200 frames
+- Add opt-in support for fetching Kubernetes metadata
 
 v0.4.0
 ------

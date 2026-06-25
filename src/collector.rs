@@ -25,7 +25,7 @@ use crate::profile::{
     fold_profile, symbolize_profile, to_pprof, AggregatedSample, SymbolizedFrame,
 };
 use crate::profile::{raw_to_processed, RawSample};
-use crate::profile::{AggregatedProfile, RawAggregatedSample};
+use crate::profile::{AggregatedProfile, RawAggregatedProfile, RawAggregatedSample};
 
 pub trait Collector {
     fn collect(
@@ -181,18 +181,20 @@ pub struct PyroscopeCollector {
     procs: HashMap<i32, ProcessInfo>,
     objs: HashMap<ExecutableId, ObjectFileInfo>,
     metadata_provider: ThreadSafeGlobalMetadataProvider,
+    node_name: String,
 }
 
 impl PyroscopeCollector {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         local_symbolizer: bool,
         server_url: &str,
-        // We use the same "service" name for all the profiles sent from lightswitch.
         service_name: &str,
         tenant_id: Option<String>,
         profile_duration: Duration,
         profile_frequency_hz: u64,
         metadata_provider: ThreadSafeGlobalMetadataProvider,
+        node_name: String,
     ) -> Self {
         let push_url = format!("{}/push.v1.PusherService/Push", server_url);
         let client_builder = reqwest::blocking::Client::builder().timeout(Duration::from_secs(30));
@@ -206,9 +208,17 @@ impl PyroscopeCollector {
             profile_duration,
             profile_frequency_hz,
             metadata_provider,
+            node_name,
             ..Default::default()
         }
     }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct TaskLabels {
+    namespace: Option<String>,
+    owner: Option<String>,
+    pod: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -245,26 +255,58 @@ struct PyroscopeSample {
     raw_profile: String,
 }
 
-/// POSTs pprof-encoded profiles to a Pyroscope server's Push endpoint.
-impl Collector for PyroscopeCollector {
-    fn collect(
-        &mut self,
-        profile: Vec<RawSample>,
+impl PyroscopeCollector {
+    fn task_labels(&self, pid: i32, tid: i32) -> TaskLabels {
+        let labels = self
+            .metadata_provider
+            .lock()
+            .unwrap()
+            .get_metadata(TaskKey { pid, tid });
+        let mut namespace = None;
+        let mut pod = None;
+        let mut owner = None;
+        let mut owner_kind = None;
+        for label in labels {
+            let MetadataLabelValue::String(value) = label.value else {
+                continue;
+            };
+            match label.key.as_str() {
+                "k8s.namespace.name" => namespace = Some(value),
+                "k8s.pod.name" => pod = Some(value),
+                "k8s.owner.name" => owner = Some(value),
+                "k8s.owner.kind" => owner_kind = Some(value),
+                _ => {}
+            }
+        }
+        let owner = match (owner, owner_kind.as_deref()) {
+            (Some(name), Some("ReplicaSet")) => Some(
+                name.rsplit_once('-')
+                    .map(|(deployment, _)| deployment.to_string())
+                    .unwrap_or(name),
+            ),
+            (owner, _) => owner,
+        };
+        TaskLabels {
+            namespace,
+            owner,
+            pod,
+        }
+    }
+
+    fn build_series(
+        &self,
+        raw_profile: RawAggregatedProfile,
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
-    ) {
-        let _span = span!(Level::DEBUG, "PyroscopeCollector.collect").entered();
-
-        let mut profile = raw_to_processed(&Aggregator::default().aggregate(profile), procs, objs);
+        task_labels: &TaskLabels,
+    ) -> Option<PyroscopeSeries> {
+        let mut profile = raw_to_processed(&raw_profile, procs, objs);
         if self.local_symbolizer {
             profile = symbolize_profile(&profile, procs, objs);
         }
         if profile.is_empty() {
-            return;
+            return None;
         }
-
-        let mut series = Vec::new();
-        let mut buffer = Vec::new();
 
         let pprof_profile = to_pprof(
             profile,
@@ -275,33 +317,51 @@ impl Collector for PyroscopeCollector {
             self.profile_frequency_hz,
         );
 
+        let mut buffer = Vec::new();
         let mut gz_encoder = GzEncoder::new(&mut buffer, Compression::default());
         if let Err(e) = gz_encoder.write_all(&pprof_profile.encode_to_vec()) {
             tracing::error!("failed to write gzipped pprof with {:?}", e);
-            return;
+            return None;
         }
         let gzipped_profile = match gz_encoder.finish() {
             Ok(prof) => prof,
             Err(e) => {
                 tracing::error!("failed to gzip pprof with {:?}", e);
-                return;
+                return None;
             }
         };
 
         let base64_profile = base64::engine::general_purpose::STANDARD.encode(gzipped_profile);
-        series.push(PyroscopeSeries {
-            labels: vec![
-                PyroscopeLabel::new("__name__", "process_cpu"),
-                PyroscopeLabel::new("service_name", self.service_name.clone()),
-            ],
+        let mut labels = vec![
+            PyroscopeLabel::new("__name__", "process_cpu"),
+            PyroscopeLabel::new("service_name", self.service_name.as_str()),
+        ];
+        if !self.node_name.is_empty() {
+            labels.push(PyroscopeLabel::new("node", self.node_name.as_str()));
+        }
+        if let Some(namespace) = &task_labels.namespace {
+            labels.push(PyroscopeLabel::new("namespace", namespace.as_str()));
+        }
+        if let Some(owner) = &task_labels.owner {
+            labels.push(PyroscopeLabel::new("owner", owner.as_str()));
+        }
+        if let Some(pod) = &task_labels.pod {
+            labels.push(PyroscopeLabel::new("pod", pod.as_str()));
+        }
+        Some(PyroscopeSeries {
+            labels,
             samples: vec![PyroscopeSample {
                 id: Uuid::new_v4().to_string().to_uppercase(),
                 raw_profile: base64_profile,
             }],
-        });
+        })
+    }
 
+    fn push_series(&self, series: Vec<PyroscopeSeries>) {
+        if series.is_empty() {
+            return;
+        }
         let payload = PyroscopePushRequest { series };
-
         let mut request = self.client.post(self.push_url.clone()).json(&payload);
         if let Some(tenant_id) = &self.tenant_id {
             request = request.header("X-Scope-OrgID", tenant_id.clone());
@@ -313,6 +373,37 @@ impl Collector for PyroscopeCollector {
             Ok(_) => {}
             Err(e) => tracing::error!("pyroscope push error: {:?}", e),
         }
+    }
+}
+
+/// POSTs pprof-encoded profiles to a Pyroscope server's Push endpoint.
+impl Collector for PyroscopeCollector {
+    fn collect(
+        &mut self,
+        profile: Vec<RawSample>,
+        procs: &HashMap<i32, ProcessInfo>,
+        objs: &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        let _span = span!(Level::DEBUG, "PyroscopeCollector.collect").entered();
+
+        let mut labels_by_pid: HashMap<i32, TaskLabels> = HashMap::new();
+        let mut samples_by_labels: HashMap<TaskLabels, Vec<RawSample>> = HashMap::new();
+        for sample in profile {
+            let labels = labels_by_pid
+                .entry(sample.pid)
+                .or_insert_with(|| self.task_labels(sample.pid, sample.tid))
+                .clone();
+            samples_by_labels.entry(labels).or_default().push(sample);
+        }
+
+        let series: Vec<_> = samples_by_labels
+            .into_iter()
+            .filter_map(|(task_labels, samples)| {
+                let profile = Aggregator::default().aggregate(samples);
+                self.build_series(profile, procs, objs, &task_labels)
+            })
+            .collect();
+        self.push_series(series);
     }
 
     fn finish(
@@ -482,12 +573,10 @@ impl Collector for FirefoxProfilerCollector {
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
-        // Add timestamps
         for sample in &samples {
             self.timestamps.push(sample.collected_at);
         }
 
-        // fake agg + normalize
         let profile = samples
             .iter()
             .map(|e| RawAggregatedSample {

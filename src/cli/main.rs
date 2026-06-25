@@ -100,6 +100,13 @@ fn open_browser(url: &str) {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // kube-rs and reqwest both bring in rustls with different crypto providers
+    // (ring and aws-lc-rs). When both are present, rustls cannot auto-detect
+    // which to use. Explicitly install aws-lc-rs as the process-wide default
+    // to match what reqwest was using before kube-rs was added.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("failed to install rustls crypto provider");
     panic_thread_hook();
     let args = CliArgs::parse();
     if args.enable_deadlock_detector {
@@ -202,6 +209,30 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let metadata_provider: ThreadSafeGlobalMetadataProvider =
         Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+
+    if args.kubernetes {
+        let node_name = args
+            .node_name
+            .clone()
+            .expect("--node-name must be provided when --kubernetes is enabled");
+        let k8s_cache =
+            lightswitch_metadata::containers::k8s_metadata_cache::K8sMetadataCache::new(
+                node_name.clone(),
+            )
+            .expect("failed to create k8s metadata cache");
+        let k8s_provider =
+            lightswitch_metadata::containers::k8s_metadata_provider::K8sMetadataProvider::new(
+                k8s_cache,
+            );
+        metadata_provider
+            .lock()
+            .unwrap()
+            .register_task_metadata_providers(vec![Box::new(k8s_provider)]);
+        info!(
+            "Kubernetes metadata provider registered for node {}",
+            node_name
+        );
+    }
 
     let token = args.token;
     let debug_info_manager: Box<dyn DebugInfoManager + Send> = match args.debug_info_backend {
@@ -328,6 +359,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 ProfilerConfig::default().session_duration,
                 args.sample_freq,
                 metadata_provider.clone(),
+                args.node_name.clone().unwrap_or_default(),
             )),
             ProfileSender::Firefox => Box::new(FirefoxProfilerCollector::new(
                 "firefox-profiler.json",
@@ -478,7 +510,7 @@ mod tests {
         cmd.arg("--help");
         cmd.assert().success();
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
-        insta::assert_yaml_snapshot!(actual, @r#""Usage: lightswitch [OPTIONS] [COMMAND]\n\nCommands:\n  object-info  \n  show-unwind  \n  system-info  \n  server       \n  help         Print this message or the help of the given subcommand(s)\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-debug\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --btf-custom-path <BTF_CUSTOM_PATH>\n          Alternative BTF file\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --flamegraph-aggregation <FLAMEGRAPH_AGGREGATION>\n          What information to show in the flamegraph. Won't do anything for other profile formats\n          \n          [default: function]\n          [possible values: function, all]\n\n      --profile-path <PROFILE_PATH>\n          Path for the generated profile\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n          - pyroscope\n          - firefox\n          \n          [default: local-disk]\n\n      --server-url <SERVER_URL>\n          \n\n      --token <TOKEN>\n          \n\n      --pyroscope-app-name <PYROSCOPE_APP_NAME>\n          Application name for Pyroscope\n          \n          [default: lightswitch]\n\n      --pyroscope-tenant-id <PYROSCOPE_TENANT_ID>\n          Tenant ID for multi-tenant Pyroscope (sets `X-Scope-OrgID` header)\n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          max number of rate limit entries\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n      --symbolizer <SYMBOLIZER>\n          [default: local]\n          [possible values: local, none]\n\n      --debug-info-backend <DEBUG_INFO_BACKEND>\n          [default: none]\n          [possible values: none, copy, remote]\n\n      --max-native-unwind-info-size-mb <MAX_NATIVE_UNWIND_INFO_SIZE_MB>\n          approximate max size in megabytes used for the BPF maps that hold unwind information\n          \n          [default: 2147483647]\n\n      --enable-deadlock-detector\n          enable parking_lot's deadlock detector\n\n      --cache-dir-base <CACHE_DIR_BASE>\n          [default: /tmp]\n\n      --killswitch-path-override <KILLSWITCH_PATH_OVERRIDE>\n          Override the default path to the killswitch file (/tmp/lightswitch/killswitch) which prevents the profiler from starting\n\n      --unsafe-start\n          Force the profiler to start even if the system killswitch is enabled\n\n      --force-perf-buffer\n          force perf buffers even if ring buffers can be used\n\n      --no-prealloc-bpf-hash-maps\n          Do not preallocate BPF hash maps\n\n      --preload-thread-metadata\n          Read metadata for all threads when a new process is detected. This might be slow in older kernels.\n\n      --live\n          Launch live flamegraph TUI\n\n  -h, --help\n          Print help (see a summary with '-h')\n\n  -V, --version\n          Print version\n""#);
+        insta::assert_yaml_snapshot!(actual, @r#""Usage: lightswitch [OPTIONS] [COMMAND]\n\nCommands:\n  object-info  \n  show-unwind  \n  system-info  \n  server       \n  help         Print this message or the help of the given subcommand(s)\n\nOptions:\n      --pids <PIDS>\n          Specific PIDs to profile\n\n  -D, --duration <DURATION>\n          How long this agent will run in seconds\n          \n          [default: 18446744073709551615]\n\n      --libbpf-debug\n          Enable libbpf logs. This includes the BPF verifier output\n\n      --bpf-logging\n          Enable BPF programs logging\n\n      --btf-custom-path <BTF_CUSTOM_PATH>\n          Alternative BTF file\n\n      --logging <LOGGING>\n          Set lightswitch's logging level\n          \n          [default: info]\n          [possible values: trace, debug, info, warn, error]\n\n      --sample-freq <SAMPLE_FREQ_IN_HZ>\n          Per-CPU Sampling Frequency in Hz\n          \n          [default: 19]\n\n      --profile-format <PROFILE_FORMAT>\n          Output file for Flame Graph in SVG format\n          \n          [default: flame-graph]\n          [possible values: none, flame-graph, pprof]\n\n      --flamegraph-aggregation <FLAMEGRAPH_AGGREGATION>\n          What information to show in the flamegraph. Won't do anything for other profile formats\n          \n          [default: function]\n          [possible values: function, all]\n\n      --profile-path <PROFILE_PATH>\n          Path for the generated profile\n\n      --profile-name <PROFILE_NAME>\n          Name for the generated profile\n\n      --sender <SENDER>\n          Where to write the profile\n\n          Possible values:\n          - none:       Discard the profile. Used for kernel tests\n          - local-disk\n          - remote\n          - pyroscope\n          - firefox\n          \n          [default: local-disk]\n\n      --server-url <SERVER_URL>\n          \n\n      --token <TOKEN>\n          \n\n      --pyroscope-app-name <PYROSCOPE_APP_NAME>\n          Application name for Pyroscope\n          \n          [default: lightswitch]\n\n      --pyroscope-tenant-id <PYROSCOPE_TENANT_ID>\n          Tenant ID for multi-tenant Pyroscope (sets `X-Scope-OrgID` header)\n\n      --perf-buffer-bytes <PERF_BUFFER_BYTES>\n          Size of each profiler perf buffer, in bytes (must be a power of 2)\n          \n          [default: 524288]\n\n      --mapsize-info\n          Print eBPF map sizes after creation\n\n      --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>\n          max number of rate limit entries\n          \n          [default: 5000]\n\n      --exclude-self\n          Do not profile the profiler (myself)\n\n      --symbolizer <SYMBOLIZER>\n          [default: local]\n          [possible values: local, none]\n\n      --debug-info-backend <DEBUG_INFO_BACKEND>\n          [default: none]\n          [possible values: none, copy, remote]\n\n      --max-native-unwind-info-size-mb <MAX_NATIVE_UNWIND_INFO_SIZE_MB>\n          approximate max size in megabytes used for the BPF maps that hold unwind information\n          \n          [default: 2147483647]\n\n      --enable-deadlock-detector\n          enable parking_lot's deadlock detector\n\n      --cache-dir-base <CACHE_DIR_BASE>\n          [default: /tmp]\n\n      --killswitch-path-override <KILLSWITCH_PATH_OVERRIDE>\n          Override the default path to the killswitch file (/tmp/lightswitch/killswitch) which prevents the profiler from starting\n\n      --unsafe-start\n          Force the profiler to start even if the system killswitch is enabled\n\n      --force-perf-buffer\n          force perf buffers even if ring buffers can be used\n\n      --no-prealloc-bpf-hash-maps\n          Do not preallocate BPF hash maps\n\n      --preload-thread-metadata\n          Read metadata for all threads when a new process is detected. This might be slow in older kernels.\n\n      --live\n          Launch live flamegraph TUI\n\n      --kubernetes\n          Enable Kubernetes pod-level profiling\n\n      --node-name <NODE_NAME>\n          Node name for Kubernetes metadata (required with --kubernetes)\n\n  -h, --help\n          Print help (see a summary with '-h')\n\n  -V, --version\n          Print version\n""#);
     }
 
     #[rstest]

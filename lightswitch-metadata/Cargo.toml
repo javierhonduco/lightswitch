@@ -13,3 +13,8 @@ anyhow = { workspace = true }
 procfs = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
+futures = "0.3"
+k8s-openapi = { version = "0.27.1", features = ["latest"] }
+kube = { version = "3.0.1", features = ["runtime", "client", "derive"] }
+tokio = { version = "1", features = ["rt", "time", "macros"] }
+mini-moka = "0.10"
