@@ -1,4 +1,4 @@
-Unreleased
+v0.5.0
 ----------
 - Fix bug preventing profiling of processes in a different pid namespace than lightswitch's
 - Add support for Pyroscope
