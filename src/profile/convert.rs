@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use lightswitch_metadata::metadata_provider::ThreadSafeGlobalMetadataProvider;
 use lightswitch_metadata::task_metadata::PROCESS_NAME_KEY;
 use lightswitch_metadata::taskname::ThreadInfo;
@@ -313,7 +314,10 @@ pub fn symbolize_profile(
     let mut r = AggregatedProfile::new();
 
     let addresses_per_sample = fetch_symbols_for_profile(profile, procs, objs);
-    let ksyms = KsymIter::from_kallsyms().collect::<Vec<_>>();
+    // The kernel symbolizer expects the symbols from kall syms to be sorted
+    let ksyms = KsymIter::from_kallsyms()
+        .sorted_by(|a, b| a.start_addr.cmp(&b.start_addr))
+        .collect::<Vec<_>>();
 
     for sample in profile {
         let symbolized_sample = AggregatedSample {

@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader, Read};
 
 pub const KALLSYM_PATH: &str = "/proc/kallsyms";
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Ksym {
     pub start_addr: u64,
     pub symbol_name: String,

@@ -80,10 +80,13 @@ fn _get_module_build_id(module_name: &str) -> Result<BuildId, anyhow::Error> {
 /// Finds the virtual address at which a given kernel module is loaded.
 fn _module_start_address(module_name: &str) -> Result<u64, anyhow::Error> {
     let mut file = File::open(format!("/sys/module/{module_name}/sections/.text"))?;
-    let mut buffer = [0; 8];
-    file.read_exact(&mut buffer)?;
+    let mut buffer = Vec::with_capacity(16 + 2 + 1); // characters for a hex address in ascii + `0x` + newline
+    file.read_to_end(&mut buffer)?;
 
-    Ok(u64::from_ne_bytes(buffer))
+    Ok(u64::from_str_radix(
+        std::str::from_utf8(buffer[2..].trim_ascii_end())?,
+        16,
+    )?)
 }
 
 /// Read and parse the build id of the running kernel image.
