@@ -1,5 +1,5 @@
-Unreleased
-----------
+v0.3.1
+------
 - Read pid namespace "level" of the userspace loader
 
 v0.3.0
