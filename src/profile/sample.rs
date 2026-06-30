@@ -332,11 +332,15 @@ mod tests {
         );
     }
 
-    fn hash_of(sample: &RawSample) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::hash::DefaultHasher::new();
-        sample.hash(&mut hasher);
-        hasher.finish()
+    trait HashValue {
+        fn hash_value(&self) -> u64;
+    }
+
+    impl<T: std::hash::Hash> HashValue for T {
+        fn hash_value(&self) -> u64 {
+            use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+            BuildHasherDefault::<DefaultHasher>::default().hash_one(self)
+        }
     }
 
     #[test]
@@ -353,7 +357,7 @@ mod tests {
             collected_at: 1_002_000_000,
             ..base.clone()
         };
-        assert_ne!(hash_of(&base), hash_of(&later));
+        assert_ne!(base.hash_value(), later.hash_value());
     }
 
     #[test]
@@ -370,7 +374,7 @@ mod tests {
             collected_at: 1_000_999_000,
             ..a.clone()
         };
-        assert_eq!(hash_of(&a), hash_of(&b));
+        assert_eq!(a.hash_value(), b.hash_value());
     }
 
     #[test]
@@ -386,7 +390,7 @@ mod tests {
             ustack: vec![0xbeef],
             ..a.clone()
         };
-        assert_ne!(hash_of(&a), hash_of(&b));
+        assert_ne!(a.hash_value(), b.hash_value());
     }
 
     #[test]
