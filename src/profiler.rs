@@ -167,7 +167,7 @@ impl Default for ProfilerConfig {
             debug_info_manager: Box::new(DebugInfoBackendNull {}),
             max_native_unwind_info_size_mb: i32::MAX,
             use_ring_buffers: true,
-            use_task_pt_regs_helper: true,
+            use_task_pt_regs_helper: false,
             use_ktime_get_boot_ns: false,
             btf_custom_path: None,
             no_prealloc_bpf_hash_maps: false,
