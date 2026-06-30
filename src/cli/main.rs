@@ -266,6 +266,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         use_ring_buffers,
         use_task_pt_regs_helper: system_info.available_bpf_features.has_task_pt_regs_helper
             && system_info.available_bpf_features.has_get_current_task_btf,
+        use_ktime_get_boot_ns: system_info.available_bpf_features.has_ktime_get_boot_ns,
         btf_custom_path,
         no_prealloc_bpf_hash_maps: args.no_prealloc_bpf_hash_maps
             && system_info

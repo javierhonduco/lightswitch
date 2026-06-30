@@ -14,6 +14,7 @@ bool has_map_of_maps = false;
 bool has_batch_map_operations = false;
 bool has_task_pt_regs_helper = false;
 bool has_get_current_task_btf = false;
+bool has_ktime_get_boot_ns = false;
 unsigned int userspace_pid_ns_level = 0;
 
 SEC("tracepoint/sched/sched_switch")
@@ -46,6 +47,9 @@ int detect_bpf_features(void *ctx) {
 
     has_get_current_task_btf = bpf_core_enum_value_exists(
         enum bpf_func_id, BPF_FUNC_get_current_task_btf );
+
+    has_ktime_get_boot_ns = bpf_core_enum_value_exists(
+        enum bpf_func_id, BPF_FUNC_ktime_get_boot_ns);
 
     userspace_pid_ns_level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
 
