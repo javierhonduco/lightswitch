@@ -1556,7 +1556,18 @@ mod tests {
             &profiler.bpf.native_unwinder.maps
         }
 
-        let mut profiler = Profiler::default();
+        let (_stop_signal_send, stop_signal_receive) = crossbeam_channel::bounded(1);
+        let metadata_provider = std::sync::Arc::new(std::sync::Mutex::new(
+            lightswitch_metadata::metadata_provider::GlobalMetadataProvider::default(),
+        ));
+        let mut profiler = Profiler::new(
+            ProfilerConfig {
+                use_task_pt_regs_helper: false,
+                ..ProfilerConfig::default()
+            },
+            stop_signal_receive,
+            metadata_provider,
+        );
 
         // All BPF maps must be empty.
         assert_eq!(maps(&profiler).exec_mappings.keys().count(), 0);
