@@ -80,7 +80,6 @@ struct lightswitch_config_t {
     bool use_ring_buffers;
     bool use_task_pt_regs_helper;
     bool use_btf_helpers;
-    bool use_ktime_get_boot_ns;
     unsigned int userspace_pid_ns_level;
 };
 

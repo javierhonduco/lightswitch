@@ -264,9 +264,7 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
 
     unwind_state->sample.pid = per_process_id;
     unwind_state->sample.tid = per_thread_id;
-    unwind_state->sample.collected_at = lightswitch_config.use_ktime_get_boot_ns
-        ? bpf_ktime_get_boot_ns()
-        : bpf_ktime_get_ns();
+    unwind_state->sample.collected_at = bpf_ktime_get_boot_ns();
 
     u32 sample_size = sizeof(sample_t)
                       // Remove the actual stack buffer which was doubled to appease the verifier.
