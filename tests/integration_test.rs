@@ -167,6 +167,8 @@ fn test_integration() {
         duration: Duration::from_secs(5),
         sample_freq: 999,
         userspace_pid_ns_level: system_info.available_bpf_features.userspace_pid_ns_level,
+        use_task_pt_regs_helper: system_info.available_bpf_features.has_task_pt_regs_helper
+            && system_info.available_bpf_features.has_get_current_task_btf,
         ..Default::default()
     };
     let (_stop_signal_send, stop_signal_receive) = bounded(1);
@@ -273,6 +275,8 @@ fn test_integration_ocaml_native_defaults() {
         duration: Duration::from_secs(5),
         sample_freq: 999,
         userspace_pid_ns_level: system_info.available_bpf_features.userspace_pid_ns_level,
+        use_task_pt_regs_helper: system_info.available_bpf_features.has_task_pt_regs_helper
+            && system_info.available_bpf_features.has_get_current_task_btf,
         ..Default::default()
     };
     let (_stop_signal_send, stop_signal_receive) = bounded(1);
@@ -299,6 +303,13 @@ fn test_integration_ocaml_native_defaults() {
 #[test]
 fn test_use_pt_regs_helper() {
     let bpf_test_debug = std::env::var("TEST_DEBUG_BPF").is_ok();
+    let system_info = SystemInfo::new(None).expect("failed to detect system info");
+    if !system_info.available_bpf_features.has_task_pt_regs_helper
+        || !system_info.available_bpf_features.has_get_current_task_btf
+    {
+        eprintln!("Skipping test_use_pt_regs_helper: required BPF features (task_pt_regs helper and/or get_current_task BTF) are not available on this system");
+        return;
+    }
 
     let collector = Arc::new(Mutex::new(
         Box::new(NullCollector::new()) as Box<dyn Collector + Send>
@@ -330,7 +341,7 @@ fn test_do_not_use_pt_regs_helper() {
         libbpf_debug: bpf_test_debug,
         bpf_logging: bpf_test_debug,
         duration: Duration::from_millis(100),
-        use_task_pt_regs_helper: true,
+        use_task_pt_regs_helper: false,
         ..Default::default()
     };
 
