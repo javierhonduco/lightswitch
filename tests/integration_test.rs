@@ -307,6 +307,7 @@ fn test_use_pt_regs_helper() {
     if !system_info.available_bpf_features.has_task_pt_regs_helper
         || !system_info.available_bpf_features.has_get_current_task_btf
     {
+        eprintln!("Skipping test_use_pt_regs_helper: required BPF features (task_pt_regs helper and/or get_current_task BTF) are not available on this system");
         return;
     }
 
