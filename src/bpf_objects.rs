@@ -671,7 +671,10 @@ mod tests {
 
     #[test]
     fn test_bpf_mappings_creation_and_deletion() {
-        let profiler_config = ProfilerConfig::default();
+        let profiler_config = ProfilerConfig {
+            use_task_pt_regs_helper: false,
+            ..ProfilerConfig::default()
+        };
         let bpf = Bpf::new(&profiler_config);
         let native_unwinder = &bpf.native_unwinder;
 
