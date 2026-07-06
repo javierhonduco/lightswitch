@@ -24,6 +24,11 @@
             doInstallCheck = false;
             configureFlags = attrs.configureFlags ++ [ "--without-zstd" ];
             nativeBuildInputs = attrs.nativeBuildInputs ++ [ pkgs.pkg-config ];
+            # Both libelf and zlib export a function with the same name, breaking
+            # static builds. Use zlib's rather than libelf's.
+            postInstall = (attrs.postInstall or "") + ''
+              ar d $out/lib/libelf.a crc32.o
+            '';
           });
           # Nix provided `clang` adds a few compilation options that can't be used for BPF.
           clang' = with pkgs; (
