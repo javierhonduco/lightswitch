@@ -262,7 +262,6 @@ impl Bpf {
             .lightswitch_config
             .use_task_pt_regs_helper
             .write(profiler_config.use_task_pt_regs_helper);
-
         // Disable BTF helpers if a BTF custom path is selected since
         // it will not load in machines that don't have one. TODO add override?
         rodata

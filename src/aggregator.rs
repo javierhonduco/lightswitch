@@ -168,6 +168,49 @@ mod tests {
     }
 
     #[test]
+    fn test_aggregate_same_stack_different_ms_bucket_stays_separate() {
+        let stack = RawSample {
+            pid: 1,
+            tid: 2,
+            collected_at: 1_000_000_000, // 1000 ms
+            ustack: vec![0xdead],
+            kstack: vec![0xbeef],
+        };
+        // 2 ms later = different ms bucket: must NOT be merged
+        let later = RawSample {
+            collected_at: 1_002_000_000,
+            ..stack.clone()
+        };
+        let aggregator = Aggregator::default();
+        let result = aggregator.aggregate(vec![stack, later]);
+        assert_eq!(
+            result.len(),
+            2,
+            "samples in different ms buckets must stay separate"
+        );
+    }
+
+    #[test]
+    fn test_aggregate_same_stack_within_ms_bucket_merges() {
+        let stack = RawSample {
+            pid: 1,
+            tid: 2,
+            collected_at: 1_000_000_000, // 1000 ms
+            ustack: vec![0xdead],
+            kstack: vec![0xbeef],
+        };
+        // 999 µs later = same ms bucket: must be merged (count becomes 2)
+        let almost_same = RawSample {
+            collected_at: 1_000_999_000,
+            ..stack.clone()
+        };
+        let aggregator = Aggregator::default();
+        let result = aggregator.aggregate(vec![stack, almost_same]);
+        assert_eq!(result.len(), 1, "samples in the same ms bucket must merge");
+        assert_eq!(result[0].count, 2);
+    }
+
+    #[test]
     fn test_aggregate_same_stack_traces_different_pid_tid() {
         let ustack = vec![0xffff, 0xdeadbeef];
         let kstack = vec![0xffff, 0xdddd, 0xaaaa];

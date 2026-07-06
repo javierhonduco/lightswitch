@@ -81,10 +81,10 @@ impl std::hash::Hash for RawSample {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.pid.hash(state);
         self.kstack.hash(state);
-        // The collected_at field is excluded when hashing
-        // the samples for aggregation.
         self.tid.hash(state);
         self.ustack.hash(state);
+        // Bucket by millisecond so identical stacks at different times are distinct entries.
+        (self.collected_at / 1_000_000).hash(state);
     }
 }
 
@@ -131,6 +131,7 @@ impl RawAggregatedSample {
             ustack: Vec::new(),
             kstack: Vec::new(),
             count: self.count,
+            collected_at: self.sample.collected_at / 1_000_000,
         };
 
         let Some(info) = procs.get(&self.sample.pid) else {
@@ -213,6 +214,8 @@ pub struct AggregatedSample {
     pub ustack: Vec<Frame>,
     pub kstack: Vec<Frame>,
     pub count: u64,
+    /// Milliseconds since Unix epoch when this sample was collected.
+    pub collected_at: u64,
 }
 
 impl fmt::Display for AggregatedSample {
@@ -329,6 +332,78 @@ mod tests {
         );
     }
 
+    trait HashValue {
+        fn hash_value(&self) -> u64;
+    }
+
+    impl<T: std::hash::Hash> HashValue for T {
+        fn hash_value(&self) -> u64 {
+            use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+            BuildHasherDefault::<DefaultHasher>::default().hash_one(self)
+        }
+    }
+
+    #[test]
+    fn same_stack_different_ms_bucket_hashes_differ() {
+        let base = RawSample {
+            pid: 1,
+            tid: 2,
+            collected_at: 1_000_000_000, // 1 s in ns
+            ustack: vec![0xdead],
+            kstack: vec![],
+        };
+        // 2 ms later = different ms bucket
+        let later = RawSample {
+            collected_at: 1_002_000_000,
+            ..base.clone()
+        };
+        assert_ne!(base.hash_value(), later.hash_value());
+    }
+
+    #[test]
+    fn same_stack_same_ms_bucket_hashes_equal() {
+        let a = RawSample {
+            pid: 1,
+            tid: 2,
+            collected_at: 1_000_000_000, // 1 s
+            ustack: vec![0xdead],
+            kstack: vec![],
+        };
+        // 999 µs later — same ms bucket
+        let b = RawSample {
+            collected_at: 1_000_999_000,
+            ..a.clone()
+        };
+        assert_eq!(a.hash_value(), b.hash_value());
+    }
+
+    #[test]
+    fn different_stacks_same_timestamp_hashes_differ() {
+        let a = RawSample {
+            pid: 1,
+            tid: 2,
+            collected_at: 1_000_000_000,
+            ustack: vec![0xdead],
+            kstack: vec![],
+        };
+        let b = RawSample {
+            ustack: vec![0xbeef],
+            ..a.clone()
+        };
+        assert_ne!(a.hash_value(), b.hash_value());
+    }
+
+    #[test]
+    fn collected_at_divides_to_milliseconds() {
+        // Verify the constant used in process() is correct.
+        // 1_748_865_070_123_456 ns / 1_000_000 = 1_748_865_070 ms
+        let ns: u64 = 1_748_865_070_123_456;
+        assert_eq!(ns / 1_000_000, 1_748_865_070);
+        // Sub-ms part is discarded
+        let ns2: u64 = 1_748_865_070_999_999;
+        assert_eq!(ns2 / 1_000_000, 1_748_865_070);
+    }
+
     #[test]
     fn display_raw_aggregated_sample() {
         // User stack but no kernel stack
@@ -393,6 +468,7 @@ mod tests {
             ustack: ustack_data,
             kstack: kstack_data.clone(),
             count: 128,
+            collected_at: 0,
         };
         insta::assert_yaml_snapshot!(format!("{}", sample), @r#""AggregatedSample { pid: 1234567, tid: 1234568, ustack: \"[  0: ufunc3,  1: ufunc2,  2: ufunc1]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 128 }""#);
 
@@ -404,6 +480,7 @@ mod tests {
             ustack: ustack_data,
             kstack: kstack_data.clone(),
             count: 1001,
+            collected_at: 0,
         };
         insta::assert_yaml_snapshot!(format!("{}", sample), @r#""AggregatedSample { pid: 98765, tid: 98766, ustack: \"[NONE]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 1001 }""#);
     }
