@@ -17,7 +17,7 @@ bool has_get_current_task_btf = false;
 unsigned int userspace_pid_ns_level = 0;
 
 SEC("tracepoint/sched/sched_switch")
-int detect_bpf_features(void *ctx) {
+int detect_bpf_features() {
     struct task_struct * task = (struct task_struct *)bpf_get_current_task();
 
     // To fetch the "level" of the pid namespace where userspace is running in,
