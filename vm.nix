@@ -132,10 +132,10 @@ let
     src = pkgs.fetchFromGitHub {
       owner = "danobi";
       repo = "vmtest";
-      rev = "51f11bf301fea054342996802a16ed21fb5054f4";
-      sha256 = "sha256-qtTq0dnDHi1ITfQzKrXz+1dRMymAFBivWpjXntD09+A=";
+      rev = "886c41a17d08c64e52eb9f584b580d79c31766ca";
+      sha256 = "sha256-xpMMGFeFxToic8UWjvwisQ13x86DfEaBvzmBzpDV3ig=";
     };
-    cargoHash = "sha256-1U6Dn0MCyNsdbd7MrE7a6k8dJBtjyquOrW6RvhvCW7Y=";
+    cargoHash = "sha256-9rb1g15L/MhnMAGgjIO3pBgL67pb38RP0w4nRwIbqUo=";
     # nativeCheckInputs = [ pkgs.qemu ];
 
     # There are some errors trying to access `/build/source/tests/*`.
