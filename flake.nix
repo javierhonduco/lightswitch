@@ -29,17 +29,17 @@
           clang' = with pkgs; (
             pkgs.writeShellScriptBin "clang" ''
               if [[ "$@" =~ "-target bpf" ]]; then
-                exec ${llvmPackages_19.clang-unwrapped}/bin/clang -I${llvmPackages_19.clang-unwrapped.lib}/lib/clang/19/include "$@"
+                exec ${llvmPackages_21.clang-unwrapped}/bin/clang -I${llvmPackages_21.clang-unwrapped.lib}/lib/clang/21/include "$@"
               else
-                exec ${llvmPackages_19.clang}/bin/clang "$@"
+                exec ${llvmPackages_21.clang}/bin/clang "$@"
               fi
             ''
           );
           buildInputs = with pkgs; [
             clang'
-            llvmPackages_19.libcxx
-            llvmPackages_19.libclang
-            llvmPackages_19.lld
+            llvmPackages_21.libcxx
+            llvmPackages_21.libclang
+            llvmPackages_21.lld
             elfutils'
             zlib.static
             zlib.dev
@@ -58,7 +58,7 @@
             buildInputs = buildInputs;
             nativeBuildInputs = nativeBuildInputs;
             hardeningDisable = [ "all" ];
-            LIBCLANG_PATH = with pkgs; lib.makeLibraryPath [ llvmPackages_19.libclang ];
+            LIBCLANG_PATH = with pkgs; lib.makeLibraryPath [ llvmPackages_21.libclang ];
             LIBBPF_SYS_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [ zlib.static elfutils' ];
           };
           lightswitch = craneLib.buildPackage (
@@ -116,7 +116,7 @@
               graphviz
             ];
             hardeningDisable = [ "all" ];
-            LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_19.libclang ];
+            LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_21.libclang ];
             LIBBPF_SYS_LIBRARY_PATH = lib.makeLibraryPath [ zlib.static elfutils' ];
             RUST_GDB = "${gdb}/bin/gdb";
           };
