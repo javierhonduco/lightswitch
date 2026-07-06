@@ -59,12 +59,16 @@ impl RawSample {
         }
 
         let ustack = data[24..(24 + ulen * 8)]
-            .chunks_exact(8)
-            .map(|chunk| u64::from_ne_bytes(chunk.try_into().unwrap()))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|chunk| u64::from_ne_bytes(*chunk))
             .collect::<Vec<_>>();
         let kstack = data[(24 + ulen * 8)..(24 + ulen * 8 + klen * 8)]
-            .chunks_exact(8)
-            .map(|chunk| u64::from_ne_bytes(chunk.try_into().unwrap()))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|chunk| u64::from_ne_bytes(*chunk))
             .collect::<Vec<_>>();
 
         Ok(RawSample {
