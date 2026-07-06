@@ -25,8 +25,18 @@
             configureFlags = attrs.configureFlags ++ [ "--without-zstd" ];
             nativeBuildInputs = attrs.nativeBuildInputs ++ [ pkgs.pkg-config ];
           });
+          # Nix provided `clang` adds a few compilation options that can't be used for BPF.
+          clang' = with pkgs; (
+            pkgs.writeShellScriptBin "clang" ''
+              if [[ "$@" =~ "-target bpf" ]]; then
+                exec ${llvmPackages_19.clang-unwrapped}/bin/clang -I${llvmPackages_19.clang-unwrapped.lib}/lib/clang/19/include "$@"
+              else
+                exec ${llvmPackages_19.clang}/bin/clang "$@"
+              fi
+            ''
+          );
           buildInputs = with pkgs; [
-            llvmPackages_19.clang
+            clang'
             llvmPackages_19.libcxx
             llvmPackages_19.libclang
             llvmPackages_19.lld

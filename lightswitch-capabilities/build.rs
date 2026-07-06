@@ -17,26 +17,14 @@ fn main() {
     let skel = Path::new(FEATURES_SKELETON);
     SkeletonBuilder::new()
         .source(FEATURES_BPF_SOURCE)
-        .clang_args([
-            "-Wextra",
-            "-Wall",
-            "-Werror",
-            "-Wno-unused-command-line-argument",
-            "-Wno-unused-parameter",
-        ])
+        .clang_args(["-Wextra", "-Wall", "-Werror"])
         .build_and_generate(skel)
         .expect("run skeleton builder");
 
     let noprealloc_skel = Path::new(NOPREALLOC_TEST_SKELETON);
     SkeletonBuilder::new()
         .source(NOPREALLOC_TEST_BPF_SOURCE)
-        .clang_args([
-            "-Wextra",
-            "-Wall",
-            "-Werror",
-            "-Wno-unused-command-line-argument",
-            "-Wno-unused-parameter",
-        ])
+        .clang_args(["-Wextra", "-Wall", "-Werror"])
         .build_and_generate(noprealloc_skel)
         .expect("run noprealloc_test skeleton builder");
 }
