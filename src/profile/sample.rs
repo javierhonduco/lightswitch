@@ -342,7 +342,7 @@ mod tests {
             },
             count: 1,
         };
-        insta::assert_yaml_snapshot!(format!("{}", raw_aggregated_sample), @r#""RawAggregatedSample { sample: \"RawSample { pid: 1234, tid: 1235, ustack: \\\"[  0: 0x000000000000ffff,  1: 0x00000000deadbeef]\\\", kstack: \\\"[]\\\" }\", count: 1 }""#);
+        insta::assert_snapshot!(format!("{}", raw_aggregated_sample), @r#"RawAggregatedSample { sample: "RawSample { pid: 1234, tid: 1235, ustack: \"[  0: 0x000000000000ffff,  1: 0x00000000deadbeef]\", kstack: \"[]\" }", count: 1 }"#);
 
         // No user or kernel stacks
         let raw_aggregated_sample = RawAggregatedSample {
@@ -355,7 +355,7 @@ mod tests {
             },
             count: 1,
         };
-        insta::assert_yaml_snapshot!(format!("{}", raw_aggregated_sample), @r#""RawAggregatedSample { sample: \"RawSample { pid: 1234, tid: 1235, ustack: \\\"[]\\\", kstack: \\\"[]\\\" }\", count: 1 }""#);
+        insta::assert_snapshot!(format!("{}", raw_aggregated_sample), @r#"RawAggregatedSample { sample: "RawSample { pid: 1234, tid: 1235, ustack: \"[]\", kstack: \"[]\" }", count: 1 }"#);
     }
 
     #[test]
@@ -394,7 +394,7 @@ mod tests {
             kstack: kstack_data.clone(),
             count: 128,
         };
-        insta::assert_yaml_snapshot!(format!("{}", sample), @r#""AggregatedSample { pid: 1234567, tid: 1234568, ustack: \"[  0: ufunc3,  1: ufunc2,  2: ufunc1]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 128 }""#);
+        insta::assert_snapshot!(format!("{}", sample), @r#"AggregatedSample { pid: 1234567, tid: 1234568, ustack: "[  0: ufunc3,  1: ufunc2,  2: ufunc1]", kstack: "[  0: kfunc2,  1: kfunc1]", count: 128 }"#);
 
         let ustack_data = vec![];
 
@@ -405,6 +405,6 @@ mod tests {
             kstack: kstack_data.clone(),
             count: 1001,
         };
-        insta::assert_yaml_snapshot!(format!("{}", sample), @r#""AggregatedSample { pid: 98765, tid: 98766, ustack: \"[NONE]\", kstack: \"[  0: kfunc2,  1: kfunc1]\", count: 1001 }""#);
+        insta::assert_snapshot!(format!("{}", sample), @r#"AggregatedSample { pid: 98765, tid: 98766, ustack: "[NONE]", kstack: "[  0: kfunc2,  1: kfunc1]", count: 1001 }"#);
     }
 }
