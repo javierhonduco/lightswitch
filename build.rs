@@ -65,25 +65,16 @@ fn main() {
     let skel = Path::new(PROFILER_SKELETON);
     SkeletonBuilder::new()
         .source(PROFILER_BPF_SOURCE)
-        .clang_args([
-            "-Wextra",
-            "-Wall",
-            "-Werror",
-            "-Wno-unused-command-line-argument",
-        ])
+        // Older kernels reject the current code if compiled with v3 of the ISA (the default in
+        // LLVM 20+). Select the previous default BPF instruction set.
+        .clang_args(["-mcpu=v1", "-Wextra", "-Wall", "-Werror"])
         .build_and_generate(skel)
         .expect("run skeleton builder");
 
     let skel = Path::new(TRACERS_SKELETON);
     SkeletonBuilder::new()
         .source(TRACERS_BPF_SOURCE)
-        .clang_args([
-            "-Wextra",
-            "-Wall",
-            "-Werror",
-            "-Wno-unused-command-line-argument",
-            "-Wno-unused-function",
-        ])
+        .clang_args(["-Wextra", "-Wall", "-Werror", "-Wno-unused-function"])
         .build_and_generate(skel)
         .expect("run skeleton builder");
 }

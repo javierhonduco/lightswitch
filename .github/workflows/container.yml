@@ -27,4 +27,5 @@ jobs:
     - name: Push container image on commits to main
       if: ${{ github.repository_owner == 'javierhonduco' && github.ref_name == 'main' }}
       run: |
-        nix develop --ignore-environment --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:main-${{ github.sha }}
+        export CONTAINERS_REGISTRIES_CONF=/dev/null
+        nix develop --ignore-environment --keep-env-var CONTAINERS_REGISTRIES_CONF --command skopeo copy --dest-creds="${{ github.repository_owner }}:${{ github.token }}" docker-archive:./result docker://ghcr.io/javierhonduco/lightswitch:main-${{ github.sha }}

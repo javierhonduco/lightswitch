@@ -24,12 +24,27 @@
             doInstallCheck = false;
             configureFlags = attrs.configureFlags ++ [ "--without-zstd" ];
             nativeBuildInputs = attrs.nativeBuildInputs ++ [ pkgs.pkg-config ];
+            # Both libelf and zlib export a function with the same name, breaking
+            # static builds. Use zlib's rather than libelf's.
+            postInstall = (attrs.postInstall or "") + ''
+              ar d $out/lib/libelf.a crc32.o
+            '';
           });
+          # Nix provided `clang` adds a few compilation options that can't be used for BPF.
+          clang' = with pkgs; (
+            pkgs.writeShellScriptBin "clang" ''
+              if [[ "$@" =~ "-target bpf" ]]; then
+                exec ${llvmPackages_21.clang-unwrapped}/bin/clang -I${llvmPackages_21.clang-unwrapped.lib}/lib/clang/21/include "$@"
+              else
+                exec ${llvmPackages_21.clang}/bin/clang "$@"
+              fi
+            ''
+          );
           buildInputs = with pkgs; [
-            llvmPackages_19.clang
-            llvmPackages_19.libcxx
-            llvmPackages_19.libclang
-            llvmPackages_19.lld
+            clang'
+            llvmPackages_21.libcxx
+            llvmPackages_21.libclang
+            llvmPackages_21.lld
             elfutils'
             zlib.static
             zlib.dev
@@ -48,7 +63,7 @@
             buildInputs = buildInputs;
             nativeBuildInputs = nativeBuildInputs;
             hardeningDisable = [ "all" ];
-            LIBCLANG_PATH = with pkgs; lib.makeLibraryPath [ llvmPackages_19.libclang ];
+            LIBCLANG_PATH = with pkgs; lib.makeLibraryPath [ llvmPackages_21.libclang ];
             LIBBPF_SYS_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [ zlib.static elfutils' ];
           };
           lightswitch = craneLib.buildPackage (
@@ -106,7 +121,7 @@
               graphviz
             ];
             hardeningDisable = [ "all" ];
-            LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_19.libclang ];
+            LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_21.libclang ];
             LIBBPF_SYS_LIBRARY_PATH = lib.makeLibraryPath [ zlib.static elfutils' ];
             RUST_GDB = "${gdb}/bin/gdb";
           };

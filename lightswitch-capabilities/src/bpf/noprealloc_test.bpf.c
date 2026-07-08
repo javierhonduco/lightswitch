@@ -13,7 +13,7 @@ struct {
 } noprealloc_test_map SEC(".maps");
 
 SEC("tracepoint/sched/sched_switch")
-int test_noprealloc(void *ctx) {
+int test_noprealloc() {
     u32 key = 0;
     bpf_map_lookup_elem(&noprealloc_test_map, &key);
     return 0;
