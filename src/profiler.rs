@@ -153,7 +153,7 @@ impl Default for ProfilerConfig {
     fn default() -> Self {
         Self {
             cache_dir_base: temp_dir(),
-            libbpf_debug: std::env::var("LIBBPF_DEBUG").is_ok(),
+            libbpf_debug: false,
             bpf_logging: false,
             duration: Duration::MAX,
             sample_freq: 19,
