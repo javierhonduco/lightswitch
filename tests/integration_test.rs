@@ -146,7 +146,7 @@ fn stack_strings_for_pid(symbolized_profile: &AggregatedProfile, expected_pid: i
 
 #[test]
 fn test_integration() {
-    let bpf_test_debug = std::env::var("TEST_DEBUG_BPF").is_ok();
+    let bpf_test_debug = std::env::var("TEST_LIBBPF_DEBUG").is_ok();
     let system_info = SystemInfo::new(None).expect("failed to detect system info");
 
     build_test_binary("integration-tests-progs");
@@ -259,7 +259,7 @@ fn test_integration() {
 
 #[test]
 fn test_integration_ocaml_native_defaults() {
-    let bpf_test_debug = std::env::var("TEST_DEBUG_BPF").is_ok();
+    let bpf_test_debug = std::env::var("TEST_LIBBPF_DEBUG").is_ok();
     let system_info = SystemInfo::new(None).expect("failed to detect system info");
 
     build_test_binary("integration-tests-progs");
@@ -302,7 +302,7 @@ fn test_integration_ocaml_native_defaults() {
 
 #[test]
 fn test_use_pt_regs_helper() {
-    let bpf_test_debug = std::env::var("TEST_DEBUG_BPF").is_ok();
+    let bpf_test_debug = std::env::var("TEST_LIBBPF_DEBUG").is_ok();
     let system_info = SystemInfo::new(None).expect("failed to detect system info");
     if !system_info.available_bpf_features.has_task_pt_regs_helper
         || !system_info.available_bpf_features.has_get_current_task_btf
@@ -331,7 +331,7 @@ fn test_use_pt_regs_helper() {
 
 #[test]
 fn test_do_not_use_pt_regs_helper() {
-    let bpf_test_debug = std::env::var("TEST_DEBUG_BPF").is_ok();
+    let bpf_test_debug = std::env::var("TEST_LIBBPF_DEBUG").is_ok();
 
     let collector = Arc::new(Mutex::new(
         Box::new(NullCollector::new()) as Box<dyn Collector + Send>
