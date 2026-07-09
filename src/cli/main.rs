@@ -27,6 +27,7 @@ use tracing::{debug, error, info, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
 
+use lightswitch_capabilities::has_btf;
 use lightswitch_capabilities::system_info::SystemInfo;
 use lightswitch_metadata::metadata_provider::{
     GlobalMetadataProvider, ThreadSafeGlobalMetadataProvider,
@@ -152,6 +153,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let Ok(aslr_offset) = kaslr_offset() {
                 println!("- kernel ASLR offset: 0x{aslr_offset:x}");
             }
+            println!("- has kernel BTF: {}", has_btf());
 
             return Ok(());
         }
@@ -181,6 +183,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     if !Uid::current().is_root() {
         error!("root permissions are required to run lightswitch");
         std::process::exit(1);
+    }
+
+    // Some distros, such as Raspberry Pi OS [0] don't ship with BTF type
+    // information. This is a hard requirement to load modern BPF applications.
+    //
+    // [0]: https://github.com/raspberrypi/linux/issues/6622.
+    if btf_custom_path.is_none() && !has_btf() {
+        error!("Could not find kernel BTF. One can be provided --btf-custom-path");
+        std::process::exit(1)
     }
 
     let Ok(system_info) = SystemInfo::new(btf_custom_path.clone()) else {
