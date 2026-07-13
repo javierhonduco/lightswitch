@@ -1,3 +1,7 @@
+Unreleased
+----------
+- Add `has_btf` helper to probe the paths that libbpf probes for kernel BTF
+
 v0.3.1
 ------
 - Read pid namespace "level" of the userspace loader
