@@ -1,15 +1,14 @@
 BTF (BPF Type Format)
 =====================
 
-[BTF](https://docs.kernel.org/bpf/btf.html) is required by libbpf to perform the necessary changes to be able to load a program and maps in different versions of the kernel thanks to [CO-RE](https://docs.ebpf.io/concepts/core/, which might have different data layouts.
-Certain kernels, such as Raspbian (Raspberry Pi) or Nvidia (Jetson boards) don't ship with BTF to save on disk space. To allow lightswitch to be loaded, a BTF file has to be provided via the `--btf-custom-path` flag.
+[BTF](https://docs.kernel.org/bpf/btf.html) is required by libbpf to perform the necessary changes to be able to load a program and maps in different versions of the kernel thanks to [CO-RE](https://docs.ebpf.io/concepts/core), which might have different data layouts.
+Certain kernels, such as Raspbian (Raspberry Pi OS) or Nvidia (Jetson boards) don't ship with BTF to save on disk space. To allow lightswitch to be loaded, a BTF file has to be provided via the `--btf-custom-path` flag.
 
-There are two ways to source it:
-- Download an already generated BTF file from [BTFhub](https://github.com/aquasecurity/btfhub-archive) trying to match your distro and kernel version to the closest one;
+There are two possible ways to source it:
+- Download an already generated BTF file from [raspberrypi-kernel-btf](https://github.com/javierhonduco/raspberrypi-kernel-btf) or [BTFhub](https://github.com/aquasecurity/btfhub-archive), matching the distro and kernel version to the one you run;
 - Generating a BTF file yourself. This option is best as it would ensure maximum compatibility and reduce the changes of mismatches.
 
-
-## Generating a BTF file for Raspbian
+## Generating a BTF file for Raspbian (Raspberry Pi OS)
 
 1. Fetch the [kernel sources](https://github.com/raspberrypi/linux);
 1. Check your current kernel release `uname -r`;
