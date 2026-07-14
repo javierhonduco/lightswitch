@@ -20,7 +20,11 @@ Features / design goals
 
 Installation
 ------------
-The [latest release](https://github.com/javierhonduco/lightswitch/releases/latest) contains pre-built binaries and container images in the OCI format (Docker compatible). Alternatively, for every commit merged to the `main` branch, a container image tagged with the full Git revision is published to [the GitHub registry](https://github.com/javierhonduco/lightswitch/pkgs/container/lightswitch).
+Download and install the [latest release](https://github.com/javierhonduco/lightswitch/releases/latest) for your architecture with:
+
+```shell
+$ curl https://github.com/javierhonduco/lightswitch/blob/main/install.sh | bash
+```
 
 Usage
 -----
