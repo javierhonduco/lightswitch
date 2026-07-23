@@ -2,8 +2,6 @@ use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
-use std::path::Path;
-use std::path::PathBuf;
 
 use plain::Plain;
 use ring::digest::{Context, SHA256};
@@ -49,15 +47,15 @@ unsafe impl Plain for Header {}
 unsafe impl Plain for CompactUnwindRow {}
 
 /// Writes compact information to a given writer.
-pub struct Writer {
-    executable_path: PathBuf,
+pub struct Writer<'a> {
+    executable: &'a [u8],
     first_frame_override: Option<(u64, u64)>,
 }
 
-impl Writer {
-    pub fn new(executable_path: &Path, first_frame_override: Option<(u64, u64)>) -> Self {
+impl<'a> Writer<'a> {
+    pub fn new(executable: &'a [u8], first_frame_override: Option<(u64, u64)>) -> Self {
         Writer {
-            executable_path: executable_path.to_path_buf(),
+            executable,
             first_frame_override,
         }
     }
@@ -80,11 +78,8 @@ impl Writer {
         &self,
         first_frame_override: Option<(u64, u64)>,
     ) -> Result<Vec<CompactUnwindRow>, WriterError> {
-        compact_unwind_info(
-            &self.executable_path.to_string_lossy(),
-            first_frame_override,
-        )
-        .map_err(|e| WriterError::UnwindInfoGeneric(e.to_string()))
+        compact_unwind_info(self.executable, first_frame_override)
+            .map_err(|e| WriterError::UnwindInfoGeneric(e.to_string()))
     }
 
     fn write_header(
@@ -223,26 +218,22 @@ impl<'a> Reader<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
-    use std::path::PathBuf;
-
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn test_write_and_read_unwind_info() {
         let mut buffer = Cursor::new(Vec::new());
-        let path = PathBuf::from("/proc/self/exe");
-        let writer = Writer::new(&path, None);
+        let data = std::fs::read("/proc/self/exe").unwrap();
+        let writer = Writer::new(&data, None);
         assert!(writer.write(&mut buffer).is_ok());
 
         let reader = Reader::new(&buffer.get_ref()[..], true);
         let unwind_info = reader.unwrap().unwind_info();
         assert!(unwind_info.is_ok());
         let unwind_info = unwind_info.unwrap();
-        assert_eq!(
-            unwind_info,
-            compact_unwind_info("/proc/self/exe", None).unwrap()
-        );
+
+        assert_eq!(unwind_info, compact_unwind_info(&data, None).unwrap());
     }
 
     #[test]
@@ -281,8 +272,8 @@ mod tests {
     #[test]
     fn test_corrupt_unwind_info() {
         let mut buffer: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-        let path = PathBuf::from("/proc/self/exe");
-        let writer = Writer::new(&path, None);
+        let data = std::fs::read("/proc/self/exe").unwrap();
+        let writer = Writer::new(&data, None);
         assert!(writer.write(&mut buffer).is_ok());
 
         // Corrupt unwind info.

@@ -1,12 +1,9 @@
-use std::fs::File;
-
 use anyhow::Result;
 use gimli::{
     CfaRule, CieOrFde, EhFrame, Encoding, Format,
     Operation::{Deref, PlusConstant, RegisterOffset},
     UnwindContext, UnwindSection,
 };
-use memmap2::Mmap;
 use object::Architecture;
 use object::{Object, ObjectSection};
 use thiserror::Error;
@@ -37,22 +34,19 @@ pub enum UnwindData {
 // Ideally this interface should do most of the preparatory work in the
 // constructor but this is complicated by the various lifetimes.
 pub struct CompactUnwindInfoBuilder<'a> {
-    mmap: Mmap,
+    executable: &'a [u8],
     callback: Box<dyn FnMut(&UnwindData) + 'a>,
     first_frame_override: Option<(u64, u64)>,
 }
 
 impl<'a> CompactUnwindInfoBuilder<'a> {
     pub fn with_callback(
-        path: &'a str,
+        executable: &'a [u8],
         first_frame_override: Option<(u64, u64)>,
         callback: impl FnMut(&UnwindData) + 'a,
     ) -> anyhow::Result<Self> {
-        let in_file = File::open(path)?;
-        let mmap = unsafe { memmap2::Mmap::map(&in_file)? };
-
         Ok(Self {
-            mmap,
+            executable,
             callback: Box::new(callback),
             first_frame_override,
         })
@@ -61,7 +55,7 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
     pub fn process(mut self) -> Result<(), anyhow::Error> {
         let _span = span!(Level::DEBUG, "processing unwind info").entered();
 
-        let object_file = object::File::parse(&self.mmap[..])
+        let object_file = object::File::parse(self.executable)
             .map_err(|e| UnwindInfoError::ParsingObjectFile(e.to_string()))?;
 
         let eh_frame_section = object_file
@@ -304,7 +298,7 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
 }
 
 pub fn compact_unwind_info(
-    path: &str,
+    executable: &[u8],
     first_frame_override: Option<(u64, u64)>,
 ) -> anyhow::Result<Vec<CompactUnwindRow>> {
     let mut unwind_info: Vec<CompactUnwindRow> = Vec::new();
@@ -312,7 +306,7 @@ pub fn compact_unwind_info(
     let mut last_row = None;
 
     let builder =
-        CompactUnwindInfoBuilder::with_callback(path, first_frame_override, |unwind_data| {
+        CompactUnwindInfoBuilder::with_callback(executable, first_frame_override, |unwind_data| {
             match unwind_data {
                 UnwindData::Function(_start_addr, end_addr) => {
                     // Add the end addr when we hit a new func

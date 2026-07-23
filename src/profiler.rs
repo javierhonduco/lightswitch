@@ -225,8 +225,10 @@ enum AddUnwindInformationResult {
     AlreadyLoaded,
 }
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error)]
 enum AddUnwindInformationError {
+    #[error("i/o error")]
+    Io(#[from] std::io::Error),
     #[error("could not evict unwind information")]
     Eviction,
     #[error("unwind information too large for executable: {0} which has {1} unwind rows")]
@@ -909,8 +911,11 @@ impl Profiler {
                     executable_path.display()
                 )
                 .entered();
+                let executable = File::open(&opened_exe_path)?;
+                let mmap = unsafe { memmap2::Mmap::map(&executable)? };
+
                 self.unwind_info_manager.fetch_unwind_info(
-                    &opened_exe_path,
+                    &mmap[..],
                     executable_id,
                     Some((start_low_address, start_high_address)),
                     false,
@@ -932,8 +937,11 @@ impl Profiler {
                         executable_path.display()
                     )
                     .entered();
+
+                    let executable = File::open(&opened_exe_path)?;
+                    let mmap = unsafe { memmap2::Mmap::map(&executable)? };
                     self.unwind_info_manager.fetch_unwind_info(
-                        &opened_exe_path,
+                        &mmap[..],
                         executable_id,
                         None,
                         false,

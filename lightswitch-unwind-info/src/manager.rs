@@ -79,7 +79,7 @@ impl UnwindInfoManager {
 
     pub fn fetch_unwind_info(
         &mut self,
-        executable_path: &Path,
+        executable: &[u8],
         executable_id: ExecutableId,
         first_frame_override: Option<(u64, u64)>,
         check_digest: bool,
@@ -92,7 +92,7 @@ impl UnwindInfoManager {
                 }
                 // No matter the error, regenerate the unwind information.
                 let unwind_info =
-                    self.write_to_cache(executable_path, executable_id, first_frame_override);
+                    self.write_to_cache(executable, executable_id, first_frame_override);
                 if unwind_info.is_ok() {
                     self.bump(executable_id, None);
                 }
@@ -125,12 +125,12 @@ impl UnwindInfoManager {
 
     fn write_to_cache(
         &self,
-        executable_path: &Path,
+        executable: &[u8],
         executable_id: ExecutableId,
         first_frame_override: Option<(u64, u64)>,
     ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
-        let unwind_info_writer = Writer::new(executable_path, first_frame_override);
+        let unwind_info_writer = Writer::new(executable, first_frame_override);
         // [`File::create`] will truncate an existing file to the size it needs.
         let mut file =
             BufWriter::new(File::create(unwind_info_path).map_err(FetchUnwindInfoError::Io)?);
@@ -182,7 +182,6 @@ impl UnwindInfoManager {
 mod tests {
     use std::{
         io::{Seek, SeekFrom, Write},
-        path::PathBuf,
         time::Duration,
     };
 
@@ -214,19 +213,16 @@ mod tests {
 
     #[test]
     fn test_unwind_info_manager_unwind_info() {
-        let unwind_info = compact_unwind_info("/proc/self/exe", None).unwrap();
+        let data = std::fs::read("/proc/self/exe").unwrap();
+        let unwind_info = compact_unwind_info(&data, None).unwrap();
         let tmpdir = tempfile::TempDir::new().unwrap();
         let mut manager = UnwindInfoManager::new(tmpdir.path(), None);
 
         // The unwind info fetched with the manager should be correct
         // both when it's a cache miss and a cache hit.
         for _ in 0..2 {
-            let manager_unwind_info = manager.fetch_unwind_info(
-                &PathBuf::from("/proc/self/exe"),
-                ExecutableId(0xFABADA),
-                None,
-                true,
-            );
+            let manager_unwind_info =
+                manager.fetch_unwind_info(&data, ExecutableId(0xFABADA), None, true);
             let manager_unwind_info = manager_unwind_info.unwrap();
             assert_eq!(unwind_info, manager_unwind_info);
         }
@@ -234,17 +230,14 @@ mod tests {
 
     #[test]
     fn test_unwind_info_manager_corrupt() {
-        let unwind_info = compact_unwind_info("/proc/self/exe", None).unwrap();
+        let data = std::fs::read("/proc/self/exe").unwrap();
+        let unwind_info = compact_unwind_info(&data, None).unwrap();
         let tmpdir = tempfile::TempDir::new().unwrap();
         let mut manager = UnwindInfoManager::new(tmpdir.path(), None);
 
         // Cache unwind info.
-        let manager_unwind_info = manager.fetch_unwind_info(
-            &PathBuf::from("/proc/self/exe"),
-            ExecutableId(0xFABADA),
-            None,
-            true,
-        );
+        let manager_unwind_info =
+            manager.fetch_unwind_info(&data, ExecutableId(0xFABADA), None, true);
         assert!(manager_unwind_info.is_ok());
         let manager_unwind_info = manager_unwind_info.unwrap();
         assert_eq!(unwind_info, manager_unwind_info);
@@ -258,12 +251,8 @@ mod tests {
         file.write_all(&[0; 20]).unwrap();
 
         // Make sure the corrupted one gets replaced and things work.
-        let manager_unwind_info = manager.fetch_unwind_info(
-            &PathBuf::from("/proc/self/exe"),
-            ExecutableId(0xFABADA),
-            None,
-            true,
-        );
+        let manager_unwind_info =
+            manager.fetch_unwind_info(&data, ExecutableId(0xFABADA), None, true);
         let manager_unwind_info = manager_unwind_info.unwrap();
         assert_eq!(unwind_info, manager_unwind_info);
     }
