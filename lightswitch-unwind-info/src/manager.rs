@@ -14,8 +14,8 @@ use thiserror::Error;
 use tracing::debug;
 
 use super::persist::{Reader, Writer};
-use crate::unwind_info::persist::{ReaderError, WriterError};
-use crate::unwind_info::types::CompactUnwindRow;
+use crate::persist::{ReaderError, WriterError};
+use crate::types::CompactUnwindRow;
 
 const DEFAULT_MAX_CACHED_FILES: usize = 1_000;
 
@@ -170,10 +170,10 @@ impl UnwindInfoManager {
     }
 
     fn maybe_evict(&mut self) {
-        if self.usage_tracking.len() > self.max_cached_files {
-            if let Some(evict) = self.usage_tracking.pop() {
-                let _ = fs::remove_file(self.path_for(evict.executable_id));
-            }
+        if self.usage_tracking.len() > self.max_cached_files
+            && let Some(evict) = self.usage_tracking.pop()
+        {
+            let _ = fs::remove_file(self.path_for(evict.executable_id));
         }
     }
 }
@@ -189,7 +189,7 @@ mod tests {
     use fs::OpenOptions;
 
     use super::*;
-    use crate::unwind_info::compact_unwind_info;
+    use crate::compact_unwind_info;
 
     #[test]
     fn test_custom_usage_ordering() {

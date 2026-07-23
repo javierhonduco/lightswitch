@@ -2149,12 +2149,10 @@ dependencies = [
  "flamelens",
  "flate2",
  "fxprof-processed-profile",
- "gimli 0.34.0",
  "glob",
  "inferno",
  "insta",
  "itertools 0.14.0",
- "lazy_static",
  "libbpf-cargo",
  "libbpf-rs",
  "libbpf-sys",
@@ -2162,10 +2160,10 @@ dependencies = [
  "lightswitch-metadata",
  "lightswitch-object",
  "lightswitch-proto",
+ "lightswitch-unwind-info",
  "lru 0.16.4",
  "memmap2",
  "nix",
- "object 0.39.1",
  "parking_lot",
  "perf-event-open-sys",
  "plain",
@@ -2173,7 +2171,6 @@ dependencies = [
  "procfs",
  "prost",
  "reqwest",
- "ring",
  "rstest",
  "rustls",
  "serde",
@@ -2241,6 +2238,23 @@ dependencies = [
  "prost-build",
  "protox",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "lightswitch-unwind-info"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "gimli 0.34.0",
+ "lazy_static",
+ "lightswitch-object",
+ "memmap2",
+ "object 0.39.1",
+ "plain",
+ "ring",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

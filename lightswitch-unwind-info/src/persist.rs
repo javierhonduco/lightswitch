@@ -9,8 +9,8 @@ use plain::Plain;
 use ring::digest::{Context, SHA256};
 use thiserror::Error;
 
-use crate::unwind_info::compact_unwind_info;
-use crate::unwind_info::types::CompactUnwindRow;
+use crate::compact_unwind_info;
+use crate::types::CompactUnwindRow;
 
 // To identify this binary file type.
 const MAGIC_NUMBER: u32 = 0x1357531;

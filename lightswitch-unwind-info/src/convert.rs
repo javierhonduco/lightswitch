@@ -10,11 +10,11 @@ use memmap2::Mmap;
 use object::Architecture;
 use object::{Object, ObjectSection};
 use thiserror::Error;
-use tracing::{debug, span, Level};
+use tracing::{Level, debug, span};
 
-use crate::unwind_info::optimize::remove_redundant;
-use crate::unwind_info::optimize::remove_unnecesary_markers;
-use crate::unwind_info::types::*;
+use crate::optimize::remove_redundant;
+use crate::optimize::remove_unnecesary_markers;
+use crate::types::*;
 
 #[derive(Debug, Error)]
 pub enum UnwindInfoError {
@@ -111,10 +111,10 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                 }
                 CieOrFde::Fde(partial_fde) => {
                     let fde = partial_fde.parse(|eh_frame, bases, cie_offset| {
-                        if let Some(cie) = &cur_cie {
-                            if cie.offset() == cie_offset.0 {
-                                return Ok(cie.clone());
-                            }
+                        if let Some(cie) = &cur_cie
+                            && cie.offset() == cie_offset.0
+                        {
+                            return Ok(cie.clone());
                         }
                         let cie = eh_frame.cie_from_offset(bases, cie_offset);
                         if let Ok(cie) = &cie {
@@ -290,10 +290,10 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                     _ => continue,
                 }
 
-                if let Some(first_frame_override) = self.first_frame_override {
-                    if compact_row.pc == first_frame_override.0 {
-                        compact_row = CompactUnwindRow::stop_unwinding(compact_row.pc);
-                    }
+                if let Some(first_frame_override) = self.first_frame_override
+                    && compact_row.pc == first_frame_override.0
+                {
+                    compact_row = CompactUnwindRow::stop_unwinding(compact_row.pc);
                 }
 
                 (self.callback)(&UnwindData::Instruction(compact_row));

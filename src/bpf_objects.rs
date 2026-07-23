@@ -18,7 +18,6 @@ use crate::{
     native_unwind_state::KnownExecutableInfo,
     process::{ExecutableMapping, Pid},
     profiler::ProfilerConfig,
-    unwind_info::types::CompactUnwindRow,
     util::{get_online_cpus, roundup_page, summarize_address_range},
 };
 use libbpf_rs::{skel::Skel, Map, OpenObject};
@@ -28,6 +27,7 @@ use libbpf_rs::{
 };
 use libbpf_rs::{MapCore, MapFlags, MapHandle, MapType};
 use lightswitch_object::ExecutableId;
+use lightswitch_unwind_info::types::CompactUnwindRow;
 use memmap2::MmapOptions;
 use tracing::{debug, error, info, warn};
 
@@ -377,7 +377,7 @@ impl Bpf {
         unwind_info: &[CompactUnwindRow],
         executable_id: u64,
     ) -> Result<(), libbpf_rs::Error> {
-        let pages = crate::unwind_info::pages::to_pages(unwind_info);
+        let pages = lightswitch_unwind_info::pages::to_pages(unwind_info);
         for page in pages {
             let page_key = page_key_t {
                 file_offset: page.address,

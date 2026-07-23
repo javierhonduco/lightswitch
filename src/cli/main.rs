@@ -40,10 +40,10 @@ use lightswitch::kernel::kernel_build_id;
 use lightswitch::profile::{fold_profile, to_pprof};
 use lightswitch::profiler::{Profiler, ProfilerConfig};
 use lightswitch::server::start_server;
-use lightswitch::unwind_info::compact_unwind_info;
-use lightswitch::unwind_info::CompactUnwindInfoBuilder;
 use lightswitch_object::kernel::kaslr_offset;
 use lightswitch_object::ObjectFile;
+use lightswitch_unwind_info::compact_unwind_info;
+use lightswitch_unwind_info::CompactUnwindInfoBuilder;
 
 mod args;
 mod killswitch;
