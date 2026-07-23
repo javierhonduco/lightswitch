@@ -13,6 +13,5 @@ pub mod process;
 pub mod profile;
 pub mod profiler;
 pub mod server;
-pub mod unwind_info;
 pub mod usym;
 pub mod util;

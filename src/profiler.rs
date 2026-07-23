@@ -51,8 +51,6 @@ use crate::process::{
     ProcessStatus,
 };
 use crate::profile::*;
-use crate::unwind_info::manager::UnwindInfoManager;
-use crate::unwind_info::types::CompactUnwindRow;
 use crate::util::architecture;
 use crate::util::executable_path;
 use crate::util::page_size;
@@ -62,6 +60,8 @@ use lightswitch_metadata::metadata_provider::{
 };
 use lightswitch_metadata::types::TaskKey;
 use lightswitch_object::{ExecutableId, ObjectFile, Runtime};
+use lightswitch_unwind_info::manager::UnwindInfoManager;
+use lightswitch_unwind_info::types::CompactUnwindRow;
 
 const MAX_UNWIND_INFO_SIZE: usize = 7_000_000;
 
@@ -356,7 +356,7 @@ impl Profiler {
             }
             Err(e) => {
                 error!(
-                    "fetching the kaslr offset failed with {:?}, assuming it is 0",
+                    "fetching the kaslr offset failed with {:?}, assuming it is 0. This ",
                     e
                 );
                 0

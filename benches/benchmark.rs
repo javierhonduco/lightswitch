@@ -3,8 +3,8 @@ use itertools::Itertools;
 use libbpf_rs::{MapCore, MapFlags, MapHandle, MapType};
 use lightswitch::bpf::profiler_bindings::stack_unwind_row_t;
 use lightswitch::ksym::KsymIter;
-use lightswitch::unwind_info::types::CompactUnwindRow;
 use lightswitch::util::roundup_page;
+use lightswitch_unwind_info::types::CompactUnwindRow;
 use memmap2::MmapOptions;
 use std::os::fd::AsFd;
 

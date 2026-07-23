@@ -1,4 +1,4 @@
-use crate::unwind_info::types::{CfaType, CompactUnwindRow};
+use crate::types::{CfaType, CompactUnwindRow};
 
 /// Remove unecessary end of function markers.
 ///

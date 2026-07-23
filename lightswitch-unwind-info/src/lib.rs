@@ -5,8 +5,8 @@ pub mod pages;
 pub mod persist;
 pub mod types;
 
-pub use convert::compact_unwind_info;
 pub use convert::CompactUnwindInfoBuilder;
+pub use convert::compact_unwind_info;
 
 use std::fs::File;
 use std::path::PathBuf;

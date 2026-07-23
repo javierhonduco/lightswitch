@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::unwind_info::types::CompactUnwindRow;
+use crate::types::CompactUnwindRow;
 
 #[derive(PartialEq)]
 pub struct Page {
@@ -201,7 +201,7 @@ mod tests {
             let pc = row.pc;
             let pc_high = pc & high_bits_mask;
             assert_eq!(pc_high, pc_high & 0x0000FFFFFFFF0000); // [ 16 unused bits -- 32 bits for high -- 16 bits for each page ]
-                                                               // Test that we can find it in the pages, linearly, but it's small enough
+            // Test that we can find it in the pages, linearly, but it's small enough
             let found = pages.iter().find(|el| el.address == pc_high).unwrap();
             // Make sure we can find the inner slice
             let search_here = &unwind_info[(found.low_index as usize)..(found.high_index as usize)];

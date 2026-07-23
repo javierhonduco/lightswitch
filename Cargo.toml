@@ -8,10 +8,7 @@ repository = "https://github.com/javierhonduco/lightswitch"
 
 [workspace]
 members = [
-    "lightswitch-proto",
-    "lightswitch-capabilities",
-    "lightswitch-metadata",
-    "lightswitch-object",
+    "lightswitch-*",
 ]
 
 [workspace.dependencies]
@@ -25,21 +22,22 @@ perf-event-open-sys = "6.0.0"
 procfs = "0.18.0"
 nix = { version = "0.31.2" }
 # workspace dev dependencies below
+tempfile = "3.27.0"
 # workspace build dependencies below
 libbpf-cargo = { version = "0.26.2" }
 glob = "0.3.3"
 ring = "0.17.14"
 libbpf-sys = "1.7.0"
 lru = "0.16.3"
+lightswitch-object = { path = "lightswitch-object", version = "0.3.3" }
+plain = "0.2.3"
 
 [features]
 default = ["libbpf-rs-static"]
 libbpf-rs-static = ["libbpf-rs/static"]
 
 [dependencies]
-gimli = "0.34.0"
-lazy_static = "1.5.0"
-plain = "0.2.3"
+plain = { workspace = true }
 clap = { version = "4.5.60", features = ["derive", "string"] }
 blazesym = { version = "0.2.3", features = ["zlib"] }
 tracing-subscriber = "0.3.22"
@@ -57,11 +55,11 @@ itertools = "0.14.0"
 lightswitch-metadata = { path = "lightswitch-metadata", version = "0.2.3" }
 lightswitch-proto = { path = "lightswitch-proto", version = "0.3.0" }
 lightswitch-capabilities = { path = "lightswitch-capabilities", version = "0.3.1" }
-lightswitch-object = { path = "lightswitch-object", version = "0.3.3" }
+lightswitch-unwind-info = { path = "lightswitch-unwind-info", version = "0.0.0" }
+lightswitch-object = { workspace = true }
 memmap2 = { workspace = true }
 anyhow = { workspace = true }
 libbpf-sys = { workspace = true }
-object = { workspace = true }
 libbpf-rs = { workspace = true }
 tracing = { workspace = true }
 perf-event-open-sys = { workspace = true }
@@ -69,7 +67,6 @@ thiserror = { workspace = true }
 procfs = { workspace = true }
 nix = { workspace = true, features = ["user"] }
 parking_lot = { version = "0.12.5", features = ["deadlock_detection"] }
-ring = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "aws_lc_rs"] }
 flamelens = { version = "0.4.0", default-features = false }
 lru = { workspace = true }
@@ -85,7 +82,7 @@ assert_cmd = { version = "2.2.0" }
 insta = { version = "1.46.3", features = ["yaml"] }
 rstest = "0.26.1"
 criterion = "0.8.2"
-tempfile = "3.27.0"
+tempfile = { workspace = true }
 
 [build-dependencies]
 libbpf-cargo = { workspace = true }
