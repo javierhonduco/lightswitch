@@ -62,7 +62,6 @@
             doCheck = false;
             buildInputs = buildInputs;
             nativeBuildInputs = nativeBuildInputs;
-            hardeningDisable = [ "all" ];
             LIBCLANG_PATH = with pkgs; lib.makeLibraryPath [ llvmPackages_21.libclang ];
             LIBBPF_SYS_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [ zlib.static elfutils' ];
           };
@@ -120,7 +119,6 @@
               pprof
               graphviz
             ];
-            hardeningDisable = [ "all" ];
             LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_21.libclang ];
             LIBBPF_SYS_LIBRARY_PATH = lib.makeLibraryPath [ zlib.static elfutils' ];
             RUST_GDB = "${gdb}/bin/gdb";
