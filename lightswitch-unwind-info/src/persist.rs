@@ -10,7 +10,7 @@ use ring::digest::{Context, SHA256};
 use thiserror::Error;
 
 use crate::compact_unwind_info;
-use crate::types::CompactUnwindRow;
+use crate::types::{CompactUnwindRow, CompactUnwindRowWire};
 
 // To identify this binary file type.
 const MAGIC_NUMBER: u32 = 0x1357531;
@@ -48,7 +48,7 @@ unsafe impl Plain for Header {}
 /// SAFETY: Using packed C representation, which plain needs, and there is
 /// the extra safety layer of the unwind information digest checked in the
 /// read path, in case the data is corrupted.
-unsafe impl Plain for CompactUnwindRow {}
+unsafe impl Plain for CompactUnwindRowWire {}
 
 /// Writes compact information to a given writer.
 pub struct Writer {
@@ -139,8 +139,10 @@ pub enum ReaderError {
     Generic(String),
     #[error("index out of range")]
     OutOfRange,
-    #[error("could not convert between types")]
+    #[error("could not convert between size types")]
     SizeConversion,
+    #[error("raw unwind info contains invalid data")]
+    RowInvalidData,
     #[error("digest does not match")]
     Digest,
 }
@@ -194,7 +196,7 @@ impl<'a> Reader<'a> {
             .map_err(|_| ReaderError::SizeConversion)?;
 
         let mut unwind_info = Vec::with_capacity(unwind_info_len);
-        let mut unwind_row = CompactUnwindRow::default();
+        let mut unwind_row_wire = CompactUnwindRowWire::default();
 
         let unwind_info_data = &self.data[header_size..];
         let mut context = Context::new(&SHA256);
@@ -206,9 +208,13 @@ impl<'a> Reader<'a> {
             if self.check_digest {
                 context.update(unwind_row_data);
             }
-            plain::copy_from_bytes(&mut unwind_row, unwind_row_data)
+            plain::copy_from_bytes(&mut unwind_row_wire, unwind_row_data)
                 .map_err(|e| ReaderError::Generic(format!("{e:?}")))?;
-            unwind_info.push(unwind_row);
+            unwind_info.push(
+                unwind_row_wire
+                    .try_into()
+                    .map_err(|_| ReaderError::RowInvalidData)?,
+            );
         }
 
         if self.check_digest {
@@ -349,5 +355,15 @@ mod tests {
             Reader::new(&buffer, true).unwrap().unwind_info(),
             Err(ReaderError::OutOfRange)
         ));
+    }
+
+    #[test]
+    fn test_bad_wire_conversion() {
+        let wire = CompactUnwindRowWire {
+            cfa_type: u8::MAX,
+            ..CompactUnwindRowWire::default()
+        };
+        let res: Result<CompactUnwindRow, ()> = wire.try_into();
+        assert!(res.is_err());
     }
 }

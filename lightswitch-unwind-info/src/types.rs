@@ -19,6 +19,26 @@ pub enum CfaType {
     OffsetDidNotFit = 9,
 }
 
+impl TryInto<CfaType> for u8 {
+    type Error = ();
+
+    fn try_into(self) -> Result<CfaType, ()> {
+        match self {
+            0 => Ok(CfaType::Unknown),
+            1 => Ok(CfaType::FramePointerOffset),
+            2 => Ok(CfaType::StackPointerOffset),
+            3 => Ok(CfaType::UnsupportedExpression),
+            4 => Ok(CfaType::Plt1),
+            5 => Ok(CfaType::Plt2),
+            6 => Ok(CfaType::DerefAndAdd),
+            7 => Ok(CfaType::EndFdeMarker),
+            8 => Ok(CfaType::UnsupportedRegisterOffset),
+            9 => Ok(CfaType::OffsetDidNotFit),
+            _ => Err(()),
+        }
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub enum RbpType {
@@ -34,6 +54,35 @@ pub enum RbpType {
     Arm64ReturnAddressElsewhere = 8,
 }
 
+impl TryInto<RbpType> for u8 {
+    type Error = ();
+
+    fn try_into(self) -> Result<RbpType, ()> {
+        match self {
+            0 => Ok(RbpType::Unchanged),
+            1 => Ok(RbpType::CfaOffset),
+            2 => Ok(RbpType::Register),
+            3 => Ok(RbpType::Expression),
+            4 => Ok(RbpType::UndefinedReturnAddress),
+            5 => Ok(RbpType::OffsetDidNotFit),
+            6 => Ok(RbpType::Arm64ReturnAddressLr),
+            7 => Ok(RbpType::Arm64ReturnAddressFrame),
+            8 => Ok(RbpType::Arm64ReturnAddressElsewhere),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
+#[repr(C, packed)]
+pub struct CompactUnwindRowWire {
+    pub pc: u64,
+    pub cfa_type: u8,
+    pub rbp_type: u8,
+    pub cfa_offset: u16,
+    pub rbp_offset: i16,
+}
+
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
 #[repr(C, packed)]
 pub struct CompactUnwindRow {
@@ -42,6 +91,20 @@ pub struct CompactUnwindRow {
     pub rbp_type: RbpType,
     pub cfa_offset: u16,
     pub rbp_offset: i16,
+}
+
+impl TryInto<CompactUnwindRow> for CompactUnwindRowWire {
+    type Error = ();
+
+    fn try_into(self) -> Result<CompactUnwindRow, ()> {
+        Ok(CompactUnwindRow {
+            pc: self.pc,
+            cfa_type: self.cfa_type.try_into()?,
+            rbp_type: self.rbp_type.try_into()?,
+            cfa_offset: self.cfa_offset,
+            rbp_offset: self.rbp_offset,
+        })
+    }
 }
 
 impl CompactUnwindRow {
