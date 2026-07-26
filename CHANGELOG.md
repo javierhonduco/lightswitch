@@ -1,5 +1,9 @@
-v0.5.0
+Unreleased
 ----------
+- Expose Firefox profiler collector as a format in the CLI
+
+v0.5.0
+------
 - Fix bug preventing profiling of processes in a different pid namespace than lightswitch's
 - Add support for Pyroscope
 - Cache object files by file_id to avoid reparsing them
