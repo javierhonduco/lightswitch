@@ -1,3 +1,3 @@
 Unreleased
 ----------
-Initial documented release, extracted into its own crate
+- Fix user-controlled allocations by setting an upper limit of unwind entries that can be read.
