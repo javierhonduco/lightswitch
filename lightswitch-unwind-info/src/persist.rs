@@ -16,6 +16,8 @@ use crate::types::CompactUnwindRow;
 const MAGIC_NUMBER: u32 = 0x1357531;
 // Any changes to the ABI / digest must bump the version.
 const VERSION: u32 = 4;
+// Maximum entries that can be read.
+const MAX_UNWIND_ENTRIES: u64 = 10_000_000;
 
 type UnwindInformationDigest = u64;
 
@@ -131,6 +133,8 @@ pub enum ReaderError {
     MagicNumber,
     #[error("version is not compatible")]
     Version,
+    #[error("too many unwind information entries: {0} max: {MAX_UNWIND_ENTRIES}")]
+    TooManyEntries(u64),
     #[error("generic error: {0}")]
     Generic(String),
     #[error("index out of range")]
@@ -171,6 +175,10 @@ impl<'a> Reader<'a> {
 
         if header.version != VERSION {
             return Err(ReaderError::Version);
+        }
+
+        if header.unwind_info_len > MAX_UNWIND_ENTRIES {
+            return Err(ReaderError::TooManyEntries(header.unwind_info_len));
         }
 
         Ok(header)
@@ -275,6 +283,24 @@ mod tests {
         assert!(matches!(
             Reader::new(&buffer, true),
             Err(ReaderError::Version)
+        ));
+    }
+
+    #[test]
+    fn test_unwind_info_too_many_entries() {
+        let mut buffer = Vec::new();
+        let header = Header {
+            version: VERSION,
+            magic: MAGIC_NUMBER,
+            unwind_info_len: 20_000_000,
+            unwind_info_digest: 0x0,
+        };
+        buffer
+            .write_all(unsafe { plain::as_bytes(&header) })
+            .unwrap();
+        assert!(matches!(
+            Reader::new(&buffer, true),
+            Err(ReaderError::TooManyEntries(20_000_000))
         ));
     }
 
