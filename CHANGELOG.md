@@ -1,6 +1,7 @@
 Unreleased
 ----------
 - Expose Firefox profiler collector as a format in the CLI
+- Add Perfetto trace output and local Perfetto UI serving
 
 v0.5.0
 ------
