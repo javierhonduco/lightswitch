@@ -34,13 +34,7 @@ As a CLI, **lightswitch** can be run with:
 $ sudo lightswitch
 ```
 
-Stop it with <kbd>Ctrl</kbd>+<kbd>C</kbd>, or alternatively, pass a `--duration` in seconds. By default, a flamegraph in SVG format will be written to disk. Pprof is also supported with `--profile-format=pprof`. By default the whole machine will be profiled which can be overriden with `--pids`.
-
-With Docker:
-
-```shell
-$ docker run -it --privileged --pid=host -v /sys:/sys -v $PWD:/profiles -v /tmp/lightswitch ghcr.io/javierhonduco/lightswitch:main-$LIGHTSWITCH_SHA1 --profile-path=/profiles
-```
+Stop it with <kbd>Ctrl</kbd>+<kbd>C</kbd>, or alternatively, pass a `--duration` in seconds. By default, a flamegraph in SVG format will be written to disk. Profiles in the Firefox Profiler can be produced with `--profile-format=firefox` and visualized with `ligthswitch server`. Pprof is also supported with `--profile-format=pprof`. By default the whole machine will be profiled which can be overriden with `--pids`.
 
 Development
 -----------

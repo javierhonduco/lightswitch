@@ -353,7 +353,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let collector: Arc<Mutex<Box<dyn Collector + Send>>> =
         Arc::new(Mutex::new(match args.sender {
             ProfileSender::None => Box::new(NullCollector::new()),
-            ProfileSender::LocalDisk => Box::new(AggregatorCollector::new()),
+            ProfileSender::LocalDisk => match args.profile_format {
+                ProfileFormat::Firefox => Box::new(FirefoxProfilerCollector::new(
+                    "firefox-profiler.json",
+                    args.sample_freq,
+                    metadata_provider.clone(),
+                )),
+                _ => Box::new(AggregatorCollector::new()),
+            },
             ProfileSender::Remote => Box::new(StreamingCollector::new(
                 token,
                 args.symbolizer == Symbolizer::Local,
@@ -372,11 +379,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 metadata_provider.clone(),
                 args.node_name.clone().unwrap_or_default(),
             )),
-            ProfileSender::Firefox => Box::new(FirefoxProfilerCollector::new(
-                "firefox-profiler.json",
-                args.sample_freq,
-                metadata_provider.clone(),
-            )),
         }));
 
     let mut p = Profiler::new(
@@ -392,10 +394,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // The senders below send the profiles directly.
     match args.sender {
-        ProfileSender::Remote
-        | ProfileSender::Pyroscope
-        | ProfileSender::Firefox
-        | ProfileSender::None => {
+        ProfileSender::Remote | ProfileSender::Pyroscope | ProfileSender::None => {
             return Ok(());
         }
         _ => {}
@@ -460,6 +459,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
         }
+        ProfileFormat::Firefox => {} // Handled separately, as a different collector
         ProfileFormat::None => {}
     }
 
@@ -564,7 +564,7 @@ mod tests {
                   Output file for Flame Graph in SVG format
                   
                   [default: flame-graph]
-                  [possible values: none, flame-graph, pprof]
+                  [possible values: none, flame-graph, firefox, pprof]
 
               --flamegraph-aggregation <FLAMEGRAPH_AGGREGATION>
                   What information to show in the flamegraph. Won't do anything for other profile formats
@@ -586,7 +586,6 @@ mod tests {
                   - local-disk
                   - remote
                   - pyroscope
-                  - firefox
                   
                   [default: local-disk]
 
