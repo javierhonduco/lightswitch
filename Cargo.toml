@@ -40,6 +40,7 @@ libbpf-rs-static = ["libbpf-rs/static"]
 plain = { workspace = true }
 clap = { version = "4.5.60", features = ["derive", "string"] }
 blazesym = { version = "0.2.3", features = ["zlib"] }
+addr2line = { version = "0.25.1", default-features = false, features = ["std", "cpp_demangle", "rustc-demangle"] }
 tracing-subscriber = "0.3.22"
 inferno = "0.12.6"
 primal = "0.3.3"
@@ -59,6 +60,7 @@ lightswitch-unwind-info = { path = "lightswitch-unwind-info", version = "0.0.0" 
 lightswitch-object = { workspace = true }
 memmap2 = { workspace = true }
 anyhow = { workspace = true }
+object = { workspace = true }
 libbpf-sys = { workspace = true }
 libbpf-rs = { workspace = true }
 tracing = { workspace = true }

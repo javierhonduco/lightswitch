@@ -344,6 +344,7 @@ impl SystemInfo {
 mod tests {
     use super::*;
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn test_get_system_info() {
         let result = SystemInfo::new(None);

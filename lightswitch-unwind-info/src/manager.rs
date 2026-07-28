@@ -191,6 +191,18 @@ mod tests {
     use super::*;
     use crate::compact_unwind_info;
 
+    fn unwind_info_test_path() -> PathBuf {
+        #[cfg(miri)]
+        {
+            PathBuf::from("../tests/testdata/main_cpp_clang_03_with_inlined_3s")
+        }
+
+        #[cfg(not(miri))]
+        {
+            PathBuf::from("/proc/self/exe")
+        }
+    }
+
     #[test]
     fn test_custom_usage_ordering() {
         let now = Instant::now();
@@ -214,19 +226,16 @@ mod tests {
 
     #[test]
     fn test_unwind_info_manager_unwind_info() {
-        let unwind_info = compact_unwind_info("/proc/self/exe", None).unwrap();
+        let executable_path = unwind_info_test_path();
+        let unwind_info = compact_unwind_info(&executable_path.to_string_lossy(), None).unwrap();
         let tmpdir = tempfile::TempDir::new().unwrap();
         let mut manager = UnwindInfoManager::new(tmpdir.path(), None);
 
         // The unwind info fetched with the manager should be correct
         // both when it's a cache miss and a cache hit.
         for _ in 0..2 {
-            let manager_unwind_info = manager.fetch_unwind_info(
-                &PathBuf::from("/proc/self/exe"),
-                ExecutableId(0xFABADA),
-                None,
-                true,
-            );
+            let manager_unwind_info =
+                manager.fetch_unwind_info(&executable_path, ExecutableId(0xFABADA), None, true);
             let manager_unwind_info = manager_unwind_info.unwrap();
             assert_eq!(unwind_info, manager_unwind_info);
         }
@@ -234,17 +243,14 @@ mod tests {
 
     #[test]
     fn test_unwind_info_manager_corrupt() {
-        let unwind_info = compact_unwind_info("/proc/self/exe", None).unwrap();
+        let executable_path = unwind_info_test_path();
+        let unwind_info = compact_unwind_info(&executable_path.to_string_lossy(), None).unwrap();
         let tmpdir = tempfile::TempDir::new().unwrap();
         let mut manager = UnwindInfoManager::new(tmpdir.path(), None);
 
         // Cache unwind info.
-        let manager_unwind_info = manager.fetch_unwind_info(
-            &PathBuf::from("/proc/self/exe"),
-            ExecutableId(0xFABADA),
-            None,
-            true,
-        );
+        let manager_unwind_info =
+            manager.fetch_unwind_info(&executable_path, ExecutableId(0xFABADA), None, true);
         assert!(manager_unwind_info.is_ok());
         let manager_unwind_info = manager_unwind_info.unwrap();
         assert_eq!(unwind_info, manager_unwind_info);
@@ -258,12 +264,8 @@ mod tests {
         file.write_all(&[0; 20]).unwrap();
 
         // Make sure the corrupted one gets replaced and things work.
-        let manager_unwind_info = manager.fetch_unwind_info(
-            &PathBuf::from("/proc/self/exe"),
-            ExecutableId(0xFABADA),
-            None,
-            true,
-        );
+        let manager_unwind_info =
+            manager.fetch_unwind_info(&executable_path, ExecutableId(0xFABADA), None, true);
         let manager_unwind_info = manager_unwind_info.unwrap();
         assert_eq!(unwind_info, manager_unwind_info);
     }

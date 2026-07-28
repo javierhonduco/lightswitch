@@ -8,7 +8,9 @@ version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b5d307320b3181d6d7954e663bd7c774a838b8220fe0593c86d9fb09f498b4b"
 dependencies = [
+ "cpp_demangle 0.4.5",
  "gimli 0.32.3",
+ "rustc-demangle",
 ]
 
 [[package]]
@@ -343,7 +345,7 @@ version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df2dad0db4ca8b915bed561903b289b3881ef809307f810b2250aa56bd537a42"
 dependencies = [
- "cpp_demangle",
+ "cpp_demangle 0.5.1",
  "crc32fast",
  "flate2",
  "gimli 0.33.1",
@@ -670,6 +672,15 @@ name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
+
+[[package]]
+name = "cpp_demangle"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2bb79cb74d735044c972aae58ed0aaa9a837e85b01106a54c39e42e97f62253"
+dependencies = [
+ "cfg-if",
+]
 
 [[package]]
 name = "cpp_demangle"
@@ -1090,6 +1101,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fallible-iterator"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
+
+[[package]]
 name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1337,6 +1354,10 @@ name = "gimli"
 version = "0.32.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
+dependencies = [
+ "fallible-iterator",
+ "stable_deref_trait",
+]
 
 [[package]]
 name = "gimli"
@@ -2136,6 +2157,7 @@ dependencies = [
 name = "lightswitch"
 version = "0.5.0"
 dependencies = [
+ "addr2line",
  "anyhow",
  "assert_cmd",
  "axum",
@@ -2164,6 +2186,7 @@ dependencies = [
  "lru 0.16.4",
  "memmap2",
  "nix",
+ "object 0.39.1",
  "parking_lot",
  "perf-event-open-sys",
  "plain",

@@ -1,4 +1,5 @@
 use mini_moka::sync::Cache;
+#[cfg(not(miri))]
 use procfs::process::Process;
 use std::time::Duration;
 use tracing::debug;
@@ -89,12 +90,26 @@ impl CidResolver {
 }
 
 // Takes a pid and checks procfs to find a container id.
+#[cfg(not(miri))]
 fn pid_to_container_id(pid: i32) -> Option<String> {
     let proc = Process::new(pid).ok()?;
     let cgroups = proc.cgroups().ok()?;
 
     for cg in cgroups {
         if let Some(container_id) = extract_container_id(&cg.pathname) {
+            return Some(container_id);
+        }
+    }
+    None
+}
+
+// Takes a pid and checks procfs to find a container id.
+#[cfg(miri)]
+fn pid_to_container_id(pid: i32) -> Option<String> {
+    let cgroups = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).ok()?;
+
+    for line in cgroups.lines() {
+        if let Some(container_id) = extract_container_id(line) {
             return Some(container_id);
         }
     }

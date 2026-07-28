@@ -162,6 +162,7 @@ impl Debug for BuildId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(miri))]
     use ring::digest::{Context, SHA256};
 
     #[test]
@@ -199,21 +200,24 @@ mod tests {
             "go-fake1234567"
         );
 
-        let mut context = Context::new(&SHA256);
-        context.update(&[0xbe, 0xef, 0xca, 0xfe]);
-        let digest = context.finish();
-        assert_eq!(
-            BuildId::sha256_from_digest(&digest).unwrap().to_string(),
-            "sha256-b80ad5b1508835ca2191ac800f4bb1a5ae1c3e47f13a8f5ed1b1593337ae5af5"
-        );
+        #[cfg(not(miri))]
+        {
+            let mut context = Context::new(&SHA256);
+            context.update(&[0xbe, 0xef, 0xca, 0xfe]);
+            let digest = context.finish();
+            assert_eq!(
+                BuildId::sha256_from_digest(&digest).unwrap().to_string(),
+                "sha256-b80ad5b1508835ca2191ac800f4bb1a5ae1c3e47f13a8f5ed1b1593337ae5af5"
+            );
 
-        assert_eq!(
-            BuildId::sha256_from_digest(&digest)
-                .unwrap()
-                .id()
-                .unwrap()
-                .0,
-            0xb80ad5b1508835ca
-        );
+            assert_eq!(
+                BuildId::sha256_from_digest(&digest)
+                    .unwrap()
+                    .id()
+                    .unwrap()
+                    .0,
+                0xb80ad5b1508835ca
+            );
+        }
     }
 }

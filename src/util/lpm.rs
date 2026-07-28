@@ -71,6 +71,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn longest_prefix_match_exhaustive_integration_tests() {
         let opts = libbpf_sys::bpf_map_create_opts {

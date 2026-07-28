@@ -101,10 +101,16 @@ pub fn kernel_build_id() -> Result<BuildId, anyhow::Error> {
 
 /// Finds the loaded kernel image virtual address range.
 pub fn kernel_addresses() -> Result<AddressRange, anyhow::Error> {
+    kernel_addresses_from_iter(KsymIter::from_kallsyms())
+}
+
+fn kernel_addresses_from_iter(
+    ksyms: impl IntoIterator<Item = crate::ksym::Ksym>,
+) -> Result<AddressRange, anyhow::Error> {
     let mut kernel_start_address = None;
     let mut kernel_end_address = None;
 
-    for ksym in KsymIter::from_kallsyms() {
+    for ksym in ksyms {
         if let (Some(start), Some(end)) = (kernel_start_address, kernel_end_address) {
             return Ok(AddressRange { start, end });
         }
@@ -135,16 +141,36 @@ mod tests {
 
     #[test]
     fn kernel_code_ranges() {
-        let kernel_code_ranges = get_all_kernel_modules();
-        assert!(kernel_code_ranges.is_ok());
-        let kernel_code_ranges = kernel_code_ranges.unwrap();
-        assert_eq!(
-            kernel_code_ranges
-                .iter()
-                .find(|el| el.name == "[vmlinux]")
-                .iter()
-                .len(),
-            1
-        );
+        #[cfg(miri)]
+        {
+            let address_range = kernel_addresses_from_iter([
+                crate::ksym::Ksym {
+                    start_addr: 0x1000,
+                    symbol_name: "_stext".into(),
+                },
+                crate::ksym::Ksym {
+                    start_addr: 0x2000,
+                    symbol_name: "_etext".into(),
+                },
+            ])
+            .unwrap();
+            assert_eq!(address_range.start, 0x1000);
+            assert_eq!(address_range.end, 0x2000);
+        }
+
+        #[cfg(not(miri))]
+        {
+            let kernel_code_ranges = get_all_kernel_modules();
+            assert!(kernel_code_ranges.is_ok());
+            let kernel_code_ranges = kernel_code_ranges.unwrap();
+            assert_eq!(
+                kernel_code_ranges
+                    .iter()
+                    .find(|el| el.name == "[vmlinux]")
+                    .iter()
+                    .len(),
+                1
+            );
+        }
     }
 }

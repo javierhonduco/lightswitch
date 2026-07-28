@@ -1,4 +1,6 @@
 use std::fs::File;
+#[cfg(miri)]
+use std::io::Read;
 
 use anyhow::Result;
 use gimli::{
@@ -6,6 +8,7 @@ use gimli::{
     Operation::{Deref, PlusConstant, RegisterOffset},
     UnwindContext, UnwindSection,
 };
+#[cfg(not(miri))]
 use memmap2::Mmap;
 use object::Architecture;
 use object::{Object, ObjectSection};
@@ -37,9 +40,27 @@ pub enum UnwindData {
 // Ideally this interface should do most of the preparatory work in the
 // constructor but this is complicated by the various lifetimes.
 pub struct CompactUnwindInfoBuilder<'a> {
-    mmap: Mmap,
+    data: InputData,
     callback: Box<dyn FnMut(&UnwindData) + 'a>,
     first_frame_override: Option<(u64, u64)>,
+}
+
+enum InputData {
+    #[cfg(not(miri))]
+    Mmap(Mmap),
+    #[cfg(miri)]
+    Bytes(Box<[u8]>),
+}
+
+impl AsRef<[u8]> for InputData {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            #[cfg(not(miri))]
+            InputData::Mmap(mmap) => mmap,
+            #[cfg(miri)]
+            InputData::Bytes(bytes) => bytes,
+        }
+    }
 }
 
 impl<'a> CompactUnwindInfoBuilder<'a> {
@@ -49,10 +70,20 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
         callback: impl FnMut(&UnwindData) + 'a,
     ) -> anyhow::Result<Self> {
         let in_file = File::open(path)?;
-        let mmap = unsafe { memmap2::Mmap::map(&in_file)? };
+
+        #[cfg(not(miri))]
+        let data = InputData::Mmap(unsafe { memmap2::Mmap::map(&in_file)? });
+
+        #[cfg(miri)]
+        let data = {
+            let mut bytes = Vec::new();
+            let mut in_file = in_file;
+            in_file.read_to_end(&mut bytes)?;
+            InputData::Bytes(bytes.into_boxed_slice())
+        };
 
         Ok(Self {
-            mmap,
+            data,
             callback: Box::new(callback),
             first_frame_override,
         })
@@ -61,7 +92,7 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
     pub fn process(mut self) -> Result<(), anyhow::Error> {
         let _span = span!(Level::DEBUG, "processing unwind info").entered();
 
-        let object_file = object::File::parse(&self.mmap[..])
+        let object_file = object::File::parse(self.data.as_ref())
             .map_err(|e| UnwindInfoError::ParsingObjectFile(e.to_string()))?;
 
         let eh_frame_section = object_file

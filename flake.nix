@@ -94,6 +94,7 @@
               (rust-toolchain.override {
                 extensions = [
                   "rust-src"
+                  "miri"
                   "rust-analyzer"
                 ];
               })

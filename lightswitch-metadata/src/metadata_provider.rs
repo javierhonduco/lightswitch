@@ -117,13 +117,20 @@ mod tests {
     use super::*;
     use crate::taskname::ThreadInfo;
     use crate::types::MetadataLabelValue;
+    #[cfg(not(miri))]
     use nix::unistd;
 
     #[test]
     fn test_get_metadata_returns_minimal_labels() {
         // Given
+        #[cfg(not(miri))]
         let tid = unistd::gettid().as_raw();
+        #[cfg(not(miri))]
         let pid = unistd::getpgrp().as_raw();
+        #[cfg(miri)]
+        let tid = std::process::id() as i32;
+        #[cfg(miri)]
+        let pid = std::process::id() as i32;
         let mut metadata_provider = GlobalMetadataProvider::default();
         let expected = ThreadInfo::for_task(tid).unwrap().comm;
 

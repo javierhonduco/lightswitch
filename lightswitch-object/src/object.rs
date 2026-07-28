@@ -1,9 +1,12 @@
 use std::fmt;
 use std::fs;
 use std::fs::File;
+#[cfg(miri)]
+use std::io::Read;
 use std::path::Path;
 
 use anyhow::{Result, anyhow};
+#[cfg(not(miri))]
 use memmap2::Mmap;
 use object::elf::ELF_NOTE_GO;
 use object::elf::NT_GO_BUILD_ID;
@@ -79,12 +82,27 @@ pub struct StopUnwindingFrames {
 
 #[derive(Debug)]
 pub struct ObjectFile {
-    /// Warning! `object` must always go above `mmap` to ensure it will be
-    /// dropped before. Rust guarantees that fields are dropped in the order
-    /// they are defined.
-    object: object::File<'static>, // Its lifetime is tied to the `mmap` below.
-    mmap: Box<Mmap>,
+    data: ObjectData,
     build_id: BuildId,
+}
+
+#[derive(Debug)]
+enum ObjectData {
+    #[cfg(not(miri))]
+    Mmap(Box<Mmap>),
+    #[cfg(miri)]
+    Bytes(Box<[u8]>),
+}
+
+impl AsRef<[u8]> for ObjectData {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            #[cfg(not(miri))]
+            ObjectData::Mmap(mmap) => mmap,
+            #[cfg(miri)]
+            ObjectData::Bytes(bytes) => bytes,
+        }
+    }
 }
 
 impl ObjectFile {
@@ -93,19 +111,21 @@ impl ObjectFile {
         // memcpying, so to ensure that the memory value is valid we store it in
         // the heap. Safety: Memory mapping files can cause issues if the file
         // is modified or unmapped.
-        let mmap = Box::new(unsafe { Mmap::map(file) }?);
-        let object = object::File::parse(&**mmap)?;
-        // Safety: The lifetime of `object` will outlive `mmap`'s. We ensure `mmap`
-        // lives as long as `object` by defining `object` before.
-        let object =
-            unsafe { std::mem::transmute::<object::File<'_>, object::File<'static>>(object) };
+        #[cfg(not(miri))]
+        let data = ObjectData::Mmap(Box::new(unsafe { Mmap::map(file) }?));
+
+        #[cfg(miri)]
+        let data = {
+            let mut bytes = Vec::new();
+            let mut file = file;
+            file.read_to_end(&mut bytes)?;
+            ObjectData::Bytes(bytes.into_boxed_slice())
+        };
+
+        let object = object::File::parse(data.as_ref())?;
         let build_id = Self::read_build_id(&object)?;
 
-        Ok(ObjectFile {
-            object,
-            mmap,
-            build_id,
-        })
+        Ok(ObjectFile { data, build_id })
     }
 
     pub fn from_path(path: &Path) -> Result<Self> {
@@ -126,7 +146,7 @@ impl ObjectFile {
 
     /// Returns the executable build ID if present. If no GNU build ID and no Go
     /// build ID are found it returns the hash of the text section.
-    pub fn read_build_id(object: &object::File<'static>) -> Result<BuildId> {
+    pub fn read_build_id(object: &object::File<'_>) -> Result<BuildId> {
         let gnu_build_id = object.build_id()?;
 
         if let Some(data) = gnu_build_id {
@@ -148,11 +168,15 @@ impl ObjectFile {
 
     /// Returns whether the object has debug symbols.
     pub fn has_debug_info(&self) -> bool {
-        self.object.has_debug_symbols()
+        self.object().has_debug_symbols()
     }
 
     pub fn is_dynamic(&self) -> bool {
-        self.object.kind() == ObjectKind::Dynamic
+        self.object().kind() == ObjectKind::Dynamic
+    }
+
+    fn object(&self) -> object::File<'_> {
+        object::File::parse(self.data.as_ref()).expect("object file was parsed during construction")
     }
 
     pub fn runtime(&self) -> Runtime {
@@ -162,7 +186,7 @@ impl ObjectFile {
             let mut is_zig = false;
             let mut zig_first_frame = None;
 
-            for symbol in self.object.symbols() {
+            for symbol in self.object().symbols() {
                 let Ok(name) = symbol.name_bytes() else {
                     continue;
                 };
@@ -190,7 +214,7 @@ impl ObjectFile {
     }
 
     pub fn is_go(&self) -> bool {
-        for section in self.object.sections() {
+        for section in self.object().sections() {
             if let Ok(section_name) = section.name_bytes()
                 && (section_name == b".gosymtab"
                     || section_name == b".gopclntab"
@@ -205,7 +229,7 @@ impl ObjectFile {
     pub fn go_stop_unwinding_frames(&self) -> Vec<StopUnwindingFrames> {
         let mut r = Vec::new();
 
-        for symbol in self.object.symbols() {
+        for symbol in self.object().symbols() {
             let Ok(name) = symbol.name_bytes() else {
                 continue;
             };
@@ -234,13 +258,13 @@ impl ObjectFile {
     /// virtual addresses to offsets in an executable during unwinding
     /// and symbolization.
     pub fn elf_load_segments(&self) -> Result<Vec<ElfLoad>> {
-        let mmap = &**self.mmap;
+        let data = self.data.as_ref();
 
-        match FileKind::parse(mmap) {
+        match FileKind::parse(data) {
             Ok(FileKind::Elf32) => {
-                let header: &FileHeader32<Endianness> = FileHeader32::<Endianness>::parse(mmap)?;
+                let header: &FileHeader32<Endianness> = FileHeader32::<Endianness>::parse(data)?;
                 let endian = header.endian()?;
-                let segments = header.program_headers(endian, mmap)?;
+                let segments = header.program_headers(endian, data)?;
 
                 let mut elf_loads = Vec::new();
                 for segment in segments {
@@ -256,9 +280,9 @@ impl ObjectFile {
                 Ok(elf_loads)
             }
             Ok(FileKind::Elf64) => {
-                let header: &FileHeader64<Endianness> = FileHeader64::<Endianness>::parse(mmap)?;
+                let header: &FileHeader64<Endianness> = FileHeader64::<Endianness>::parse(data)?;
                 let endian = header.endian()?;
-                let segments = header.program_headers(endian, mmap)?;
+                let segments = header.program_headers(endian, data)?;
 
                 let mut elf_loads = Vec::new();
                 for segment in segments {
@@ -305,7 +329,7 @@ fn sha256_digest(data: &[u8]) -> Digest {
 }
 
 /// Read a GO build id (`.note.go.buildid`), if present
-fn go_build_id<'object>(object: &'object object::File<'static>) -> Result<Option<&'object [u8]>> {
+fn go_build_id<'object>(object: &'object object::File<'_>) -> Result<Option<&'object [u8]>> {
     for section in object.sections() {
         if section.name_bytes()? == b".note.go.buildid"
             && let Ok(data) = section.data()

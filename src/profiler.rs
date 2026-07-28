@@ -1549,6 +1549,7 @@ mod tests {
 
     use crate::{bpf::profiler_skel::ProfilerMaps, profiler::*};
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn test_bpf_cleanup() {
         // Helper function to make code more succinct.

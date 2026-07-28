@@ -77,6 +77,16 @@ mod tests {
 
     #[test]
     fn hosts_symbols_can_be_parsed() {
+        #[cfg(miri)]
+        {
+            let file = Cursor::new(
+                b"ffffffffa2000000 T _stext
+ffffffffa2000f00 D _etext",
+            );
+            assert_eq!(KsymIter::new(file).collect::<Vec<_>>().len(), 2);
+        }
+
+        #[cfg(not(miri))]
         // This test assumes that procfs is mounted. Just checking that we can
         // read _some_ symbols.
         assert!(KsymIter::from_kallsyms().collect::<Vec<_>>().len() >= 10);

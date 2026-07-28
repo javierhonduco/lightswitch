@@ -669,6 +669,7 @@ mod tests {
 
     use crate::profiler::ProfilerConfig;
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn test_bpf_mappings_creation_and_deletion() {
         let profiler_config = ProfilerConfig {

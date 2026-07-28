@@ -1,3 +1,4 @@
+#[cfg(not(miri))]
 use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
@@ -6,6 +7,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use plain::Plain;
+#[cfg(not(miri))]
 use ring::digest::{Context, SHA256};
 use thiserror::Error;
 
@@ -20,6 +22,47 @@ const VERSION: u32 = 4;
 const MAX_UNWIND_ENTRIES: u64 = 10_000_000;
 
 type UnwindInformationDigest = u64;
+
+#[cfg(not(miri))]
+struct DigestContext(Context);
+
+#[cfg(not(miri))]
+impl DigestContext {
+    fn new() -> Self {
+        Self(Context::new(&SHA256))
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        self.0.update(data);
+    }
+
+    fn finish(self) -> Result<UnwindInformationDigest, std::io::Error> {
+        let mut buffer = [0; 8];
+        let _ = self.0.finish().as_ref().read(&mut buffer)?;
+        Ok(u64::from_ne_bytes(buffer))
+    }
+}
+
+#[cfg(miri)]
+struct DigestContext(u64);
+
+#[cfg(miri)]
+impl DigestContext {
+    fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        for byte in data {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    fn finish(self) -> Result<UnwindInformationDigest, std::io::Error> {
+        Ok(self.0)
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum WriterError {
@@ -112,7 +155,7 @@ impl Writer {
         writer: &mut impl Write,
         unwind_info: &[CompactUnwindRow],
     ) -> Result<UnwindInformationDigest, WriterError> {
-        let mut context = Context::new(&SHA256);
+        let mut context = DigestContext::new();
 
         for unwind_row in unwind_info {
             let unwind_row_data = unsafe { plain::as_bytes(unwind_row) };
@@ -120,10 +163,7 @@ impl Writer {
             writer.write_all(unwind_row_data)?;
         }
 
-        let mut buffer = [0; 8];
-        let _ = context.finish().as_ref().read(&mut buffer)?;
-
-        Ok(u64::from_ne_bytes(buffer))
+        Ok(context.finish()?)
     }
 }
 
@@ -199,7 +239,7 @@ impl<'a> Reader<'a> {
         let mut unwind_row_wire = CompactUnwindRowWire::default();
 
         let unwind_info_data = &self.data[header_size..];
-        let mut context = Context::new(&SHA256);
+        let mut context = DigestContext::new();
         for i in 0..unwind_info_len {
             let step = i * unwind_row_size;
             let unwind_row_data = unwind_info_data
@@ -218,13 +258,9 @@ impl<'a> Reader<'a> {
         }
 
         if self.check_digest {
-            let mut buffer = [0; 8];
-            let _ = context
+            let digest = context
                 .finish()
-                .as_ref()
-                .read(&mut buffer)
-                .map_err(|e| ReaderError::Generic(e.to_string()));
-            let digest = u64::from_ne_bytes(buffer);
+                .map_err(|e| ReaderError::Generic(e.to_string()))?;
 
             if self.header.unwind_info_digest != digest {
                 return Err(ReaderError::Digest);
@@ -242,10 +278,22 @@ mod tests {
 
     use super::*;
 
+    fn unwind_info_test_path() -> PathBuf {
+        #[cfg(miri)]
+        {
+            PathBuf::from("../tests/testdata/main_cpp_clang_03_with_inlined_3s")
+        }
+
+        #[cfg(not(miri))]
+        {
+            PathBuf::from("/proc/self/exe")
+        }
+    }
+
     #[test]
     fn test_write_and_read_unwind_info() {
         let mut buffer = Cursor::new(Vec::new());
-        let path = PathBuf::from("/proc/self/exe");
+        let path = unwind_info_test_path();
         let writer = Writer::new(&path, None);
         assert!(writer.write(&mut buffer).is_ok());
 
@@ -255,7 +303,7 @@ mod tests {
         let unwind_info = unwind_info.unwrap();
         assert_eq!(
             unwind_info,
-            compact_unwind_info("/proc/self/exe", None).unwrap()
+            compact_unwind_info(&path.to_string_lossy(), None).unwrap()
         );
     }
 
@@ -313,7 +361,7 @@ mod tests {
     #[test]
     fn test_corrupt_unwind_info() {
         let mut buffer: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-        let path = PathBuf::from("/proc/self/exe");
+        let path = unwind_info_test_path();
         let writer = Writer::new(&path, None);
         assert!(writer.write(&mut buffer).is_ok());
 
