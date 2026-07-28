@@ -35,6 +35,9 @@ lru = "0.16.3"
 [features]
 default = ["libbpf-rs-static"]
 libbpf-rs-static = ["libbpf-rs/static"]
+kubernetes = ["lightswitch-metadata/kubernetes", "rustls/aws_lc_rs"]
+live-tui = ["dep:flamelens"]
+deadlock-detector = ["parking_lot/deadlock_detection"]
 
 [dependencies]
 gimli = "0.34.0"
@@ -68,10 +71,10 @@ perf-event-open-sys = { workspace = true }
 thiserror = { workspace = true }
 procfs = { workspace = true }
 nix = { workspace = true, features = ["user"] }
-parking_lot = { version = "0.12.5", features = ["deadlock_detection"] }
+parking_lot = "0.12.5"
 ring = { workspace = true }
-rustls = { version = "0.23", default-features = false, features = ["ring", "aws_lc_rs"] }
-flamelens = { version = "0.4.0", default-features = false }
+rustls = { version = "0.23", default-features = false, optional = true }
+flamelens = { version = "0.4.0", default-features = false, optional = true }
 lru = { workspace = true }
 fxprof-processed-profile = "0.8.1"
 serde_json = "1.0.150"
@@ -99,6 +102,9 @@ opt-level = 3
 inherits = "release"
 lto = true
 codegen-units = 1
+opt-level = "z"
+panic = "abort"
+strip = "symbols"
 
 [[bench]]
 name = "benchmark"

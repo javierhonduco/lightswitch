@@ -71,10 +71,38 @@
               cargoArtifacts = craneLib.buildDepsOnly commonArgs;
             }
           );
+          nixos-vmtest = import ./nixos-vmtest.nix {
+            inherit pkgs lightswitch;
+          };
+          nixos-vmtest-no-kvm = import ./nixos-vmtest.nix {
+            inherit pkgs lightswitch;
+            requireKvm = false;
+            enableKasan = true;
+            enableExtraAssertions = true;
+          };
+          nixos-vmtest-kasan-assertions = import ./nixos-vmtest.nix {
+            inherit pkgs lightswitch;
+            enableKasan = true;
+            enableExtraAssertions = true;
+          };
+          mkNixosVmtestRunner =
+            name: test:
+            pkgs.writeShellApplication {
+              inherit name;
+              text = ''
+                echo "NixOS VM test succeeded: ${test}"
+              '';
+            };
         in
         with pkgs;
         {
           formatter = pkgs.nixpkgs-fmt;
+          checks = {
+            nixos-vmtest = nixos-vmtest.test;
+            nixos-vmtest-no-kvm = nixos-vmtest-no-kvm.test;
+            nixos-vmtest-kasan-assertions = nixos-vmtest-kasan-assertions.test;
+            kasan-assertions-kernel-config = nixos-vmtest-kasan-assertions.kernel.configfile;
+          };
           packages = {
             default = lightswitch;
             container = pkgs.dockerTools.buildLayeredImage {
@@ -87,6 +115,13 @@
               };
             };
             vmtest = (import ./vm.nix { inherit pkgs; }).run-vmtest lightswitch;
+            nixos-vmtest = mkNixosVmtestRunner "nixos-vmtest" nixos-vmtest.test;
+            nixos-vmtest-no-kvm = mkNixosVmtestRunner "nixos-vmtest-no-kvm" nixos-vmtest-no-kvm.test;
+            nixos-vmtest-kasan-assertions = mkNixosVmtestRunner "nixos-vmtest-kasan-assertions" nixos-vmtest-kasan-assertions.test;
+            nixos-vmtest-driver = nixos-vmtest.test.driver;
+            nixos-vmtest-no-kvm-driver = nixos-vmtest-no-kvm.test.driver;
+            nixos-vmtest-kasan-assertions-driver = nixos-vmtest-kasan-assertions.test.driver;
+            kasan-assertions-kernel = nixos-vmtest-kasan-assertions.kernel;
             integration-tests-progs = integration-tests-progs.all-progs;
           };
           devShells.default = mkShell {

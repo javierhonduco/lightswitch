@@ -158,6 +158,7 @@ pub(crate) struct CliArgs {
     )]
     pub(crate) max_native_unwind_info_size_mb: i32,
     #[arg(long, help = "enable parking_lot's deadlock detector")]
+    #[cfg(feature = "deadlock-detector")]
     pub(crate) enable_deadlock_detector: bool,
     #[arg(long, default_value = ProfilerConfig::default().cache_dir_base.into_os_string())]
     pub(crate) cache_dir_base: PathBuf,
@@ -186,17 +187,20 @@ pub(crate) struct CliArgs {
     )]
     pub(crate) preload_thread_metadata: bool,
     #[arg(long, help = "Launch live flamegraph TUI")]
+    #[cfg(feature = "live-tui")]
     pub(crate) live: bool,
     #[arg(
         long,
         help = "Enable Kubernetes pod-level profiling",
         requires = "node_name"
     )]
+    #[cfg(feature = "kubernetes")]
     pub(crate) kubernetes: bool,
     #[arg(
         long,
         help = "Node name for Kubernetes metadata (required with --kubernetes)"
     )]
+    #[cfg(feature = "kubernetes")]
     pub(crate) node_name: Option<String>,
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
