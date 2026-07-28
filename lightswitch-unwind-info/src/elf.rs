@@ -57,7 +57,7 @@ where
     let header = headers
         .iter()
         .find(|header| header.p_type(endian) == PT_GNU_EH_FRAME)
-        .ok_or(UnwindInfoError::NoEhFrameSection)?;
+        .ok_or(UnwindInfoError::NoEhFrameHeader)?;
     let header_address = header.p_vaddr(endian).into();
     let header_data = header
         .data(endian, file_data)

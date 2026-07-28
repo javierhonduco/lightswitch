@@ -19,8 +19,10 @@ use crate::types::*;
 
 #[derive(Debug, Error)]
 pub enum UnwindInfoError {
-    #[error("no .eh_frame section or PT_GNU_EH_FRAME program header found")]
+    #[error("no .eh_frame section found")]
     NoEhFrameSection,
+    #[error("no PT_GNU_EH_FRAME program header found")]
+    NoEhFrameHeader,
     #[error("object file could not be parsed due to {0}")]
     ParsingObjectFile(String),
     #[error("no .text section found")]
