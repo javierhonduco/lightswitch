@@ -153,6 +153,7 @@ fn test_integration() {
     let cpp_proc = TestProcess::new("main_cpp_clang_O1", false);
     let cpp_proc_new_pid_ns = TestProcess::new("main_cpp_clang_O2", true);
     let cpp_proc_fp = TestProcess::new("main_cpp_clang_no_omit_fp_O3", true);
+    let large_stack_frame_proc = TestProcess::new("large_stack_frame", false);
     let go_proc = TestProcess::new("main_go", false);
     let go_static_proc = TestProcess::new("main_go_static", false);
     let go_stripped_proc = TestProcess::new("main_go_stripped", false);
@@ -177,6 +178,7 @@ fn test_integration() {
     p.profile_pids(vec![cpp_proc.pid()]);
     p.profile_pids(vec![cpp_proc_new_pid_ns.pid()]);
     p.profile_pids(vec![cpp_proc_fp.pid()]);
+    p.profile_pids(vec![large_stack_frame_proc.pid()]);
     p.profile_pids(vec![go_proc.pid()]);
     p.profile_pids(vec![go_static_proc.pid()]);
     p.profile_pids(vec![go_stripped_proc.pid()]);
@@ -223,6 +225,18 @@ fn test_integration() {
         ],
         cpp_proc_fp.pid(),
     ));
+
+    let observed_stacks = stack_strings_for_pid(&symbolized_profile, large_stack_frame_proc.pid());
+    assert!(
+        assert_any_stack_contains(
+            &symbolized_profile,
+            &["large_stack_frame", "main"],
+            large_stack_frame_proc.pid(),
+        ),
+        "expected a stack containing large_stack_frame -> main, observed:\n{}",
+        observed_stacks.join("\n"),
+    );
+
     assert!(assert_any_stack_contains(
         &symbolized_profile,
         &[

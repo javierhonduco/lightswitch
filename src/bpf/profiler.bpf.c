@@ -398,7 +398,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
         u64 found_pc = object_relative_pc_high + row->pc_low;
         u8 found_cfa_type = row->cfa_type;
         u8 found_rbp_type = row->rbp_type;
-        s16 found_cfa_offset = row->cfa_offset;
+        u16 found_cfa_offset = row->cfa_offset;
         s16 found_rbp_offset = row->rbp_offset;
         LOG("\tcfa type: %d, offset: %d (row pc: %llx)", found_cfa_type,
             found_cfa_offset, found_pc);
