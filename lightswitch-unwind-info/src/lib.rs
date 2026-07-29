@@ -1,4 +1,5 @@
 mod convert;
+mod elf;
 pub mod manager;
 mod optimize;
 pub mod pages;

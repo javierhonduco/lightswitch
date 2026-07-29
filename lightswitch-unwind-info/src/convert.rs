@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fs::File;
 
 use anyhow::Result;
@@ -20,12 +21,42 @@ use crate::types::*;
 pub enum UnwindInfoError {
     #[error("no .eh_frame section found")]
     NoEhFrameSection,
+    #[error("no PT_GNU_EH_FRAME program header found")]
+    NoEhFrameHeader,
     #[error("object file could not be parsed due to {0}")]
     ParsingObjectFile(String),
     #[error("no .text section found")]
     NoTextSection,
     #[error("no functions found in .eh_frame data")]
     NoFunctionsFoundInEhFrameData,
+    #[error("could not resolve unwind information from ELF program headers: {0}")]
+    InvalidEhFrameProgramHeader(String),
+}
+
+pub(crate) struct ResolvedUnwindInfo<'data> {
+    pub(crate) data: Cow<'data, [u8]>,
+    pub(crate) eh_frame_address: u64,
+    pub(crate) text_address: u64,
+}
+
+fn resolve_unwind_info<'data>(
+    object_file: &object::File<'data>,
+    data: &'data [u8],
+    runtime_endian: gimli::RunTimeEndian,
+) -> Result<ResolvedUnwindInfo<'data>> {
+    // Prefer sections when present: they provide exact addresses and bounds.
+    if let Some(eh_frame_section) = object_file.section_by_name(".eh_frame") {
+        let text = object_file
+            .section_by_name(".text")
+            .ok_or(UnwindInfoError::NoTextSection)?;
+        return Ok(ResolvedUnwindInfo {
+            data: eh_frame_section.uncompressed_data()?,
+            eh_frame_address: eh_frame_section.address(),
+            text_address: text.address(),
+        });
+    }
+
+    crate::elf::unwind_info(object_file, data, runtime_endian)
 }
 
 pub enum UnwindData {
@@ -64,27 +95,18 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
         let object_file = object::File::parse(&self.mmap[..])
             .map_err(|e| UnwindInfoError::ParsingObjectFile(e.to_string()))?;
 
-        let eh_frame_section = object_file
-            .section_by_name(".eh_frame")
-            .ok_or(UnwindInfoError::NoEhFrameSection)?;
-
-        let text = object_file
-            .section_by_name(".text")
-            .ok_or(UnwindInfoError::NoTextSection)?;
-
-        let bases = gimli::BaseAddresses::default()
-            .set_eh_frame(eh_frame_section.address())
-            .set_text(text.address());
-
         let endian = if object_file.is_little_endian() {
             gimli::RunTimeEndian::Little
         } else {
             gimli::RunTimeEndian::Big
         };
 
-        let eh_frame_data = &eh_frame_section.uncompressed_data()?;
+        let unwind_info = resolve_unwind_info(&object_file, &self.mmap, endian)?;
+        let bases = gimli::BaseAddresses::default()
+            .set_eh_frame(unwind_info.eh_frame_address)
+            .set_text(unwind_info.text_address);
 
-        let mut eh_frame = EhFrame::new(eh_frame_data, endian);
+        let mut eh_frame = EhFrame::new(&unwind_info.data, endian);
         if object_file.architecture() == Architecture::Aarch64 {
             eh_frame.set_vendor(gimli::Vendor::AArch64);
         }
@@ -364,4 +386,22 @@ pub fn compact_unwind_info(
     );
 
     Ok(unwind_info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_unwind_info_from_program_headers() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/testdata/sectionless-elf-x86_64"
+        );
+
+        let unwind_info = compact_unwind_info(path, None).unwrap();
+
+        assert!(!unwind_info.is_empty());
+        assert!(unwind_info.iter().any(|row| row.pc == 0x40_0360));
+    }
 }

@@ -141,7 +141,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             return Ok(());
         }
         Some(Commands::ShowUnwind { path }) => {
-            show_unwind_info(&path);
+            show_unwind_info(&path)?;
             return Ok(());
         }
         Some(Commands::SystemInfo) => {
@@ -466,8 +466,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn show_unwind_info(path: &str) {
-    let unwind_info = compact_unwind_info(path, None).unwrap();
+fn show_unwind_info(path: &str) -> Result<(), Box<dyn Error>> {
+    let unwind_info = compact_unwind_info(path, None)?;
     for compact_row in unwind_info {
         let pc = compact_row.pc;
         let cfa_type = compact_row.cfa_type;
@@ -479,6 +479,7 @@ fn show_unwind_info(path: &str) {
             pc, cfa_type as u8, rbp_type as u8, cfa_offset, rbp_offset
         );
     }
+    Ok(())
 }
 
 fn show_object_file_info(path: &str) {
@@ -511,6 +512,13 @@ mod tests {
     fn verify_cli() {
         use clap::CommandFactory;
         CliArgs::command().debug_assert()
+    }
+
+    #[test]
+    fn show_unwind_propagates_errors() {
+        let error = show_unwind_info("/path/that/does/not/exist").unwrap_err();
+
+        assert!(error.to_string().contains("No such file or directory"));
     }
 
     #[test]
