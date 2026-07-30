@@ -61,6 +61,7 @@ use lightswitch_metadata::metadata_provider::{
 use lightswitch_metadata::types::TaskKey;
 use lightswitch_object::{ExecutableId, ObjectFile, Runtime};
 use lightswitch_unwind_info::manager::UnwindInfoManager;
+use lightswitch_unwind_info::manager::UnwindInfoResult;
 use lightswitch_unwind_info::types::CompactUnwindRow;
 
 const MAX_UNWIND_INFO_SIZE: usize = 7_000_000;
@@ -872,7 +873,7 @@ impl Profiler {
         let runtime = executable_info.runtime.clone();
         std::mem::drop(object_files);
 
-        let unwind_info = match runtime {
+        let unwind_info_reader = match runtime {
             Runtime::Go(stop_frames) => {
                 if stop_frames.is_empty() {
                     self.afflicted_processes.put(pid, ());
@@ -909,7 +910,7 @@ impl Profiler {
                 }
 
                 unwind_info.sort_by_key(|e| e.pc);
-                Ok(unwind_info)
+                Ok(UnwindInfoResult::Vec { vec: unwind_info })
             }
             Runtime::Zig {
                 start_low_address,
@@ -923,20 +924,21 @@ impl Profiler {
                     executable_path.display()
                 )
                 .entered();
-                self.unwind_info_manager.fetch_unwind_info(
+                self.unwind_info_manager.unwind_info_reader(
                     &opened_exe_path,
                     executable_id,
                     Some((start_low_address, start_high_address)),
-                    false,
                 )
             }
             Runtime::CLike => {
                 if needs_synthesis {
                     debug!("synthetising arm64 unwind information using frame pointers for vDSO");
-                    Ok(vec![
-                        CompactUnwindRow::frame_pointer(start_address, is_arm64),
-                        CompactUnwindRow::stop_unwinding(end_address),
-                    ])
+                    Ok(UnwindInfoResult::Vec {
+                        vec: vec![
+                            CompactUnwindRow::frame_pointer(start_address, is_arm64),
+                            CompactUnwindRow::stop_unwinding(end_address),
+                        ],
+                    })
                 } else {
                     let _span = span!(
                         Level::DEBUG,
@@ -946,18 +948,32 @@ impl Profiler {
                         executable_path.display()
                     )
                     .entered();
-                    self.unwind_info_manager.fetch_unwind_info(
+                    self.unwind_info_manager.unwind_info_reader(
                         &opened_exe_path,
                         executable_id,
                         None,
-                        false,
                     )
                 }
             }
         };
 
-        let unwind_info = match unwind_info {
-            Ok(unwind_info) => unwind_info,
+        let unwind_info_reader = match unwind_info_reader {
+            Ok(unwind_info_reader) => unwind_info_reader,
+            Err(e) => {
+                return Err(AddUnwindInformationError::Generic(
+                    format!("{:?}", e),
+                    format!(
+                        "{} aka {}",
+                        opened_exe_path.display(),
+                        executable_path.display()
+                    ),
+                ));
+            }
+        };
+
+        // TODO reduce duplication here
+        let unwind_info = match unwind_info_reader.unwind_info(false) {
+            Ok(unwind_info_reader) => unwind_info_reader,
             Err(e) => {
                 return Err(AddUnwindInformationError::Generic(
                     format!("{:?}", e),
