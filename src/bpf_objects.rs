@@ -632,11 +632,6 @@ impl Bpf {
                 .tracked_allocations
                 .set_map_flags(libbpf_sys::BPF_F_NO_PREALLOC)
                 .expect("set tracked_allocations NO_PREALLOC");
-            open_skel
-                .maps
-                .allocation_sizes
-                .set_map_flags(libbpf_sys::BPF_F_NO_PREALLOC)
-                .expect("set allocation_sizes NO_PREALLOC");
         }
     }
 

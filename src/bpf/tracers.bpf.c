@@ -24,6 +24,7 @@ typedef struct {
 
 typedef struct {
     int pid;
+    u64 process_start_time;
     u64 address;
 } allocation_key_t;
 
@@ -79,7 +80,7 @@ struct {
 } tracked_allocations SEC(".maps");
 
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, MAX_TRACKED_ALLOCATIONS);
     __type(key, allocation_key_t);
     __type(value, allocation_value_t);
@@ -156,6 +157,7 @@ static __always_inline bool init_tracer_event(tracer_event_t *event, u32 type) {
     unsigned int level = lightswitch_config.userspace_pid_ns_level;
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
     int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
+    u64 process_start_time = BPF_CORE_READ(task, group_leader, start_time);
 
     if (per_process_id == 0) {
         return false;
@@ -165,6 +167,7 @@ static __always_inline bool init_tracer_event(tracer_event_t *event, u32 type) {
     event->pid = per_process_id;
     event->tid = per_thread_id;
     event->collected_at = bpf_ktime_get_boot_ns();
+    event->process_start_time = process_start_time;
     event->start_address = 0;
     event->end_address = 0;
     event->allocation_address = 0;
@@ -232,13 +235,15 @@ static __always_inline bool range_end(u64 start, u64 len, u64 *end) {
     return true;
 }
 
-static __always_inline void remember_allocation(int pid, u64 address, u64 size) {
+static __always_inline void remember_allocation(int pid, u64 process_start_time,
+                                                u64 address, u64 size) {
     if (address == 0 || size == 0 || !size_fits_i64(size)) {
         return;
     }
 
     allocation_key_t key = {
         .pid = pid,
+        .process_start_time = process_start_time,
         .address = address,
     };
     allocation_value_t value = {
@@ -247,13 +252,15 @@ static __always_inline void remember_allocation(int pid, u64 address, u64 size) 
     bpf_map_update_elem(&allocation_sizes, &key, &value, BPF_ANY);
 }
 
-static __always_inline u64 forget_allocation(int pid, u64 address) {
+static __always_inline u64 forget_allocation(int pid, u64 process_start_time,
+                                             u64 address) {
     if (address == 0) {
         return 0;
     }
 
     allocation_key_t key = {
         .pid = pid,
+        .process_start_time = process_start_time,
         .address = address,
     };
     allocation_value_t *value = bpf_map_lookup_elem(&allocation_sizes, &key);
@@ -281,7 +288,7 @@ static __always_inline void emit_allocation_event(void *ctx, tracer_event_t *eve
 static __always_inline void emit_tracked_allocation(void *ctx, tracer_event_t *event,
                                                     u64 address, u64 size) {
     emit_allocation_event(ctx, event, address, size);
-    remember_allocation(event->pid, address, size);
+    remember_allocation(event->pid, event->process_start_time, address, size);
 }
 
 static __always_inline void emit_deallocation(void *ctx, tracer_event_t *event,
@@ -333,7 +340,8 @@ static __always_inline int complete_pending_allocation(struct pt_regs *ctx, u64 
     }
 
     if (event->old_address != 0 && (address != 0 || event->requested_size == 0)) {
-        u64 old_size = forget_allocation(event->pid, event->old_address);
+        u64 old_size = forget_allocation(event->pid, event->process_start_time,
+                                         event->old_address);
         emit_deallocation(ctx, event, event->old_address, old_size);
     }
 
@@ -633,7 +641,7 @@ static __always_inline int memory_enter_free_impl(struct pt_regs *ctx) {
         return 0;
     }
 
-    u64 size = forget_allocation(event->pid, address);
+    u64 size = forget_allocation(event->pid, event->process_start_time, address);
     if (size == 0) {
         return 0;
     }

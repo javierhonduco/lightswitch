@@ -21,6 +21,7 @@ typedef struct {
     int tid;
     u32 flags;
     u64 collected_at;
+    u64 process_start_time;
     u64 start_address;
     u64 end_address;
     u64 allocation_address;
