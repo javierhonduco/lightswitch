@@ -154,7 +154,6 @@ impl Bpf {
                 &allocator_library,
                 &available_symbols,
                 &["malloc", "valloc", "pvalloc"],
-                &self.tracers.progs.memory_enter_malloc_multi,
                 &self.tracers.progs.memory_enter_malloc,
                 false,
             );
@@ -177,7 +176,6 @@ impl Bpf {
                 &allocator_library,
                 &available_symbols,
                 &["aligned_alloc", "memalign"],
-                &self.tracers.progs.memory_enter_aligned_alloc_multi,
                 &self.tracers.progs.memory_enter_aligned_alloc,
                 false,
             );
@@ -194,7 +192,6 @@ impl Bpf {
                     "valloc",
                     "pvalloc",
                 ],
-                &self.tracers.progs.memory_exit_malloc_multi,
                 &self.tracers.progs.memory_exit_malloc,
                 true,
             );
@@ -217,7 +214,6 @@ impl Bpf {
                 &allocator_library,
                 &available_symbols,
                 &["free", "cfree"],
-                &self.tracers.progs.memory_enter_free_multi,
                 &self.tracers.progs.memory_enter_free,
                 false,
             );
@@ -235,14 +231,13 @@ impl Bpf {
         path: &Path,
         available_symbols: &Option<HashSet<String>>,
         symbols: &[&str],
-        multi_prog: &ProgramMut<'_>,
-        fallback_prog: &ProgramMut<'_>,
+        prog: &ProgramMut<'_>,
         retprobe: bool,
     ) {
         let symbols = Self::filter_available_symbols(available_symbols, symbols);
         if symbols.len() <= 1 {
             for symbol in symbols {
-                Self::attach_optional_uprobe(links, path, symbol, fallback_prog, retprobe);
+                Self::attach_optional_uprobe(links, path, symbol, prog, retprobe);
             }
             return;
         }
@@ -253,7 +248,7 @@ impl Bpf {
             ..UprobeMultiOpts::default()
         };
 
-        match multi_prog.attach_uprobe_multi_with_opts(-1, path, "", opts) {
+        match prog.attach_uprobe_multi_with_opts(-1, path, "", opts) {
             Ok(link) => links.push(link),
             Err(e) => {
                 debug!(
@@ -264,7 +259,7 @@ impl Bpf {
                     e
                 );
                 for symbol in symbols {
-                    Self::attach_optional_uprobe(links, path, symbol, fallback_prog, retprobe);
+                    Self::attach_optional_uprobe(links, path, symbol, prog, retprobe);
                 }
             }
         }
@@ -335,6 +330,9 @@ impl Bpf {
 
         let mut symbols = HashSet::new();
         for symbol in file.dynamic_symbols().chain(file.symbols()) {
+            if !symbol.is_definition() {
+                continue;
+            }
             let Ok(name) = symbol.name() else {
                 continue;
             };
@@ -644,15 +642,7 @@ impl Bpf {
 
     fn disable_memory_uprobe_autoattach(open_skel: &mut OpenTracersSkel) {
         open_skel.progs.memory_enter_malloc.set_autoattach(false);
-        open_skel
-            .progs
-            .memory_enter_malloc_multi
-            .set_autoattach(false);
         open_skel.progs.memory_exit_malloc.set_autoattach(false);
-        open_skel
-            .progs
-            .memory_exit_malloc_multi
-            .set_autoattach(false);
         open_skel.progs.memory_enter_calloc.set_autoattach(false);
         open_skel.progs.memory_exit_calloc.set_autoattach(false);
         open_skel.progs.memory_enter_realloc.set_autoattach(false);
@@ -660,10 +650,6 @@ impl Bpf {
         open_skel
             .progs
             .memory_enter_aligned_alloc
-            .set_autoattach(false);
-        open_skel
-            .progs
-            .memory_enter_aligned_alloc_multi
             .set_autoattach(false);
         open_skel
             .progs
@@ -678,10 +664,6 @@ impl Bpf {
             .memory_exit_posix_memalign
             .set_autoattach(false);
         open_skel.progs.memory_enter_free.set_autoattach(false);
-        open_skel
-            .progs
-            .memory_enter_free_multi
-            .set_autoattach(false);
     }
 
     pub fn show_actual_profiler_map_sizes(bpf: &ProfilerSkel) -> Result<(), libbpf_rs::Error> {

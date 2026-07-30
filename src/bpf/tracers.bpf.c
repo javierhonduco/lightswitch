@@ -14,6 +14,7 @@
 #define MAX_PENDING_MEMORY_EVENTS 4096
 #define MAX_TRACKED_ALLOCATIONS  262144
 #define MAX_I64                  0x7fffffffffffffffULL
+#define MAX_U64                  0xffffffffffffffffULL
 
 #define TRACER_EVENT_FLAG_EXECUTABLE_MUNMAP 1
 
@@ -222,6 +223,15 @@ static __always_inline bool size_fits_i64(u64 size) {
     return size <= MAX_I64;
 }
 
+static __always_inline bool range_end(u64 start, u64 len, u64 *end) {
+    if (end == NULL || len > MAX_U64 - start) {
+        return false;
+    }
+
+    *end = start + len;
+    return true;
+}
+
 static __always_inline void remember_allocation(int pid, u64 address, u64 size) {
     if (address == 0 || size == 0 || !size_fits_i64(size)) {
         return;
@@ -256,8 +266,8 @@ static __always_inline u64 forget_allocation(int pid, u64 address) {
     return size;
 }
 
-static __always_inline void emit_allocation(void *ctx, tracer_event_t *event,
-                                            u64 address, u64 size) {
+static __always_inline void emit_allocation_event(void *ctx, tracer_event_t *event,
+                                                  u64 address, u64 size) {
     if (address == 0 || size == 0 || !size_fits_i64(size)) {
         return;
     }
@@ -266,6 +276,11 @@ static __always_inline void emit_allocation(void *ctx, tracer_event_t *event,
     event->allocation_address = address;
     event->allocation_size = (s64)size;
     submit_tracer_event(ctx, event);
+}
+
+static __always_inline void emit_tracked_allocation(void *ctx, tracer_event_t *event,
+                                                    u64 address, u64 size) {
+    emit_allocation_event(ctx, event, address, size);
     remember_allocation(event->pid, address, size);
 }
 
@@ -322,7 +337,7 @@ static __always_inline int complete_pending_allocation(struct pt_regs *ctx, u64 
         emit_deallocation(ctx, event, event->old_address, old_size);
     }
 
-    emit_allocation(ctx, event, address, event->requested_size);
+    emit_tracked_allocation(ctx, event, address, event->requested_size);
     bpf_map_delete_elem(&tracked_allocations, &key);
     return 0;
 }
@@ -380,7 +395,7 @@ int tracer_exit_mmap(struct syscall_trace_exit *ctx) {
     }
 
     if (ctx->ret >= 0) {
-        emit_allocation(ctx, event, (u64)ctx->ret, event->requested_size);
+        emit_allocation_event(ctx, event, (u64)ctx->ret, event->requested_size);
     }
 
     bpf_map_delete_elem(&tracked_mmap, &key);
@@ -398,13 +413,18 @@ int tracer_enter_mremap(struct mremap_entry_args *args) {
         return 0;
     }
 
+    u64 end_address = 0;
+    if (!range_end(args->addr, args->old_len, &end_address)) {
+        return 0;
+    }
+
     tracer_event_t *event = tracer_event_from_heap(TRACER_EVENT_TYPE_MEMORY_ALLOCATION);
     if (event == NULL) {
         return 0;
     }
 
     event->start_address = args->addr;
-    event->end_address = args->addr + args->old_len;
+    event->end_address = end_address;
     event->old_address = args->addr;
     event->requested_size = args->new_len;
     capture_user_stack(args, &event->stack);
@@ -429,8 +449,7 @@ int tracer_exit_mremap(struct syscall_trace_exit *ctx) {
     if (ctx->ret >= 0) {
         emit_deallocation(ctx, event, event->old_address,
                           event->end_address - event->start_address);
-        forget_allocation(event->pid, event->old_address);
-        emit_allocation(ctx, event, (u64)ctx->ret, event->requested_size);
+        emit_allocation_event(ctx, event, (u64)ctx->ret, event->requested_size);
     }
 
     bpf_map_delete_elem(&tracked_mremap, &key);
@@ -440,8 +459,12 @@ int tracer_exit_mremap(struct syscall_trace_exit *ctx) {
 SEC("tracepoint/syscalls/sys_enter_munmap")
 int tracer_enter_munmap(struct munmap_entry_args *args) {
     u64 start_address = args->addr;
-    u64 end_address = args->addr + args->len;
+    u64 end_address = 0;
     bool should_track = false;
+
+    if (!range_end(start_address, args->len, &end_address)) {
+        return 0;
+    }
 
     tracer_event_t *event = tracer_event_from_heap(TRACER_EVENT_TYPE_MUNMAP);
     if (event == NULL) {
@@ -491,7 +514,6 @@ int tracer_exit_munmap(struct syscall_trace_exit *ctx) {
 
     if (memory_profiling_enabled()) {
         emit_deallocation(ctx, event, event->start_address, event->requested_size);
-        forget_allocation(event->pid, event->start_address);
     }
 
     if (event->flags & TRACER_EVENT_FLAG_EXECUTABLE_MUNMAP) {
@@ -512,22 +534,12 @@ int memory_enter_malloc(struct pt_regs *ctx) {
     return memory_enter_malloc_impl(ctx);
 }
 
-SEC("uprobe.multi")
-int memory_enter_malloc_multi(struct pt_regs *ctx) {
-    return memory_enter_malloc_impl(ctx);
-}
-
 static __always_inline int memory_exit_malloc_impl(struct pt_regs *ctx) {
     return complete_pending_allocation(ctx, (u64)PT_REGS_RC(ctx));
 }
 
 SEC("uprobe")
 int memory_exit_malloc(struct pt_regs *ctx) {
-    return memory_exit_malloc_impl(ctx);
-}
-
-SEC("uprobe.multi")
-int memory_exit_malloc_multi(struct pt_regs *ctx) {
     return memory_exit_malloc_impl(ctx);
 }
 
@@ -566,11 +578,6 @@ static __always_inline int memory_enter_aligned_alloc_impl(struct pt_regs *ctx) 
 
 SEC("uprobe")
 int memory_enter_aligned_alloc(struct pt_regs *ctx) {
-    return memory_enter_aligned_alloc_impl(ctx);
-}
-
-SEC("uprobe.multi")
-int memory_enter_aligned_alloc_multi(struct pt_regs *ctx) {
     return memory_enter_aligned_alloc_impl(ctx);
 }
 
@@ -638,11 +645,6 @@ static __always_inline int memory_enter_free_impl(struct pt_regs *ctx) {
 
 SEC("uprobe")
 int memory_enter_free(struct pt_regs *ctx) {
-    return memory_enter_free_impl(ctx);
-}
-
-SEC("uprobe.multi")
-int memory_enter_free_multi(struct pt_regs *ctx) {
     return memory_enter_free_impl(ctx);
 }
 

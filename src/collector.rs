@@ -564,6 +564,17 @@ impl FirefoxProfilerCollector {
             pid_to_comm: HashMap::new(),
         }
     }
+
+    fn timestamped_samples(&self) -> Vec<(u64, &AggregatedSample)> {
+        let mut timestamped_samples = self
+            .timestamps
+            .iter()
+            .copied()
+            .zip(self.samples.iter())
+            .collect::<Vec<_>>();
+        timestamped_samples.sort_by_key(|(timestamp, _)| *timestamp);
+        timestamped_samples
+    }
 }
 
 impl Collector for FirefoxProfilerCollector {
@@ -606,12 +617,16 @@ impl Collector for FirefoxProfilerCollector {
     ) {
         use fxprof_processed_profile::*;
 
-        if self.timestamps.is_empty() {
+        let timestamped_samples = self.timestamped_samples();
+        if timestamped_samples.is_empty() {
             warn!("got no samples");
             return (AggregatedProfile::new(), &self.procs, &self.objs);
         }
 
-        let reference_timestamp = *self.timestamps.first().expect("check above");
+        let reference_timestamp = timestamped_samples
+            .first()
+            .map(|(timestamp, _)| *timestamp)
+            .expect("check above");
         let mut ff_processes: HashMap<i32, ProcessHandle> = HashMap::new();
         let mut ff_threads: HashMap<i32, ThreadHandle> = HashMap::new();
         let mut ff_profile = Profile::new(
@@ -624,7 +639,7 @@ impl Collector for FirefoxProfilerCollector {
         let userspace_category = ff_profile.add_category("userspace", CategoryColor::Blue);
         let kernel_category = ff_profile.add_category("kernel", CategoryColor::Gray);
 
-        for (timestamp, sample) in self.timestamps.iter().zip(&self.samples) {
+        for (timestamp, sample) in timestamped_samples {
             let meta = self
                 .meta
                 .lock()
@@ -721,5 +736,40 @@ impl Collector for FirefoxProfilerCollector {
         serde_json::to_writer(&mut BufWriter::new(file), &ff_profile).unwrap();
 
         (AggregatedProfile::new(), &self.procs, &self.objs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lightswitch_metadata::metadata_provider::GlobalMetadataProvider;
+
+    #[test]
+    fn firefox_samples_are_ordered_by_timestamp() {
+        let meta = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+        let mut collector = FirefoxProfilerCollector::new("firefox-profiler.json", 19, meta);
+        collector.timestamps = vec![30, 10, 20];
+        collector.samples = vec![
+            AggregatedSample {
+                pid: 3,
+                ..Default::default()
+            },
+            AggregatedSample {
+                pid: 1,
+                ..Default::default()
+            },
+            AggregatedSample {
+                pid: 2,
+                ..Default::default()
+            },
+        ];
+
+        let actual = collector
+            .timestamped_samples()
+            .iter()
+            .map(|(timestamp, sample)| (*timestamp, sample.pid))
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual, vec![(10, 1), (20, 2), (30, 3)]);
     }
 }
