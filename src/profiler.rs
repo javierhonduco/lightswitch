@@ -908,8 +908,10 @@ impl Profiler {
                 }
 
                 // Go since pretty early on compiles with frame pointers by default.
-                unwind_info.push(CompactUnwindRow::frame_pointer(start_address, is_arm64));
-                unwind_info.push(CompactUnwindRow::stop_unwinding(end_address));
+                unwind_info.push(CompactUnwindRow::frame_pointer(0, is_arm64));
+                unwind_info.push(CompactUnwindRow::stop_unwinding(
+                    end_address - start_address,
+                ));
 
                 unwind_info.sort_by_key(|e| e.pc);
 
