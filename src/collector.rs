@@ -573,26 +573,27 @@ impl Collector for FirefoxProfilerCollector {
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
-        for sample in &samples {
-            self.timestamps.push(sample.collected_at);
-        }
-
-        let profile = samples
-            .iter()
-            .map(|e| RawAggregatedSample {
-                sample: e.clone(),
-                count: 1,
-            })
-            .collect::<Vec<_>>();
-
         for (pid, proc_info) in procs {
             self.pid_to_comm
                 .entry(*pid)
                 .or_insert(proc_info.comm.clone());
         }
 
-        let profile = raw_to_processed(&profile, procs, objs);
+        let mut profile = Vec::new();
+        let mut timestamps = Vec::new();
+        for sample in &samples {
+            let raw_sample = RawAggregatedSample {
+                sample: sample.clone(),
+                count: 1,
+            };
+            if let Ok(processed_sample) = raw_sample.process(procs, objs) {
+                profile.push(processed_sample);
+                timestamps.push(sample.collected_at);
+            }
+        }
+
         let mut profile = symbolize_profile(&profile, procs, objs);
+        self.timestamps.append(&mut timestamps);
         self.samples.append(&mut profile);
     }
 
@@ -702,13 +703,18 @@ impl Collector for FirefoxProfilerCollector {
                 .collect::<Vec<_>>();
 
             let stack = ff_profile.intern_stack_frames(ff_thread, frames.into_iter());
-            ff_profile.add_sample(
-                ff_thread,
-                Timestamp::from_nanos_since_reference(timestamp - reference_timestamp),
-                stack,
-                CpuDelta::ZERO,
-                1,
-            );
+            let timestamp = Timestamp::from_nanos_since_reference(timestamp - reference_timestamp);
+            if let Some(allocation) = sample.allocation {
+                ff_profile.add_allocation_sample(
+                    ff_thread,
+                    timestamp,
+                    stack,
+                    allocation.address,
+                    allocation.size,
+                );
+            } else {
+                ff_profile.add_sample(ff_thread, timestamp, stack, CpuDelta::ZERO, 1);
+            }
         }
 
         let file = File::create(&self.profile_name).unwrap();

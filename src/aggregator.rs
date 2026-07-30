@@ -16,6 +16,10 @@ impl Aggregator {
 
         let mut sample_hash_to_aggregated: HashMap<u64, RawAggregatedSample> = HashMap::new();
         for sample in raw_samples {
+            if sample.is_allocation() {
+                continue;
+            }
+
             if sample.ustack.is_empty() && sample.kstack.is_empty() {
                 debug!(
                     "No stack present in provided sample={}, skipping...",
@@ -40,7 +44,7 @@ impl Aggregator {
 #[cfg(test)]
 mod tests {
     use crate::aggregator::Aggregator;
-    use crate::profile::RawSample;
+    use crate::profile::{AllocationSample, RawSample};
 
     #[test]
     fn test_aggregate_raw_samples() {
@@ -50,6 +54,7 @@ mod tests {
             collected_at: 1748865070,
             ustack: vec![0xffff, 0xffff],
             kstack: vec![0xffff, 0xdddd, 0xaaaa, 0xeeee, 0xaaae],
+            allocation: None,
         };
 
         let raw_sample_2 = RawSample {
@@ -58,6 +63,7 @@ mod tests {
             collected_at: 1748865070,
             ustack: vec![0xdddd, 0xfeedbee, 0xddddef, 0xbeefdad],
             kstack: vec![],
+            allocation: None,
         };
 
         let raw_samples = vec![
@@ -86,6 +92,35 @@ mod tests {
     }
 
     #[test]
+    fn test_aggregate_skips_allocation_samples() {
+        let cpu_sample = RawSample {
+            pid: 1234,
+            tid: 1235,
+            collected_at: 1748865070,
+            ustack: vec![0xffff, 0xffff],
+            kstack: vec![],
+            allocation: None,
+        };
+        let allocation_sample = RawSample {
+            pid: 1234,
+            tid: 1235,
+            collected_at: 1748865071,
+            ustack: vec![0xffff, 0xffff],
+            kstack: vec![],
+            allocation: Some(AllocationSample {
+                address: 0x1000,
+                size: 4096,
+            }),
+        };
+
+        let raw_aggregated_profile =
+            Aggregator::default().aggregate(vec![cpu_sample.clone(), allocation_sample]);
+
+        assert_eq!(raw_aggregated_profile.len(), 1);
+        assert_eq!(raw_aggregated_profile[0].sample, cpu_sample);
+    }
+
+    #[test]
     fn test_aggregate_raw_samples_same_ustack_diff_kstack() {
         let raw_sample_1 = RawSample {
             pid: 1234,
@@ -93,6 +128,7 @@ mod tests {
             collected_at: 1748865070,
             ustack: vec![0xffff, 0xdeadbeef],
             kstack: vec![0xffff, 0xdddd, 0xaaaa, 0xeeee, 0xaaae],
+            allocation: None,
         };
 
         let raw_sample_2 = RawSample {
@@ -101,6 +137,7 @@ mod tests {
             collected_at: 1748865070,
             ustack: raw_sample_1.ustack.clone(),
             kstack: vec![],
+            allocation: None,
         };
 
         let raw_samples = vec![
@@ -133,6 +170,7 @@ mod tests {
             collected_at: 1748865070,
             ustack: vec![0xffff, 0xdeadbeef],
             kstack: vec![0xffff, 0xdddd, 0xaaaa, 0xeeee, 0xaaae],
+            allocation: None,
         };
 
         let raw_sample_2 = RawSample {
@@ -141,6 +179,7 @@ mod tests {
             collected_at: 1748865070,
             ustack: vec![0xdddd, 0xfeedbee, 0xddddef, 0xbeefdad],
             kstack: raw_sample_1.kstack.clone(),
+            allocation: None,
         };
 
         let raw_samples = vec![
@@ -178,6 +217,7 @@ mod tests {
             collected_at: 1748865070,
             ustack: ustack.clone(),
             kstack: kstack.clone(),
+            allocation: None,
         };
 
         let raw_sample_2 = RawSample {
@@ -186,6 +226,7 @@ mod tests {
             collected_at: 1748865070,
             ustack: ustack.clone(),
             kstack: kstack.clone(),
+            allocation: None,
         };
 
         let raw_sample_3 = RawSample {
@@ -194,6 +235,7 @@ mod tests {
             collected_at: 1748865070,
             ustack: ustack.clone(),
             kstack: kstack.clone(),
+            allocation: None,
         };
 
         let raw_samples = vec![raw_sample_1, raw_sample_2, raw_sample_3];

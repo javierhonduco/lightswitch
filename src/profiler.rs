@@ -71,6 +71,22 @@ const MAX_UNWIND_INFO_SIZE: usize = 7_000_000;
 pub enum TracerEvent {
     ProcessExit(Pid),
     Munmap(Pid, u64, u64),
+    MemorySample { sample: RawSample, comm: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryProfilingMode {
+    MmapOnly,
+    All,
+}
+
+impl MemoryProfilingMode {
+    pub(crate) fn bpf_value(self) -> u32 {
+        match self {
+            MemoryProfilingMode::MmapOnly => MEMORY_PROFILING_MODE_MMAP_ONLY,
+            MemoryProfilingMode::All => MEMORY_PROFILING_MODE_ALL,
+        }
+    }
 }
 
 pub struct Profiler {
@@ -127,6 +143,7 @@ pub struct Profiler {
     afflicted_processes: LruCache<Pid, ()>,
     vdso_extraction: Option<(Instant, ExecutableId)>,
     deletion_scheduler: DeletionScheduler,
+    memory_profiling_mode: Option<MemoryProfilingMode>,
     /// Prevent the BPF attached programs from being removed.
     _links: Vec<Link>,
 }
@@ -150,6 +167,7 @@ pub struct ProfilerConfig {
     pub no_prealloc_bpf_hash_maps: bool,
     pub preload_thread_metadata: bool,
     pub userspace_pid_ns_level: u32,
+    pub memory_profiling_mode: Option<MemoryProfilingMode>,
 }
 
 impl Default for ProfilerConfig {
@@ -173,6 +191,7 @@ impl Default for ProfilerConfig {
             no_prealloc_bpf_hash_maps: false,
             preload_thread_metadata: false,
             userspace_pid_ns_level: 0, // Assumes running in the root pid namespace by default
+            memory_profiling_mode: None,
         }
     }
 }
@@ -335,6 +354,7 @@ impl Profiler {
             ),
             vdso_extraction: None,
             deletion_scheduler: DeletionScheduler::new(),
+            memory_profiling_mode: profiler_config.memory_profiling_mode,
             _links: Vec::new(),
         }
     }
@@ -426,6 +446,9 @@ impl Profiler {
         self.setup_perf_events();
         self.add_kernel_modules();
         self.bpf.attach_tracers();
+        if self.memory_profiling_mode == Some(MemoryProfilingMode::All) {
+            self._links.extend(self.bpf.attach_memory_uprobes());
+        }
 
         let chan_send = self.new_proc_chan_send.clone();
         let raw_sample_send = self.raw_sample_send.clone();
@@ -455,6 +478,7 @@ impl Profiler {
         );
 
         let tracers_send = self.tracers_chan_send.clone();
+        let walltime_at_system_boot = self.walltime_at_system_boot;
         start_poll_thread(
             self.use_ring_buffers,
             self.perf_buffer_bytes,
@@ -465,9 +489,11 @@ impl Profiler {
                 let mut event = tracer_event_t::default();
                 match plain::copy_from_bytes(&mut event, data) {
                     Ok(()) => {
-                        tracers_send
-                            .send(TracerEvent::from(event))
-                            .expect("handle event send");
+                        let mut event = TracerEvent::from(event);
+                        if let TracerEvent::MemorySample { sample, .. } = &mut event {
+                            sample.collected_at += walltime_at_system_boot;
+                        }
+                        tracers_send.send(event);
                     }
                     Err(e) => {
                         error!("copying data from tracer_events failed with {:?}", e);
@@ -535,6 +561,9 @@ impl Profiler {
                     match read {
                         Ok(TracerEvent::Munmap(pid, start_address, end_address)) => {
                                 self.handle_munmap(pid, start_address, end_address);
+                        },
+                        Ok(TracerEvent::MemorySample { sample, comm }) => {
+                                self.handle_memory_sample(sample, comm);
                         },
                         Ok(TracerEvent::ProcessExit(pid)) => {
                                 self.handle_process_exit(pid, false);
@@ -747,6 +776,37 @@ impl Profiler {
         raw_samples
     }
 
+    fn handle_memory_sample(&mut self, sample: RawSample, comm: String) {
+        if !self.should_profile(sample.pid) {
+            return;
+        }
+
+        if !self.process_is_known(sample.pid) {
+            match self.add_proc(sample.pid, comm) {
+                Ok(()) => {}
+                Err(AddProcessError::Eviction) => {
+                    warn!(
+                        "could not evict a process to make room for memory sample process: {}",
+                        sample.pid
+                    );
+                    return;
+                }
+                Err(AddProcessError::ProcfsRace) | Err(AddProcessError::ProcfsRaceBestEffort) => {
+                    return;
+                }
+            }
+        }
+
+        self.metadata_provider
+            .lock()
+            .unwrap()
+            .register_task(TaskKey {
+                pid: sample.pid,
+                tid: sample.tid,
+            });
+        self.raw_samples.push(sample);
+    }
+
     fn process_is_known(&self, pid: Pid) -> bool {
         self.procs.read().get(&pid).is_some()
     }
@@ -887,7 +947,6 @@ impl Profiler {
         let runtime = executable_info.runtime.clone();
         std::mem::drop(object_files);
 
-        let a = runtime.clone();
         let unwind_info = match runtime {
             Runtime::Go(stop_frames) => {
                 if stop_frames.is_empty() {

@@ -20,6 +20,14 @@ pub struct RawSample {
     pub collected_at: u64,
     pub ustack: Vec<u64>,
     pub kstack: Vec<u64>,
+    pub allocation: Option<AllocationSample>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AllocationSample {
+    pub address: u64,
+    /// Positive values are allocations and negative values are deallocations.
+    pub size: i64,
 }
 
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
@@ -77,7 +85,12 @@ impl RawSample {
             collected_at,
             ustack,
             kstack,
+            allocation: None,
         })
+    }
+
+    pub fn is_allocation(&self) -> bool {
+        self.allocation.is_some()
     }
 }
 
@@ -89,6 +102,7 @@ impl std::hash::Hash for RawSample {
         // the samples for aggregation.
         self.tid.hash(state);
         self.ustack.hash(state);
+        self.allocation.hash(state);
     }
 }
 
@@ -135,6 +149,7 @@ impl RawAggregatedSample {
             ustack: Vec::new(),
             kstack: Vec::new(),
             count: self.count,
+            allocation: self.sample.allocation,
         };
 
         let Some(info) = procs.get(&self.sample.pid) else {
@@ -217,6 +232,7 @@ pub struct AggregatedSample {
     pub ustack: Vec<Frame>,
     pub kstack: Vec<Frame>,
     pub count: u64,
+    pub allocation: Option<AllocationSample>,
 }
 
 impl fmt::Display for AggregatedSample {
@@ -328,7 +344,8 @@ mod tests {
                 tid: 987,
                 collected_at: 0xDEADBEEF,
                 ustack: vec![0xFFFBBBDDD, 0x113355770],
-                kstack: vec![0xBBBAAADDD]
+                kstack: vec![0xBBBAAADDD],
+                allocation: None,
             })
         );
     }
@@ -343,6 +360,7 @@ mod tests {
                 collected_at: 1748865070,
                 ustack: vec![0xffff, 0xdeadbeef],
                 kstack: vec![],
+                allocation: None,
             },
             count: 1,
         };
@@ -356,6 +374,7 @@ mod tests {
                 collected_at: 1748865170,
                 ustack: vec![],
                 kstack: vec![],
+                allocation: None,
             },
             count: 1,
         };
@@ -397,6 +416,7 @@ mod tests {
             ustack: ustack_data,
             kstack: kstack_data.clone(),
             count: 128,
+            allocation: None,
         };
         insta::assert_snapshot!(format!("{}", sample), @r#"AggregatedSample { pid: 1234567, tid: 1234568, ustack: "[  0: ufunc3,  1: ufunc2,  2: ufunc1]", kstack: "[  0: kfunc2,  1: kfunc1]", count: 128 }"#);
 
@@ -408,6 +428,7 @@ mod tests {
             ustack: ustack_data,
             kstack: kstack_data.clone(),
             count: 1001,
+            allocation: None,
         };
         insta::assert_snapshot!(format!("{}", sample), @r#"AggregatedSample { pid: 98765, tid: 98766, ustack: "[NONE]", kstack: "[  0: kfunc2,  1: kfunc1]", count: 1001 }"#);
     }

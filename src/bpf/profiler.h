@@ -81,7 +81,12 @@ struct lightswitch_config_t {
     bool use_task_pt_regs_helper;
     bool use_btf_helpers;
     unsigned int userspace_pid_ns_level;
+    unsigned int memory_profiling_mode;
 };
+
+#define MEMORY_PROFILING_MODE_DISABLED  0
+#define MEMORY_PROFILING_MODE_MMAP_ONLY 1
+#define MEMORY_PROFILING_MODE_ALL       2
 
 struct unwinder_stats_t {
     u64 total;
@@ -116,6 +121,7 @@ const volatile struct lightswitch_config_t lightswitch_config = {
     .use_task_pt_regs_helper = false,
     .use_btf_helpers = false,
     .userspace_pid_ns_level = -1,
+    .memory_profiling_mode = MEMORY_PROFILING_MODE_DISABLED,
 };
 
 #define LOG(fmt, ...)                             \

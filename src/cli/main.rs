@@ -1,5 +1,4 @@
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::backtrace::Backtrace;
 
 struct SnitchAllocator;
 
@@ -208,6 +207,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    if args.enable_memory_profiling
+        && (args.sender != ProfileSender::LocalDisk
+            || args.profile_format != ProfileFormat::Firefox)
+    {
+        error!(
+            "memory profiling output is only supported with --sender local-disk --profile-format firefox"
+        );
+        std::process::exit(1);
+    }
+
     if !Uid::current().is_root() {
         error!("root permissions are required to run lightswitch");
         std::process::exit(1);
@@ -245,6 +254,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let server_url = args.server_url.unwrap_or(DEFAULT_SERVER_URL.into());
     debug!("server url: {}, token: {:?}", server_url, args.token);
+
+    let memory_profiling_mode = if args.enable_memory_profiling {
+        Some(args.memory_profiling_mode.clone().into())
+    } else {
+        None
+    };
 
     let metadata_provider: ThreadSafeGlobalMetadataProvider =
         Arc::new(Mutex::new(GlobalMetadataProvider::default()));
@@ -311,6 +326,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .available_bpf_features
                 .has_non_prealloc_hash_maps_in_tracing,
         userspace_pid_ns_level: system_info.available_bpf_features.userspace_pid_ns_level,
+        memory_profiling_mode,
         ..Default::default()
     };
 
@@ -763,7 +779,14 @@ mod tests {
 
         cmd.arg("--help");
         cmd.assert().success();
-        let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
+        let temp_dir = std::env::temp_dir().display().to_string();
+        let actual = String::from_utf8(cmd.unwrap().stdout)
+            .unwrap()
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .replace(&temp_dir, "/tmp");
         insta::assert_snapshot!(actual, @"
         Usage: lightswitch [OPTIONS] [COMMAND]
 
@@ -889,6 +912,15 @@ mod tests {
 
               --force-perf-buffer
                   force perf buffers even if ring buffers can be used
+
+              --enable-memory-profiling
+                  Enable allocation profiling in the Firefox profile output
+
+              --memory-profiling-mode <MEMORY_PROFILING_MODE>
+                  Memory profiling source: all uses allocator uprobes plus mmap tracepoints; mmap-only uses syscall tracepoints only
+
+                  [default: all]
+                  [possible values: all, mmap-only]
 
               --no-prealloc-bpf-hash-maps
                   Do not preallocate BPF hash maps

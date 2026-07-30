@@ -1,8 +1,10 @@
 use std::{
-    collections::hash_map::OccupiedEntry,
+    collections::{hash_map::OccupiedEntry, HashSet},
     iter,
     mem::{ManuallyDrop, MaybeUninit},
     os::fd::{AsFd, AsRawFd, BorrowedFd},
+    path::{Path, PathBuf},
+    process::Command,
 };
 
 use crate::{
@@ -10,17 +12,17 @@ use crate::{
         profiler_bindings::{
             exec_mappings_key, mapping_t, page_key_t, page_value_t,
             program_PROGRAM_NATIVE_UNWINDER, sample_t, stack_unwind_row_t, unwinder_stats_t,
-            HIGH_PC_MASK, UNWIND_INFO_PAGE_SIZE,
+            HIGH_PC_MASK, MEMORY_PROFILING_MODE_DISABLED, UNWIND_INFO_PAGE_SIZE,
         },
         profiler_skel::{OpenProfilerSkel, ProfilerSkel, ProfilerSkelBuilder},
         tracers_skel::{OpenTracersSkel, TracersSkel, TracersSkelBuilder},
     },
     native_unwind_state::KnownExecutableInfo,
     process::{ExecutableMapping, Pid},
-    profiler::ProfilerConfig,
+    profiler::{MemoryProfilingMode, ProfilerConfig},
     util::{get_online_cpus, roundup_page, summarize_address_range},
 };
-use libbpf_rs::{skel::Skel, Map, OpenObject};
+use libbpf_rs::{skel::Skel, Map, OpenObject, ProgramMut, UprobeOpts};
 use libbpf_rs::{
     skel::{OpenSkel, SkelBuilder},
     Link,
@@ -102,6 +104,7 @@ impl Bpf {
             .expect("open skel");
 
         Self::set_tracers_map_sizes(&mut open_tracers, profiler_config);
+        Self::disable_memory_uprobe_autoattach(&mut open_tracers);
         Self::setup_tracers_maps(&mut open_tracers, profiler_config, exec_mappings_fd);
         let tracers = ManuallyDrop::new(open_tracers.load().expect("load skel"));
         // SAFETY: tracers never outlives tracers_open_object
@@ -128,6 +131,187 @@ impl Bpf {
 
     pub(crate) fn attach_tracers(&mut self) {
         self.tracers.attach().expect("attach tracers");
+    }
+
+    pub(crate) fn attach_memory_uprobes(&mut self) -> Vec<Link> {
+        let allocator_libraries = Self::find_allocator_libraries();
+        if allocator_libraries.is_empty() {
+            warn!("could not find allocator libraries for memory profiling uprobes");
+            return Vec::new();
+        }
+
+        let mut links = Vec::new();
+        for allocator_library in allocator_libraries {
+            info!(
+                "attaching memory profiling uprobes to {}",
+                allocator_library.display()
+            );
+
+            Self::attach_allocator_pair(
+                &mut links,
+                &allocator_library,
+                "malloc",
+                &self.tracers.progs.memory_enter_malloc,
+                &self.tracers.progs.memory_exit_malloc,
+            );
+            Self::attach_allocator_pair(
+                &mut links,
+                &allocator_library,
+                "calloc",
+                &self.tracers.progs.memory_enter_calloc,
+                &self.tracers.progs.memory_exit_calloc,
+            );
+            Self::attach_allocator_pair(
+                &mut links,
+                &allocator_library,
+                "realloc",
+                &self.tracers.progs.memory_enter_realloc,
+                &self.tracers.progs.memory_exit_realloc,
+            );
+            Self::attach_allocator_pair(
+                &mut links,
+                &allocator_library,
+                "aligned_alloc",
+                &self.tracers.progs.memory_enter_aligned_alloc,
+                &self.tracers.progs.memory_exit_aligned_alloc,
+            );
+            Self::attach_allocator_pair(
+                &mut links,
+                &allocator_library,
+                "memalign",
+                &self.tracers.progs.memory_enter_aligned_alloc,
+                &self.tracers.progs.memory_exit_aligned_alloc,
+            );
+            Self::attach_allocator_pair(
+                &mut links,
+                &allocator_library,
+                "valloc",
+                &self.tracers.progs.memory_enter_malloc,
+                &self.tracers.progs.memory_exit_malloc,
+            );
+            Self::attach_allocator_pair(
+                &mut links,
+                &allocator_library,
+                "pvalloc",
+                &self.tracers.progs.memory_enter_malloc,
+                &self.tracers.progs.memory_exit_malloc,
+            );
+            Self::attach_allocator_pair(
+                &mut links,
+                &allocator_library,
+                "posix_memalign",
+                &self.tracers.progs.memory_enter_posix_memalign,
+                &self.tracers.progs.memory_exit_posix_memalign,
+            );
+            Self::attach_optional_uprobe(
+                &mut links,
+                &allocator_library,
+                "free",
+                &self.tracers.progs.memory_enter_free,
+                false,
+            );
+            Self::attach_optional_uprobe(
+                &mut links,
+                &allocator_library,
+                "cfree",
+                &self.tracers.progs.memory_enter_free,
+                false,
+            );
+        }
+
+        if links.is_empty() {
+            warn!("memory profiling was enabled but no allocator uprobes were attached");
+        }
+
+        links
+    }
+
+    fn attach_allocator_pair(
+        links: &mut Vec<Link>,
+        path: &Path,
+        symbol: &str,
+        entry_prog: &ProgramMut<'_>,
+        exit_prog: &ProgramMut<'_>,
+    ) {
+        Self::attach_optional_uprobe(links, path, symbol, entry_prog, false);
+        Self::attach_optional_uprobe(links, path, symbol, exit_prog, true);
+    }
+
+    fn attach_optional_uprobe(
+        links: &mut Vec<Link>,
+        path: &Path,
+        symbol: &str,
+        prog: &ProgramMut<'_>,
+        retprobe: bool,
+    ) {
+        let opts = UprobeOpts {
+            retprobe,
+            func_name: Some(symbol.to_string()),
+            ..UprobeOpts::default()
+        };
+
+        match prog.attach_uprobe_with_opts(-1, path, 0, opts) {
+            Ok(link) => links.push(link),
+            Err(e) => debug!(
+                "failed to attach {}{} in {}: {:?}",
+                if retprobe { "uretprobe " } else { "uprobe " },
+                symbol,
+                path.display(),
+                e
+            ),
+        }
+    }
+
+    fn find_allocator_libraries() -> Vec<PathBuf> {
+        let mut paths = HashSet::new();
+
+        if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
+            for line in maps.lines() {
+                if let Some(path) = line.split_whitespace().last() {
+                    if path.starts_with('/') && Self::is_allocator_library(path) {
+                        paths.insert(PathBuf::from(path));
+                    }
+                }
+            }
+        }
+
+        if let Ok(output) = Command::new("ldconfig").arg("-p").output() {
+            if output.status.success() {
+                for line in String::from_utf8_lossy(&output.stdout).lines() {
+                    if !Self::is_allocator_library(line) {
+                        continue;
+                    }
+                    if let Some((_, path)) = line.rsplit_once("=>") {
+                        let path = path.trim();
+                        if path.starts_with('/') {
+                            paths.insert(PathBuf::from(path));
+                        }
+                    }
+                }
+            }
+        }
+
+        for path in [
+            "/lib/x86_64-linux-gnu/libc.so.6",
+            "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "/lib/aarch64-linux-gnu/libc.so.6",
+            "/usr/lib/aarch64-linux-gnu/libc.so.6",
+            "/lib64/libc.so.6",
+            "/usr/lib64/libc.so.6",
+        ] {
+            let path = PathBuf::from(path);
+            if path.exists() {
+                paths.insert(path);
+            }
+        }
+
+        let mut paths = paths.into_iter().collect::<Vec<_>>();
+        paths.sort();
+        paths
+    }
+
+    fn is_allocator_library(path: &str) -> bool {
+        path.contains("libc.so") || path.contains("libjemalloc.so") || path.contains("libtcmalloc")
     }
 
     fn set_programs_map(native_unwinder: &ProfilerSkel) {
@@ -210,6 +394,10 @@ impl Bpf {
             .write(profiler_config.use_ring_buffers);
 
         rodata.lightswitch_config.userspace_pid_ns_level = profiler_config.userspace_pid_ns_level;
+        rodata.lightswitch_config.memory_profiling_mode = profiler_config
+            .memory_profiling_mode
+            .map(MemoryProfilingMode::bpf_value)
+            .unwrap_or(MEMORY_PROFILING_MODE_DISABLED);
 
         // Disable BTF helpers if a BTF custom path is selected since
         // it will not load in machines that don't have one. TODO add override?
@@ -271,6 +459,10 @@ impl Bpf {
             .write(profiler_config.btf_custom_path.is_none());
 
         rodata.lightswitch_config.userspace_pid_ns_level = profiler_config.userspace_pid_ns_level;
+        rodata.lightswitch_config.memory_profiling_mode = profiler_config
+            .memory_profiling_mode
+            .map(MemoryProfilingMode::bpf_value)
+            .unwrap_or(MEMORY_PROFILING_MODE_DISABLED);
 
         if profiler_config.use_ring_buffers {
             // Set sample collecting ringbuf size based sampling frequency
@@ -316,6 +508,12 @@ impl Bpf {
         profiler_config: &ProfilerConfig,
     ) {
         if profiler_config.use_ring_buffers {
+            open_skel
+                .maps
+                .tracer_events_rb
+                .set_max_entries(profiler_config.perf_buffer_bytes as u32)
+                .expect("set tracer_events_rb max entries");
+
             // Even set to zero it will create as many entries as CPUs.
             open_skel
                 .maps
@@ -338,7 +536,53 @@ impl Bpf {
                 .tracked_munmap
                 .set_map_flags(libbpf_sys::BPF_F_NO_PREALLOC)
                 .expect("set tracked_munmap NO_PREALLOC");
+            open_skel
+                .maps
+                .tracked_mmap
+                .set_map_flags(libbpf_sys::BPF_F_NO_PREALLOC)
+                .expect("set tracked_mmap NO_PREALLOC");
+            open_skel
+                .maps
+                .tracked_mremap
+                .set_map_flags(libbpf_sys::BPF_F_NO_PREALLOC)
+                .expect("set tracked_mremap NO_PREALLOC");
+            open_skel
+                .maps
+                .tracked_allocations
+                .set_map_flags(libbpf_sys::BPF_F_NO_PREALLOC)
+                .expect("set tracked_allocations NO_PREALLOC");
+            open_skel
+                .maps
+                .allocation_sizes
+                .set_map_flags(libbpf_sys::BPF_F_NO_PREALLOC)
+                .expect("set allocation_sizes NO_PREALLOC");
         }
+    }
+
+    fn disable_memory_uprobe_autoattach(open_skel: &mut OpenTracersSkel) {
+        open_skel.progs.memory_enter_malloc.set_autoattach(false);
+        open_skel.progs.memory_exit_malloc.set_autoattach(false);
+        open_skel.progs.memory_enter_calloc.set_autoattach(false);
+        open_skel.progs.memory_exit_calloc.set_autoattach(false);
+        open_skel.progs.memory_enter_realloc.set_autoattach(false);
+        open_skel.progs.memory_exit_realloc.set_autoattach(false);
+        open_skel
+            .progs
+            .memory_enter_aligned_alloc
+            .set_autoattach(false);
+        open_skel
+            .progs
+            .memory_exit_aligned_alloc
+            .set_autoattach(false);
+        open_skel
+            .progs
+            .memory_enter_posix_memalign
+            .set_autoattach(false);
+        open_skel
+            .progs
+            .memory_exit_posix_memalign
+            .set_autoattach(false);
+        open_skel.progs.memory_enter_free.set_autoattach(false);
     }
 
     pub fn show_actual_profiler_map_sizes(bpf: &ProfilerSkel) -> Result<(), libbpf_rs::Error> {

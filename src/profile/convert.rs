@@ -324,6 +324,7 @@ pub fn symbolize_profile(
             pid: sample.pid,
             tid: sample.tid,
             count: sample.count,
+            allocation: sample.allocation,
             ustack: symbolize_user_stack(
                 &addresses_per_sample,
                 procs,

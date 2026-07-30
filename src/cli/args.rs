@@ -3,7 +3,7 @@ use clap::Subcommand;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use lightswitch::profiler::ProfilerConfig;
+use lightswitch::profiler::{MemoryProfilingMode, ProfilerConfig};
 
 use crate::validators::parse_duration;
 use crate::validators::sample_freq_in_range;
@@ -19,13 +19,29 @@ pub(crate) enum LoggingLevel {
     Error,
 }
 
-#[derive(clap::ValueEnum, Debug, Clone, Default)]
+#[derive(clap::ValueEnum, Debug, Clone, Default, PartialEq)]
 pub(crate) enum ProfileFormat {
     None,
     #[default]
     FlameGraph,
     Firefox,
     Pprof,
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Default)]
+pub(crate) enum CliMemoryProfilingMode {
+    #[default]
+    All,
+    MmapOnly,
+}
+
+impl From<CliMemoryProfilingMode> for MemoryProfilingMode {
+    fn from(mode: CliMemoryProfilingMode) -> Self {
+        match mode {
+            CliMemoryProfilingMode::All => MemoryProfilingMode::All,
+            CliMemoryProfilingMode::MmapOnly => MemoryProfilingMode::MmapOnly,
+        }
+    }
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Default, PartialEq)]
@@ -173,6 +189,19 @@ pub(crate) struct CliArgs {
     pub(crate) unsafe_start: bool,
     #[arg(long, help = "force perf buffers even if ring buffers can be used")]
     pub(crate) force_perf_buffer: bool,
+    #[arg(
+        long,
+        help = "Enable allocation profiling in the Firefox profile output"
+    )]
+    pub(crate) enable_memory_profiling: bool,
+    #[arg(
+        long,
+        default_value_t,
+        value_enum,
+        requires = "enable_memory_profiling",
+        help = "Memory profiling source: all uses allocator uprobes plus mmap tracepoints; mmap-only uses syscall tracepoints only"
+    )]
+    pub(crate) memory_profiling_mode: CliMemoryProfilingMode,
     #[arg(
         long,
         default_value_t = ProfilerConfig::default().no_prealloc_bpf_hash_maps,
