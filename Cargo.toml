@@ -61,6 +61,7 @@ memmap2 = { workspace = true }
 anyhow = { workspace = true }
 libbpf-sys = { workspace = true }
 libbpf-rs = { workspace = true }
+object = { workspace = true }
 tracing = { workspace = true }
 perf-event-open-sys = { workspace = true }
 thiserror = { workspace = true }

@@ -1,6 +1,6 @@
 use std::{
     collections::{hash_map::OccupiedEntry, HashSet},
-    iter,
+    fs, iter,
     mem::{ManuallyDrop, MaybeUninit},
     os::fd::{AsFd, AsRawFd, BorrowedFd},
     path::{Path, PathBuf},
@@ -22,7 +22,7 @@ use crate::{
     profiler::{MemoryProfilingMode, ProfilerConfig},
     util::{get_online_cpus, roundup_page, summarize_address_range},
 };
-use libbpf_rs::{skel::Skel, Map, OpenObject, ProgramMut, UprobeOpts};
+use libbpf_rs::{skel::Skel, Map, OpenObject, ProgramMut, UprobeMultiOpts, UprobeOpts};
 use libbpf_rs::{
     skel::{OpenSkel, SkelBuilder},
     Link,
@@ -31,6 +31,7 @@ use libbpf_rs::{MapCore, MapFlags, MapHandle, MapType};
 use lightswitch_object::ExecutableId;
 use lightswitch_unwind_info::types::CompactUnwindRow;
 use memmap2::MmapOptions;
+use object::{Object, ObjectSymbol};
 use tracing::{debug, error, info, warn};
 
 pub(crate) struct Bpf {
@@ -142,78 +143,81 @@ impl Bpf {
 
         let mut links = Vec::new();
         for allocator_library in allocator_libraries {
+            let available_symbols = Self::available_symbols(&allocator_library);
             info!(
                 "attaching memory profiling uprobes to {}",
                 allocator_library.display()
             );
 
-            Self::attach_allocator_pair(
+            Self::attach_optional_uprobe_multi(
                 &mut links,
                 &allocator_library,
-                "malloc",
+                &available_symbols,
+                &["malloc", "valloc", "pvalloc"],
+                &self.tracers.progs.memory_enter_malloc_multi,
                 &self.tracers.progs.memory_enter_malloc,
-                &self.tracers.progs.memory_exit_malloc,
-            );
-            Self::attach_allocator_pair(
-                &mut links,
-                &allocator_library,
-                "calloc",
-                &self.tracers.progs.memory_enter_calloc,
-                &self.tracers.progs.memory_exit_calloc,
-            );
-            Self::attach_allocator_pair(
-                &mut links,
-                &allocator_library,
-                "realloc",
-                &self.tracers.progs.memory_enter_realloc,
-                &self.tracers.progs.memory_exit_realloc,
-            );
-            Self::attach_allocator_pair(
-                &mut links,
-                &allocator_library,
-                "aligned_alloc",
-                &self.tracers.progs.memory_enter_aligned_alloc,
-                &self.tracers.progs.memory_exit_aligned_alloc,
-            );
-            Self::attach_allocator_pair(
-                &mut links,
-                &allocator_library,
-                "memalign",
-                &self.tracers.progs.memory_enter_aligned_alloc,
-                &self.tracers.progs.memory_exit_aligned_alloc,
-            );
-            Self::attach_allocator_pair(
-                &mut links,
-                &allocator_library,
-                "valloc",
-                &self.tracers.progs.memory_enter_malloc,
-                &self.tracers.progs.memory_exit_malloc,
-            );
-            Self::attach_allocator_pair(
-                &mut links,
-                &allocator_library,
-                "pvalloc",
-                &self.tracers.progs.memory_enter_malloc,
-                &self.tracers.progs.memory_exit_malloc,
-            );
-            Self::attach_allocator_pair(
-                &mut links,
-                &allocator_library,
-                "posix_memalign",
-                &self.tracers.progs.memory_enter_posix_memalign,
-                &self.tracers.progs.memory_exit_posix_memalign,
-            );
-            Self::attach_optional_uprobe(
-                &mut links,
-                &allocator_library,
-                "free",
-                &self.tracers.progs.memory_enter_free,
                 false,
             );
             Self::attach_optional_uprobe(
                 &mut links,
                 &allocator_library,
-                "cfree",
+                "calloc",
+                &self.tracers.progs.memory_enter_calloc,
+                false,
+            );
+            Self::attach_optional_uprobe(
+                &mut links,
+                &allocator_library,
+                "realloc",
+                &self.tracers.progs.memory_enter_realloc,
+                false,
+            );
+            Self::attach_optional_uprobe_multi(
+                &mut links,
+                &allocator_library,
+                &available_symbols,
+                &["aligned_alloc", "memalign"],
+                &self.tracers.progs.memory_enter_aligned_alloc_multi,
+                &self.tracers.progs.memory_enter_aligned_alloc,
+                false,
+            );
+            Self::attach_optional_uprobe_multi(
+                &mut links,
+                &allocator_library,
+                &available_symbols,
+                &[
+                    "malloc",
+                    "calloc",
+                    "realloc",
+                    "aligned_alloc",
+                    "memalign",
+                    "valloc",
+                    "pvalloc",
+                ],
+                &self.tracers.progs.memory_exit_malloc_multi,
+                &self.tracers.progs.memory_exit_malloc,
+                true,
+            );
+            Self::attach_optional_uprobe(
+                &mut links,
+                &allocator_library,
+                "posix_memalign",
+                &self.tracers.progs.memory_enter_posix_memalign,
+                false,
+            );
+            Self::attach_optional_uprobe(
+                &mut links,
+                &allocator_library,
+                "posix_memalign",
+                &self.tracers.progs.memory_exit_posix_memalign,
+                true,
+            );
+            Self::attach_optional_uprobe_multi(
+                &mut links,
+                &allocator_library,
+                &available_symbols,
+                &["free", "cfree"],
+                &self.tracers.progs.memory_enter_free_multi,
                 &self.tracers.progs.memory_enter_free,
                 false,
             );
@@ -226,15 +230,44 @@ impl Bpf {
         links
     }
 
-    fn attach_allocator_pair(
+    fn attach_optional_uprobe_multi(
         links: &mut Vec<Link>,
         path: &Path,
-        symbol: &str,
-        entry_prog: &ProgramMut<'_>,
-        exit_prog: &ProgramMut<'_>,
+        available_symbols: &Option<HashSet<String>>,
+        symbols: &[&str],
+        multi_prog: &ProgramMut<'_>,
+        fallback_prog: &ProgramMut<'_>,
+        retprobe: bool,
     ) {
-        Self::attach_optional_uprobe(links, path, symbol, entry_prog, false);
-        Self::attach_optional_uprobe(links, path, symbol, exit_prog, true);
+        let symbols = Self::filter_available_symbols(available_symbols, symbols);
+        if symbols.len() <= 1 {
+            for symbol in symbols {
+                Self::attach_optional_uprobe(links, path, symbol, fallback_prog, retprobe);
+            }
+            return;
+        }
+
+        let opts = UprobeMultiOpts {
+            syms: symbols.iter().map(|symbol| symbol.to_string()).collect(),
+            retprobe,
+            ..UprobeMultiOpts::default()
+        };
+
+        match multi_prog.attach_uprobe_multi_with_opts(-1, path, "", opts) {
+            Ok(link) => links.push(link),
+            Err(e) => {
+                debug!(
+                    "failed to attach {}uprobe_multi for {:?} in {}: {:?}; falling back to per-symbol uprobes",
+                    if retprobe { "return " } else { "" },
+                    symbols,
+                    path.display(),
+                    e
+                );
+                for symbol in symbols {
+                    Self::attach_optional_uprobe(links, path, symbol, fallback_prog, retprobe);
+                }
+            }
+        }
     }
 
     fn attach_optional_uprobe(
@@ -260,6 +293,56 @@ impl Bpf {
                 e
             ),
         }
+    }
+
+    fn filter_available_symbols<'a>(
+        available_symbols: &Option<HashSet<String>>,
+        symbols: &'a [&'a str],
+    ) -> Vec<&'a str> {
+        match available_symbols {
+            Some(available_symbols) => symbols
+                .iter()
+                .copied()
+                .filter(|symbol| available_symbols.contains(*symbol))
+                .collect(),
+            None => symbols.to_vec(),
+        }
+    }
+
+    fn available_symbols(path: &Path) -> Option<HashSet<String>> {
+        let data = match fs::read(path) {
+            Ok(data) => data,
+            Err(e) => {
+                debug!(
+                    "failed to read allocator library {} for symbol discovery: {:?}",
+                    path.display(),
+                    e
+                );
+                return None;
+            }
+        };
+        let file = match object::File::parse(data.as_slice()) {
+            Ok(file) => file,
+            Err(e) => {
+                debug!(
+                    "failed to parse allocator library {} for symbol discovery: {:?}",
+                    path.display(),
+                    e
+                );
+                return None;
+            }
+        };
+
+        let mut symbols = HashSet::new();
+        for symbol in file.dynamic_symbols().chain(file.symbols()) {
+            let Ok(name) = symbol.name() else {
+                continue;
+            };
+            let name = name.split_once('@').map_or(name, |(name, _)| name);
+            symbols.insert(name.to_string());
+        }
+
+        Some(symbols)
     }
 
     fn find_allocator_libraries() -> Vec<PathBuf> {
@@ -561,7 +644,15 @@ impl Bpf {
 
     fn disable_memory_uprobe_autoattach(open_skel: &mut OpenTracersSkel) {
         open_skel.progs.memory_enter_malloc.set_autoattach(false);
+        open_skel
+            .progs
+            .memory_enter_malloc_multi
+            .set_autoattach(false);
         open_skel.progs.memory_exit_malloc.set_autoattach(false);
+        open_skel
+            .progs
+            .memory_exit_malloc_multi
+            .set_autoattach(false);
         open_skel.progs.memory_enter_calloc.set_autoattach(false);
         open_skel.progs.memory_exit_calloc.set_autoattach(false);
         open_skel.progs.memory_enter_realloc.set_autoattach(false);
@@ -569,6 +660,10 @@ impl Bpf {
         open_skel
             .progs
             .memory_enter_aligned_alloc
+            .set_autoattach(false);
+        open_skel
+            .progs
+            .memory_enter_aligned_alloc_multi
             .set_autoattach(false);
         open_skel
             .progs
@@ -583,6 +678,10 @@ impl Bpf {
             .memory_exit_posix_memalign
             .set_autoattach(false);
         open_skel.progs.memory_enter_free.set_autoattach(false);
+        open_skel
+            .progs
+            .memory_enter_free_multi
+            .set_autoattach(false);
     }
 
     pub fn show_actual_profiler_map_sizes(bpf: &ProfilerSkel) -> Result<(), libbpf_rs::Error> {

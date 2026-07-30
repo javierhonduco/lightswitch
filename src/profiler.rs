@@ -493,7 +493,9 @@ impl Profiler {
                         if let TracerEvent::MemorySample { sample, .. } = &mut event {
                             sample.collected_at += walltime_at_system_boot;
                         }
-                        tracers_send.send(event);
+                        if let Err(e) = tracers_send.send(event) {
+                            debug!("failed to send tracer event with: `{:?}`", e);
+                        }
                     }
                     Err(e) => {
                         error!("copying data from tracer_events failed with {:?}", e);

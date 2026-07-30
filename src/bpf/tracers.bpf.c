@@ -503,14 +503,32 @@ int tracer_exit_munmap(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-SEC("uprobe")
-int memory_enter_malloc(struct pt_regs *ctx) {
+static __always_inline int memory_enter_malloc_impl(struct pt_regs *ctx) {
     return track_pending_allocation(ctx, (u64)PT_REGS_PARM1(ctx), 0, 0);
 }
 
 SEC("uprobe")
-int memory_exit_malloc(struct pt_regs *ctx) {
+int memory_enter_malloc(struct pt_regs *ctx) {
+    return memory_enter_malloc_impl(ctx);
+}
+
+SEC("uprobe.multi")
+int memory_enter_malloc_multi(struct pt_regs *ctx) {
+    return memory_enter_malloc_impl(ctx);
+}
+
+static __always_inline int memory_exit_malloc_impl(struct pt_regs *ctx) {
     return complete_pending_allocation(ctx, (u64)PT_REGS_RC(ctx));
+}
+
+SEC("uprobe")
+int memory_exit_malloc(struct pt_regs *ctx) {
+    return memory_exit_malloc_impl(ctx);
+}
+
+SEC("uprobe.multi")
+int memory_exit_malloc_multi(struct pt_regs *ctx) {
+    return memory_exit_malloc_impl(ctx);
 }
 
 SEC("uprobe")
@@ -542,9 +560,18 @@ int memory_exit_realloc(struct pt_regs *ctx) {
     return complete_pending_allocation(ctx, (u64)PT_REGS_RC(ctx));
 }
 
+static __always_inline int memory_enter_aligned_alloc_impl(struct pt_regs *ctx) {
+    return track_pending_allocation(ctx, (u64)PT_REGS_PARM2(ctx), 0, 0);
+}
+
 SEC("uprobe")
 int memory_enter_aligned_alloc(struct pt_regs *ctx) {
-    return track_pending_allocation(ctx, (u64)PT_REGS_PARM2(ctx), 0, 0);
+    return memory_enter_aligned_alloc_impl(ctx);
+}
+
+SEC("uprobe.multi")
+int memory_enter_aligned_alloc_multi(struct pt_regs *ctx) {
+    return memory_enter_aligned_alloc_impl(ctx);
 }
 
 SEC("uprobe")
@@ -584,8 +611,7 @@ int memory_exit_posix_memalign(struct pt_regs *ctx) {
     return 0;
 }
 
-SEC("uprobe")
-int memory_enter_free(struct pt_regs *ctx) {
+static __always_inline int memory_enter_free_impl(struct pt_regs *ctx) {
     if (!full_memory_profiling_enabled()) {
         return 0;
     }
@@ -608,6 +634,16 @@ int memory_enter_free(struct pt_regs *ctx) {
     capture_user_stack(ctx, &event->stack);
     emit_deallocation(ctx, event, address, size);
     return 0;
+}
+
+SEC("uprobe")
+int memory_enter_free(struct pt_regs *ctx) {
+    return memory_enter_free_impl(ctx);
+}
+
+SEC("uprobe.multi")
+int memory_enter_free_multi(struct pt_regs *ctx) {
+    return memory_enter_free_impl(ctx);
 }
 
 char LICENSE[] SEC("license") = "Dual MIT/GPL";

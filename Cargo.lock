@@ -2164,6 +2164,7 @@ dependencies = [
  "lru 0.16.4",
  "memmap2",
  "nix",
+ "object 0.39.1",
  "parking_lot",
  "perf-event-open-sys",
  "plain",
