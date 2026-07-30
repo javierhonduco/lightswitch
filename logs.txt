@@ -1,0 +1,43 @@
+   Compiling lightswitch-unwind-info v0.0.0 (/home/javierhonduco/src/lightswitch/lightswitch-unwind-info)
+warning: unused import: `std::io::Read`
+ --> lightswitch-unwind-info/src/manager.rs:6:5
+  |
+6 | use std::io::Read;
+  |     ^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `io::BufReader`
+  --> lightswitch-unwind-info/src/manager.rs:11:21
+   |
+11 | use std::{fs::File, io::BufReader};
+   |                     ^^^^^^^^^^^^^
+
+warning: unused variable: `e`
+   --> lightswitch-unwind-info/src/manager.rs:116:17
+    |
+116 |             Err(e) => {
+    |                 ^ help: if this is intentional, prefix it with an underscore: `_e`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `check_digest`
+   --> lightswitch-unwind-info/src/manager.rs:134:9
+    |
+134 |         check_digest: bool,
+    |         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_check_digest`
+
+warning: fields `executable_path` and `first_frame_override` are never read
+  --> lightswitch-unwind-info/src/persist.rs:54:5
+   |
+53 | pub struct Writer {
+   |            ------ fields in this struct
+54 |     executable_path: PathBuf,
+   |     ^^^^^^^^^^^^^^^
+55 |     first_frame_override: Option<(u64, u64)>,
+   |     ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling lightswitch v0.5.0 (/home/javierhonduco/src/lightswitch)
+warning: `lightswitch-unwind-info` (lib) generated 5 warnings (run `cargo fix --lib -p lightswitch-unwind-info` to apply 4 suggestions)

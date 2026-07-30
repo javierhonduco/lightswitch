@@ -14,8 +14,10 @@ use thiserror::Error;
 use tracing::debug;
 
 use super::persist::{Reader, Writer};
+use crate::compact_unwind_info;
 use crate::persist::{ReaderError, WriterError};
 use crate::types::CompactUnwindRow;
+use crate::types::CompactUnwindRowWire;
 
 const DEFAULT_MAX_CACHED_FILES: usize = 1_000;
 
@@ -61,6 +63,31 @@ pub struct UnwindInfoManager {
     max_cached_files: usize,
 }
 
+pub enum UnwindInfoResult {
+    Mmap { mmap: memmap2::Mmap },
+    Vec { vec: Vec<CompactUnwindRow> },
+}
+
+impl UnwindInfoResult {
+    pub fn unwind_info(
+        &self,
+        check_digest: bool,
+    ) -> Result<&[CompactUnwindRow], FetchUnwindInfoError> {
+        match self {
+            UnwindInfoResult::Mmap { mmap } => {
+                let reader =
+                    Reader::new(&mmap[..], check_digest).map_err(FetchUnwindInfoError::Reader)?;
+                let unwind_info = reader.unwind_info().expect("unwind info");
+                let unwind_info = unsafe {
+                    std::mem::transmute::<&[CompactUnwindRowWire], &[CompactUnwindRow]>(unwind_info)
+                };
+                Ok(unwind_info)
+            }
+            UnwindInfoResult::Vec { vec } => Ok(&vec[..]),
+        }
+    }
+}
+
 impl UnwindInfoManager {
     pub fn new(cache_dir: &Path, max_cached_files: Option<usize>) -> Self {
         let max_cached_files = max_cached_files.unwrap_or(DEFAULT_MAX_CACHED_FILES);
@@ -83,20 +110,20 @@ impl UnwindInfoManager {
         executable_id: ExecutableId,
         first_frame_override: Option<(u64, u64)>,
         check_digest: bool,
-    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
+    ) -> Result<UnwindInfoResult, FetchUnwindInfoError> {
         match self.read_from_cache(executable_id, check_digest) {
             Ok(unwind_info) => Ok(unwind_info),
             Err(e) => {
-                if matches!(e, FetchUnwindInfoError::NotFound) {
-                    debug!("error fetch_unwind_info: {:?}, regenerating...", e);
-                }
+                //if matches!(e, FetchUnwindInfoError::NotFound) {
+                //      println!("error fetch_unwind_info: {:?}, regenerating...", e);
+                //}
                 // No matter the error, regenerate the unwind information.
-                let unwind_info =
-                    self.write_to_cache(executable_path, executable_id, first_frame_override);
+                self.write_to_cache(executable_path, executable_id, first_frame_override)?;
+                let unwind_info = self.read_from_cache(executable_id, check_digest);
                 if unwind_info.is_ok() {
                     self.bump(executable_id, None);
                 }
-                unwind_info
+                Ok(unwind_info?)
             }
         }
     }
@@ -105,8 +132,9 @@ impl UnwindInfoManager {
         &self,
         executable_id: ExecutableId,
         check_digest: bool,
-    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
+    ) -> Result<UnwindInfoResult, FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
+        // println!("cached path {:?}", unwind_info_path);
         let file = File::open(unwind_info_path).map_err(|e| {
             if e.kind() == ErrorKind::NotFound {
                 FetchUnwindInfoError::NotFound
@@ -115,12 +143,20 @@ impl UnwindInfoManager {
             }
         })?;
 
-        let mut buffer = BufReader::new(file);
-        let mut data = Vec::new();
-        buffer.read_to_end(&mut data)?;
-        let reader = Reader::new(&data, check_digest).map_err(FetchUnwindInfoError::Reader)?;
+        let mmap = unsafe { memmap2::Mmap::map(&file) }.unwrap();
+        Ok(UnwindInfoResult::Mmap { mmap })
+    }
 
-        Ok(reader.unwind_info()?)
+    // TODO: replace with streaming reads
+    fn read_unwind_info(
+        &self,
+        executable_path: &Path,
+        first_frame_override: Option<(u64, u64)>,
+    ) -> Result<Vec<CompactUnwindRow>, WriterError> {
+        Ok(
+            compact_unwind_info(&executable_path.to_string_lossy(), first_frame_override)
+                .map_err(|e| WriterError::UnwindInfoGeneric(e.to_string()))?,
+        )
     }
 
     fn write_to_cache(
@@ -128,15 +164,25 @@ impl UnwindInfoManager {
         executable_path: &Path,
         executable_id: ExecutableId,
         first_frame_override: Option<(u64, u64)>,
-    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
+    ) -> Result<(), FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
+        // TODO: streaming
+        let unwind_info = self.read_unwind_info(executable_path, first_frame_override)?;
         let unwind_info_writer = Writer::new(executable_path, first_frame_override);
         // [`File::create`] will truncate an existing file to the size it needs.
+        // note on deleting on errors.
+        //
+        // If another process is modifying this arodun the same time, it's SIGBUS time.
+
+        let _ = std::fs::remove_file(&unwind_info_path);
         let mut file =
-            BufWriter::new(File::create(unwind_info_path).map_err(FetchUnwindInfoError::Io)?);
+            BufWriter::new(File::create_new(unwind_info_path).map_err(FetchUnwindInfoError::Io)?);
         unwind_info_writer
-            .write(&mut file)
-            .map_err(FetchUnwindInfoError::Write)
+            .write(unwind_info, &mut file)
+            .map_err(FetchUnwindInfoError::Write)?;
+
+        Ok(())
+        // could return the reading iterator to not have to read it again?
     }
 
     fn path_for(&self, executable_id: ExecutableId) -> PathBuf {

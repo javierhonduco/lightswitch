@@ -9,7 +9,6 @@ use plain::Plain;
 use ring::digest::{Context, SHA256};
 use thiserror::Error;
 
-use crate::compact_unwind_info;
 use crate::types::{CompactUnwindRow, CompactUnwindRowWire};
 
 // To identify this binary file type.
@@ -66,27 +65,16 @@ impl Writer {
 
     pub fn write<W: Write + Seek>(
         self,
+        unwind_info: Vec<CompactUnwindRow>,
         writer: &mut W,
-    ) -> Result<Vec<CompactUnwindRow>, WriterError> {
-        let unwind_info = self.read_unwind_info(self.first_frame_override)?;
+    ) -> Result<(), WriterError> {
         // Write dummy header.
         self.write_header(writer, 0, None)?;
         let digest = self.write_unwind_info(writer, &unwind_info)?;
         // Write real header.
         writer.seek(SeekFrom::Start(0))?;
         self.write_header(writer, unwind_info.len(), Some(digest))?;
-        Ok(unwind_info)
-    }
-
-    fn read_unwind_info(
-        &self,
-        first_frame_override: Option<(u64, u64)>,
-    ) -> Result<Vec<CompactUnwindRow>, WriterError> {
-        compact_unwind_info(
-            &self.executable_path.to_string_lossy(),
-            first_frame_override,
-        )
-        .map_err(|e| WriterError::UnwindInfoGeneric(e.to_string()))
+        Ok(())
     }
 
     fn write_header(
@@ -167,6 +155,7 @@ impl<'a> Reader<'a> {
     fn parse_header(data: &[u8]) -> Result<Header, ReaderError> {
         let header_size = std::mem::size_of::<Header>();
         let mut header = Header::default();
+        //println!("data len {}", data.len());
         let header_data = data.get(0..header_size).ok_or(ReaderError::OutOfRange)?;
         plain::copy_from_bytes(&mut header, header_data)
             .map_err(|e| ReaderError::Generic(format!("{e:?}")))?;
@@ -186,7 +175,7 @@ impl<'a> Reader<'a> {
         Ok(header)
     }
 
-    pub fn unwind_info(self) -> Result<Vec<CompactUnwindRow>, ReaderError> {
+    pub fn unwind_info(self) -> Result<&'a [CompactUnwindRowWire], ReaderError> {
         let header_size = std::mem::size_of::<Header>();
         let unwind_row_size = std::mem::size_of::<CompactUnwindRow>();
         let unwind_info_len: usize = self
@@ -195,8 +184,7 @@ impl<'a> Reader<'a> {
             .try_into()
             .map_err(|_| ReaderError::SizeConversion)?;
 
-        let mut unwind_info = Vec::with_capacity(unwind_info_len);
-        let mut unwind_row_wire = CompactUnwindRowWire::default();
+        // let mut unwind_row_wire = CompactUnwindRowWire::default();
 
         let unwind_info_data = &self.data[header_size..];
         let mut context = Context::new(&SHA256);
@@ -204,17 +192,18 @@ impl<'a> Reader<'a> {
             let step = i * unwind_row_size;
             let unwind_row_data = unwind_info_data
                 .get(step..step + unwind_row_size)
-                .ok_or(ReaderError::OutOfRange)?;
+                .ok_or(ReaderError::OutOfRange)
+                .unwrap();
             if self.check_digest {
                 context.update(unwind_row_data);
             }
-            plain::copy_from_bytes(&mut unwind_row_wire, unwind_row_data)
-                .map_err(|e| ReaderError::Generic(format!("{e:?}")))?;
-            unwind_info.push(
-                unwind_row_wire
-                    .try_into()
-                    .map_err(|_| ReaderError::RowInvalidData)?,
-            );
+            // plain::copy_from_bytes(&mut unwind_row_wire, unwind_row_data)
+            //     .map_err(|e| ReaderError::Generic(format!("{e:?}")))?;
+            // unwind_info.push(
+            //     unwind_row_wire
+            //         .try_into()
+            //         .map_err(|_| ReaderError::RowInvalidData)?,
+            // );
         }
 
         if self.check_digest {
@@ -231,7 +220,7 @@ impl<'a> Reader<'a> {
             }
         }
 
-        Ok(unwind_info)
+        Ok(plain::slice_from_bytes::<CompactUnwindRowWire>(unwind_info_data).unwrap())
     }
 }
 

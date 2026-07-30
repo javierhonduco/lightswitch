@@ -15,6 +15,8 @@ use libbpf_rs::Link;
 use libbpf_rs::MapCore;
 use lightswitch_object::BuildId;
 use lightswitch_object::ElfLoad;
+use lightswitch_unwind_info::manager::UnwindInfoResult;
+use lightswitch_unwind_info::pages::to_pages;
 use lru::LruCache;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
@@ -25,6 +27,7 @@ use std::fs;
 use std::fs::read_link;
 use std::fs::File;
 use std::io::ErrorKind;
+use std::io::Write;
 use std::num::NonZeroUsize;
 
 use std::os::unix::fs::FileExt;
@@ -796,6 +799,8 @@ impl Profiler {
                 warn!("mapping not found");
                 continue;
             }
+            let path = object_file_info.unwrap().path.clone();
+
             std::mem::drop(object_file);
 
             // Add mapping.
@@ -821,6 +826,17 @@ impl Profiler {
                 warn!(
                     "error adding unwind information for process {pid}, executable 0x{} due to {:?}",
                     mapping.executable_id, e
+                );
+
+                warn!(
+                    "pages {} {:?}",
+                    self.bpf
+                        .native_unwinder
+                        .maps
+                        .executable_to_page
+                        .keys()
+                        .count(),
+                    path,
                 );
 
                 // TODO: cleanup unwind information map in case of a partial write.
@@ -871,6 +887,7 @@ impl Profiler {
         let runtime = executable_info.runtime.clone();
         std::mem::drop(object_files);
 
+        let a = runtime.clone();
         let unwind_info = match runtime {
             Runtime::Go(stop_frames) => {
                 if stop_frames.is_empty() {
@@ -895,7 +912,13 @@ impl Profiler {
                 unwind_info.push(CompactUnwindRow::stop_unwinding(end_address));
 
                 unwind_info.sort_by_key(|e| e.pc);
-                Ok(unwind_info)
+
+                println!("unwind_info len {}", unwind_info.len());
+                if unwind_info.len() < 100 {
+                    println!("\t {:?}", unwind_info);
+                }
+
+                Ok(UnwindInfoResult::Vec { vec: unwind_info })
             }
             Runtime::Zig {
                 start_low_address,
@@ -919,10 +942,7 @@ impl Profiler {
             Runtime::CLike => {
                 if needs_synthesis {
                     debug!("synthetising arm64 unwind information using frame pointers for vDSO");
-                    Ok(vec![
-                        CompactUnwindRow::frame_pointer(start_address, is_arm64),
-                        CompactUnwindRow::stop_unwinding(end_address),
-                    ])
+                    todo!()
                 } else {
                     let _span = span!(
                         Level::DEBUG,
@@ -955,6 +975,21 @@ impl Profiler {
                 ));
             }
         };
+        let unwind_info = match unwind_info.unwind_info(false) {
+            Ok(unwind_info) => unwind_info,
+            Err(e) => {
+                return Err(AddUnwindInformationError::Generic(
+                    format!("{:?}", e),
+                    format!(
+                        "{} aka {}",
+                        opened_exe_path.display(),
+                        executable_path.display()
+                    ),
+                ));
+            }
+        };
+
+        //      println!("{:?}", executable_path);
 
         if !self.maybe_evict_executables(unwind_info.len(), self.max_native_unwind_info_size_mb) {
             return Err(AddUnwindInformationError::Eviction);
@@ -981,8 +1016,20 @@ impl Profiler {
         // Add all unwind information and its pages.
         Bpf::add_unwind_info(&inner_map, &unwind_info)
             .map_err(|e| AddUnwindInformationError::BpfUnwindInfo(e.to_string()))?;
+        let uuu = to_pages(unwind_info).len();
+        println!(
+            "+ adding pages for {:?} {} unwind_info len: {:?} to_pages len: {}",
+            executable_path,
+            executable_id,
+            unwind_info.len(),
+            uuu
+        );
+        if uuu == 1533713733 {
+            let mut f = File::create("omg_unwind").unwrap();
+            write!(f, "{:?}", unwind_info).unwrap();
+        }
         self.bpf
-            .add_pages(&unwind_info, executable_id.into())
+            .add_pages(unwind_info, executable_id.into())
             .map_err(|e| AddUnwindInformationError::BpfPages(e.to_string()))?;
         let unwind_info_start_address = unwind_info.first().unwrap().pc;
         let unwind_info_end_address = unwind_info.last().unwrap().pc;
@@ -1157,6 +1204,16 @@ impl Profiler {
                 warn!(
                     "error adding unwind information for process {pid}, executable 0x{} due to {:?}",
                     executable_id, e
+                );
+
+                warn!(
+                    "pages {}",
+                    self.bpf
+                        .native_unwinder
+                        .maps
+                        .executable_to_page
+                        .keys()
+                        .count()
                 );
             }
         }

@@ -1,3 +1,26 @@
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::backtrace::Backtrace;
+
+struct SnitchAllocator;
+
+unsafe impl GlobalAlloc for SnitchAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if layout.size() >= 1 * 1024 * 1024 {
+            // 1 MiB
+            println!("before uh, oh");
+            //println!("uh, oh {:?}", Backtrace::force_capture());
+        }
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+}
+
+#[global_allocator]
+static GLOBAL: SnitchAllocator = SnitchAllocator;
+
 use core::str;
 use std::error::Error;
 use std::fs::File;
@@ -22,6 +45,11 @@ use lightswitch::collector::{
 };
 use lightswitch::debug_info::DebugInfoManager;
 use lightswitch::profile::symbolize_profile;
+use lightswitch_unwind_info::manager::UnwindInfoManager;
+use lightswitch_unwind_info::pages::to_pages;
+use lightswitch_unwind_info::types::CfaType::{EndFdeMarker, FramePointerOffset};
+use lightswitch_unwind_info::types::CompactUnwindRow;
+use lightswitch_unwind_info::types::RbpType::{CfaOffset, Unchanged};
 use nix::unistd::Uid;
 use tracing::{debug, error, info, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -488,8 +516,13 @@ fn show_object_file_info(path: &str) {
     if let Ok(executable_id) = object_file.build_id().id() {
         println!("- executable id: 0x{executable_id}");
     }
-    let unwind_info = CompactUnwindInfoBuilder::with_callback(path, None, |_| {});
-    println!("- unwind info: {:?}", unwind_info.unwrap().process());
+    let mut count = 0;
+    let unwind_info = CompactUnwindInfoBuilder::with_callback(path, None, |_| count += 1);
+    println!(
+        "- unwind info: {:?} len {} ",
+        unwind_info.unwrap().process(),
+        count
+    );
     println!("- debug info (dwarf): {:?}", object_file.has_debug_info());
     println!(
         "- go: {:?} {:?}",
@@ -498,6 +531,208 @@ fn show_object_file_info(path: &str) {
     );
     println!("- dynamic: {:?}", object_file.is_dynamic());
     println!("- load segments: {:?}", object_file.elf_load_segments());
+    println!(
+        "- pages count: {}",
+        to_pages(&compact_unwind_info(path, None).unwrap()).len()
+    );
+
+    println!(
+        "- pages count: {}",
+        to_pages(
+            &UnwindInfoManager::new(&PathBuf::from("/tmp/lightswitch"), Some(10_000))
+                .fetch_unwind_info(&PathBuf::from(path), object_file.id().unwrap(), None, false)
+                .unwrap()
+                .unwind_info(false)
+                .unwrap()
+        )
+        .len()
+    );
+
+    let u = [
+        CompactUnwindRow {
+            pc: 4194304,
+            cfa_type: FramePointerOffset,
+            rbp_type: CfaOffset,
+            cfa_offset: 16,
+            rbp_offset: -16,
+        },
+        CompactUnwindRow {
+            pc: 4556768,
+            cfa_type: EndFdeMarker,
+            rbp_type: Unchanged,
+            cfa_offset: 0,
+            rbp_offset: 0,
+        },
+        CompactUnwindRow {
+            pc: 4556901,
+            cfa_type: FramePointerOffset,
+            rbp_type: CfaOffset,
+            cfa_offset: 16,
+            rbp_offset: -16,
+        },
+        CompactUnwindRow {
+            pc: 4556928,
+            cfa_type: EndFdeMarker,
+            rbp_type: Unchanged,
+            cfa_offset: 0,
+            rbp_offset: 0,
+        },
+        CompactUnwindRow {
+            pc: 4557168,
+            cfa_type: FramePointerOffset,
+            rbp_type: CfaOffset,
+            cfa_offset: 16,
+            rbp_offset: -16,
+        },
+        CompactUnwindRow {
+            pc: 4557184,
+            cfa_type: EndFdeMarker,
+            rbp_type: Unchanged,
+            cfa_offset: 0,
+            rbp_offset: 0,
+        },
+        CompactUnwindRow {
+            pc: 4557255,
+            cfa_type: FramePointerOffset,
+            rbp_type: CfaOffset,
+            cfa_offset: 16,
+            rbp_offset: -16,
+        },
+        CompactUnwindRow {
+            pc: 4578112,
+            cfa_type: EndFdeMarker,
+            rbp_type: Unchanged,
+            cfa_offset: 0,
+            rbp_offset: 0,
+        },
+        CompactUnwindRow {
+            pc: 4578277,
+            cfa_type: FramePointerOffset,
+            rbp_type: CfaOffset,
+            cfa_offset: 16,
+            rbp_offset: -16,
+        },
+        CompactUnwindRow {
+            pc: 4578304,
+            cfa_type: EndFdeMarker,
+            rbp_type: Unchanged,
+            cfa_offset: 0,
+            rbp_offset: 0,
+        },
+        CompactUnwindRow {
+            pc: 4578351,
+            cfa_type: FramePointerOffset,
+            rbp_type: CfaOffset,
+            cfa_offset: 16,
+            rbp_offset: -16,
+        },
+        CompactUnwindRow {
+            pc: 4784064,
+            cfa_type: EndFdeMarker,
+            rbp_type: Unchanged,
+            cfa_offset: 0,
+            rbp_offset: 0,
+        },
+        CompactUnwindRow {
+            pc: 4784077,
+            cfa_type: FramePointerOffset,
+            rbp_type: CfaOffset,
+            cfa_offset: 16,
+            rbp_offset: -16,
+        },
+        CompactUnwindRow {
+            pc: 4784128,
+            cfa_type: EndFdeMarker,
+            rbp_type: Unchanged,
+            cfa_offset: 0,
+            rbp_offset: 0,
+        },
+        CompactUnwindRow {
+            pc: 4784222,
+            cfa_type: FramePointerOffset,
+            rbp_type: CfaOffset,
+            cfa_offset: 16,
+            rbp_offset: -16,
+        },
+        CompactUnwindRow {
+            pc: 4784224,
+            cfa_type: EndFdeMarker,
+            rbp_type: Unchanged,
+            cfa_offset: 0,
+            rbp_offset: 0,
+        },
+        CompactUnwindRow {
+            pc: 4784237,
+            cfa_type: FramePointerOffset,
+            rbp_type: CfaOffset,
+            cfa_offset: 16,
+            rbp_offset: -16,
+        },
+        CompactUnwindRow {
+            pc: 4784256,
+            cfa_type: EndFdeMarker,
+            rbp_type: Unchanged,
+            cfa_offset: 0,
+            rbp_offset: 0,
+        },
+        CompactUnwindRow {
+            pc: 4784405,
+            cfa_type: FramePointerOffset,
+            rbp_type: CfaOffset,
+            cfa_offset: 16,
+            rbp_offset: -16,
+        },
+        CompactUnwindRow {
+            pc: 4791456,
+            cfa_type: EndFdeMarker,
+            rbp_type: Unchanged,
+            cfa_offset: 0,
+            rbp_offset: 0,
+        },
+        CompactUnwindRow {
+            pc: 4791463,
+            cfa_type: FramePointerOffset,
+            rbp_type: CfaOffset,
+            cfa_offset: 16,
+            rbp_offset: -16,
+        },
+        CompactUnwindRow {
+            pc: 4801216,
+            cfa_type: EndFdeMarker,
+            rbp_type: Unchanged,
+            cfa_offset: 0,
+            rbp_offset: 0,
+        },
+        CompactUnwindRow {
+            pc: 4801234,
+            cfa_type: FramePointerOffset,
+            rbp_type: CfaOffset,
+            cfa_offset: 16,
+            rbp_offset: -16,
+        },
+        CompactUnwindRow {
+            pc: 4801280,
+            cfa_type: EndFdeMarker,
+            rbp_type: Unchanged,
+            cfa_offset: 0,
+            rbp_offset: 0,
+        },
+        CompactUnwindRow {
+            pc: 4801298,
+            cfa_type: FramePointerOffset,
+            rbp_type: CfaOffset,
+            cfa_offset: 16,
+            rbp_offset: -16,
+        },
+        CompactUnwindRow {
+            pc: 10600448,
+            cfa_type: EndFdeMarker,
+            rbp_type: Unchanged,
+            cfa_offset: 0,
+            rbp_offset: 0,
+        },
+    ];
+    println!("- lllleeen {}", to_pages(&u).len());
 }
 
 #[cfg(test)]
@@ -533,10 +768,10 @@ mod tests {
         Usage: lightswitch [OPTIONS] [COMMAND]
 
         Commands:
-          object-info  
-          show-unwind  
-          system-info  
-          server       
+          object-info
+          show-unwind
+          system-info
+          server
           help         Print this message or the help of the given subcommand(s)
 
         Options:
@@ -545,7 +780,7 @@ mod tests {
 
           -D, --duration <DURATION>
                   How long this agent will run in seconds
-                  
+
                   [default: 18446744073709551615]
 
               --libbpf-debug
@@ -559,24 +794,24 @@ mod tests {
 
               --logging <LOGGING>
                   Set lightswitch's logging level
-                  
+
                   [default: info]
                   [possible values: trace, debug, info, warn, error]
 
               --sample-freq <SAMPLE_FREQ_IN_HZ>
                   Per-CPU Sampling Frequency in Hz
-                  
+
                   [default: 19]
 
               --profile-format <PROFILE_FORMAT>
                   Output file for Flame Graph in SVG format
-                  
+
                   [default: flame-graph]
                   [possible values: none, flame-graph, firefox, pprof]
 
               --flamegraph-aggregation <FLAMEGRAPH_AGGREGATION>
                   What information to show in the flamegraph. Won't do anything for other profile formats
-                  
+
                   [default: function]
                   [possible values: function, all]
 
@@ -594,18 +829,18 @@ mod tests {
                   - local-disk
                   - remote
                   - pyroscope
-                  
+
                   [default: local-disk]
 
               --server-url <SERVER_URL>
-                  
+
 
               --token <TOKEN>
-                  
+
 
               --pyroscope-app-name <PYROSCOPE_APP_NAME>
                   Application name for Pyroscope
-                  
+
                   [default: lightswitch]
 
               --pyroscope-tenant-id <PYROSCOPE_TENANT_ID>
@@ -613,7 +848,7 @@ mod tests {
 
               --perf-buffer-bytes <PERF_BUFFER_BYTES>
                   Size of each profiler perf buffer, in bytes (must be a power of 2)
-                  
+
                   [default: 524288]
 
               --mapsize-info
@@ -621,7 +856,7 @@ mod tests {
 
               --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>
                   max number of rate limit entries
-                  
+
                   [default: 5000]
 
               --exclude-self
@@ -637,7 +872,7 @@ mod tests {
 
               --max-native-unwind-info-size-mb <MAX_NATIVE_UNWIND_INFO_SIZE_MB>
                   approximate max size in megabytes used for the BPF maps that hold unwind information
-                  
+
                   [default: 2147483647]
 
               --enable-deadlock-detector

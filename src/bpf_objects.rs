@@ -378,6 +378,11 @@ impl Bpf {
         executable_id: u64,
     ) -> Result<(), libbpf_rs::Error> {
         let pages = lightswitch_unwind_info::pages::to_pages(unwind_info);
+        println!(
+            "- adding {} pages for executable {:x}",
+            pages.len(),
+            executable_id
+        );
         for page in pages {
             let page_key = page_key_t {
                 file_offset: page.address,
@@ -406,6 +411,10 @@ impl Bpf {
         executable_id: ExecutableId,
         partial_write: bool,
     ) {
+        println!(
+            "=> pages {}",
+            self.native_unwinder.maps.executable_to_page.keys().count()
+        );
         let range = start_address..end_address;
         let mut success_count = 0;
         let mut failure_count = 0;
@@ -443,6 +452,12 @@ impl Bpf {
                 failure_count, total, range, start_address, end_address
             );
         }
+
+        println!(
+            "<= pages {}",
+            self.native_unwinder.maps.executable_to_page.keys().count()
+        );
+        println!();
     }
 
     fn add_mapping(
