@@ -15,3 +15,5 @@ pub mod profiler;
 pub mod server;
 pub mod usym;
 pub mod util;
+
+pub(crate) const NAME_AND_VERSION: &str = concat!("lightswitch v", env!("CARGO_PKG_VERSION"));

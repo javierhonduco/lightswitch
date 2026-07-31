@@ -26,6 +26,7 @@ use crate::profile::{
 };
 use crate::profile::{raw_to_processed, RawSample};
 use crate::profile::{AggregatedProfile, RawAggregatedProfile, RawAggregatedSample};
+use crate::NAME_AND_VERSION;
 
 pub trait Collector {
     fn collect(
@@ -100,7 +101,9 @@ impl StreamingCollector {
         profile_frequency_hz: u64,
         metadata_provider: ThreadSafeGlobalMetadataProvider,
     ) -> Self {
-        let client_builder = reqwest::blocking::Client::builder().timeout(Duration::from_secs(30));
+        let client_builder = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .user_agent(NAME_AND_VERSION);
         let client = client_builder
             .build()
             .expect("build lightswitch HTTP client");
@@ -197,7 +200,9 @@ impl PyroscopeCollector {
         node_name: String,
     ) -> Self {
         let push_url = format!("{}/push.v1.PusherService/Push", server_url);
-        let client_builder = reqwest::blocking::Client::builder().timeout(Duration::from_secs(30));
+        let client_builder = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .user_agent(NAME_AND_VERSION);
         let client = client_builder.build().expect("build pyroscope HTTP client");
         Self {
             local_symbolizer,

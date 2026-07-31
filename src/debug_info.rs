@@ -10,6 +10,8 @@ use tracing::instrument;
 
 use lightswitch_object::BuildId;
 
+use crate::NAME_AND_VERSION;
+
 /// Handles with debug information.
 ///
 /// This currently experimental, not feature-complete and not used yet during
@@ -104,9 +106,11 @@ impl DebugInfoBackendRemote {
             server_url,
             query_client: reqwest::blocking::Client::builder()
                 .timeout(query_timeout)
+                .user_agent(NAME_AND_VERSION)
                 .build()?,
             upload_client: reqwest::blocking::Client::builder()
                 .timeout(upload_timeout)
+                .user_agent(NAME_AND_VERSION)
                 .build()?,
         })
     }
