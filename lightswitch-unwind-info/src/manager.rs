@@ -62,6 +62,35 @@ pub struct UnwindInfoManager {
     max_cached_files: usize,
 }
 
+
+pub enum CompactUnwindRows<'a> {
+    Wire {
+        inner: std::slice::Iter<'a, CompactUnwindRowWire>,
+    },
+    Row {
+        inner: std::slice::Iter<'a, CompactUnwindRow>,
+    }
+}
+
+impl Iterator for CompactUnwindRows<'_> {
+    type Item = Result<CompactUnwindRow, ReaderError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            CompactUnwindRows::Wire {inner} => {
+                inner.next().map(|wire| {
+                    (*wire)
+                        .try_into()
+                        .map_err(|_| ReaderError::RowInvalidData)
+                })
+            },
+            CompactUnwindRows::Row {inner} => {
+                inner.next().map ( |row| Ok(*row))
+            }
+        }
+    }
+}
+
 pub enum UnwindInfoResult {
     Mmap { mmap: memmap2::Mmap },
     Vec { vec: Vec<CompactUnwindRow> },
@@ -71,18 +100,17 @@ impl UnwindInfoResult {
     pub fn unwind_info(
         &self,
         check_digest: bool,
-    ) -> Result<&[CompactUnwindRow], FetchUnwindInfoError> {
+    ) -> Result<CompactUnwindRows, FetchUnwindInfoError> {
         match self {
             UnwindInfoResult::Mmap { mmap } => {
                 let reader =
                     Reader::new(&mmap[..], check_digest).map_err(FetchUnwindInfoError::Reader)?;
-                let unwind_info = reader.unwind_info().expect("unwind info");
-                let unwind_info = unsafe {
-                    std::mem::transmute::<&[CompactUnwindRowWire], &[CompactUnwindRow]>(unwind_info)
-                };
-                Ok(unwind_info)
+                let unwind_info_wire = reader.unwind_info().expect("unwind info");
+                Ok( CompactUnwindRows::Wire {
+                    inner: unwind_info_wire.iter(),
+                })
             }
-            UnwindInfoResult::Vec { vec } => Ok(&vec[..]),
+            UnwindInfoResult::Vec { vec } => Ok(CompactUnwindRows::Row {inner: vec.iter()}),
         }
     }
 }
@@ -140,7 +168,7 @@ impl UnwindInfoManager {
             }
         })?;
 
-        let mmap = unsafe { memmap2::Mmap::map(&file) }.unwrap();
+        let mmap = unsafe { memmap2::Mmap::map(&file) }?;
         Ok(UnwindInfoResult::Mmap { mmap })
     }
 

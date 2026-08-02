@@ -192,8 +192,7 @@ impl<'a> Reader<'a> {
             let step = i * unwind_row_size;
             let unwind_row_data = unwind_info_data
                 .get(step..step + unwind_row_size)
-                .ok_or(ReaderError::OutOfRange)
-                .unwrap();
+                .ok_or(ReaderError::OutOfRange)?;
             if self.check_digest {
                 context.update(unwind_row_data);
             }

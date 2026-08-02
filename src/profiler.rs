@@ -986,6 +986,8 @@ impl Profiler {
             }
         };
 
+        let unwind_info = unwind_info.into_iter();
+
         if !self.maybe_evict_executables(unwind_info.len(), self.max_native_unwind_info_size_mb) {
             return Err(AddUnwindInformationError::Eviction);
         }
