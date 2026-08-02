@@ -861,6 +861,7 @@ impl Profiler {
         let object_files = self.object_files.read();
         let executable_info = object_files.get(&executable_id).unwrap();
         let executable_path = executable_info.path.clone();
+        let mut elf_loads = executable_info.elf_load_segments.clone();
         let opened_exe_path = if executable_info.is_vdso {
             executable_info.path.clone()
         } else {
@@ -891,8 +892,21 @@ impl Profiler {
                 }
 
                 // Go since pretty early on compiles with frame pointers by default.
-                unwind_info.push(CompactUnwindRow::frame_pointer(start_address, is_arm64));
-                unwind_info.push(CompactUnwindRow::stop_unwinding(end_address));
+                elf_loads.sort_by_key(|e| e.p_vaddr);
+                if let Some(code_elf_load) = elf_loads.first() {
+                    unwind_info.push(CompactUnwindRow::frame_pointer(
+                        code_elf_load.p_vaddr,
+                        is_arm64,
+                    ));
+                    unwind_info.push(CompactUnwindRow::stop_unwinding(
+                        code_elf_load.p_vaddr + code_elf_load.p_filesz,
+                    ));
+                } else {
+                    return Err(AddUnwindInformationError::Generic(
+                        "Go binary has no elf load segments".into(),
+                        "".into(),
+                    ));
+                }
 
                 unwind_info.sort_by_key(|e| e.pc);
                 Ok(unwind_info)
