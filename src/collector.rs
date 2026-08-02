@@ -5,6 +5,7 @@ use prost::Message;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,7 +26,9 @@ use crate::profile::{
     fold_profile, symbolize_profile, to_pprof, AggregatedSample, SymbolizedFrame,
 };
 use crate::profile::{raw_to_processed, RawSample};
-use crate::profile::{AggregatedProfile, RawAggregatedProfile, RawAggregatedSample};
+use crate::profile::{
+    write_perfetto, AggregatedProfile, RawAggregatedProfile, RawAggregatedSample, TimestampedSample,
+};
 use crate::NAME_AND_VERSION;
 
 pub trait Collector {
@@ -541,8 +544,106 @@ impl Collector for LiveCollector {
     }
 }
 
+pub struct PerfettoCollector {
+    profile_path: PathBuf,
+    sample_freq: u64,
+    local_symbolizer: bool,
+    walltime_at_system_boot: u64,
+    samples: Vec<TimestampedSample>,
+    procs: HashMap<i32, ProcessInfo>,
+    objs: HashMap<ExecutableId, ObjectFileInfo>,
+}
+
+impl PerfettoCollector {
+    pub fn new(profile_path: PathBuf, sample_freq: u64, local_symbolizer: bool) -> Self {
+        let walltime_at_system_boot = procfs::boot_time()
+            .expect("read system boot time")
+            .timestamp_nanos_opt()
+            .expect("system boot time fits in nanoseconds")
+            as u64;
+        Self {
+            profile_path,
+            sample_freq,
+            local_symbolizer,
+            walltime_at_system_boot,
+            samples: Vec::new(),
+            procs: HashMap::new(),
+            objs: HashMap::new(),
+        }
+    }
+}
+
+impl Collector for PerfettoCollector {
+    fn collect(
+        &mut self,
+        samples: Vec<RawSample>,
+        procs: &HashMap<i32, ProcessInfo>,
+        objs: &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        let mut timestamps = Vec::with_capacity(samples.len());
+        let mut profile = Vec::with_capacity(samples.len());
+        for sample in samples {
+            let Some(timestamp) = sample
+                .collected_at
+                .checked_sub(self.walltime_at_system_boot)
+            else {
+                debug!(
+                    timestamp = sample.collected_at,
+                    "Perfetto sample timestamp predates system boot"
+                );
+                continue;
+            };
+            let raw_sample = RawAggregatedSample { sample, count: 1 };
+            match raw_sample.process(procs, objs) {
+                Ok(processed_sample) => {
+                    timestamps.push(timestamp);
+                    profile.push(processed_sample);
+                }
+                Err(error) => debug!(?error, "failed to process sample for Perfetto output"),
+            }
+        }
+
+        let profile = if self.local_symbolizer {
+            symbolize_profile(&profile, procs, objs)
+        } else {
+            profile
+        };
+        self.samples.extend(
+            timestamps
+                .into_iter()
+                .zip(profile)
+                .map(|(timestamp, sample)| TimestampedSample { timestamp, sample }),
+        );
+    }
+
+    fn finish(
+        &self,
+    ) -> (
+        AggregatedProfile,
+        &HashMap<i32, ProcessInfo>,
+        &HashMap<ExecutableId, ObjectFileInfo>,
+    ) {
+        match File::create(&self.profile_path).and_then(|file| {
+            let mut writer = BufWriter::new(file);
+            write_perfetto(&mut writer, &self.samples, self.sample_freq)?;
+            writer.flush()
+        }) {
+            Ok(()) => eprintln!(
+                "Perfetto profile successfully written to {}",
+                self.profile_path.to_string_lossy()
+            ),
+            Err(error) => tracing::error!(
+                "failed to write Perfetto profile to {}: {error}",
+                self.profile_path.to_string_lossy()
+            ),
+        }
+
+        (AggregatedProfile::new(), &self.procs, &self.objs)
+    }
+}
+
 pub struct FirefoxProfilerCollector {
-    profile_name: String,
+    profile_path: PathBuf,
     sample_freq: u64,
     samples: Vec<AggregatedSample>,
     timestamps: Vec<u64>,
@@ -554,12 +655,12 @@ pub struct FirefoxProfilerCollector {
 
 impl FirefoxProfilerCollector {
     pub fn new(
-        profile_name: &str,
+        profile_path: impl Into<PathBuf>,
         sample_freq: u64,
         meta: ThreadSafeGlobalMetadataProvider,
     ) -> Self {
         FirefoxProfilerCollector {
-            profile_name: profile_name.to_string(),
+            profile_path: profile_path.into(),
             sample_freq,
             samples: vec![],
             timestamps: vec![],
@@ -716,7 +817,7 @@ impl Collector for FirefoxProfilerCollector {
             );
         }
 
-        let file = File::create(&self.profile_name).unwrap();
+        let file = File::create(&self.profile_path).unwrap();
         serde_json::to_writer(&mut BufWriter::new(file), &ff_profile).unwrap();
 
         (AggregatedProfile::new(), &self.procs, &self.objs)

@@ -1,5 +1,6 @@
 use core::str;
 use std::error::Error;
+use std::ffi::CString;
 use std::fs::File;
 use std::io::IsTerminal;
 use std::io::Write;
@@ -15,14 +16,13 @@ use clap::Parser;
 use crossbeam_channel::bounded;
 use crossbeam_channel::tick;
 use inferno::flamegraph;
-use lightswitch::collector::FirefoxProfilerCollector;
 use lightswitch::collector::{
-    AggregatorCollector, Collector, LiveCollector, NullCollector, PyroscopeCollector,
-    StreamingCollector,
+    AggregatorCollector, Collector, FirefoxProfilerCollector, LiveCollector, NullCollector,
+    PerfettoCollector, PyroscopeCollector, StreamingCollector,
 };
 use lightswitch::debug_info::DebugInfoManager;
 use lightswitch::profile::symbolize_profile;
-use nix::unistd::Uid;
+use nix::unistd::{Gid, Uid};
 use tracing::{debug, error, info, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
@@ -39,7 +39,7 @@ use lightswitch::debug_info::{
 use lightswitch::kernel::kernel_build_id;
 use lightswitch::profile::{fold_profile, to_pprof};
 use lightswitch::profiler::{Profiler, ProfilerConfig};
-use lightswitch::server::start_server;
+use lightswitch::server::{find_default_profile, start_profile_server, ProfileFileFormat};
 use lightswitch_object::kernel::kaslr_offset;
 use lightswitch_object::ObjectFile;
 use lightswitch_unwind_info::compact_unwind_info;
@@ -56,6 +56,7 @@ use crate::args::FlamegraphAggregation;
 use crate::args::LoggingLevel;
 use crate::args::ProfileFormat;
 use crate::args::ProfileSender;
+use crate::args::ServerProfileFormat;
 use crate::args::Symbolizer;
 use crate::killswitch::KillSwitch;
 
@@ -157,25 +158,50 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             return Ok(());
         }
-        Some(Commands::Server { no_open }) => {
+        Some(Commands::Server {
+            profile,
+            format,
+            no_open,
+        }) => {
             // If root, change user to the one that invoked `sudo` as we want to
             // open the browser with that user.
             if nix::unistd::geteuid().is_root() {
-                let target_uid = std::env::var("SUDO_UID")
-                    .expect("SUDO_UID not set")
-                    .parse::<u32>()
-                    .expect("SUDO_UID could not be parsed");
-
-                nix::unistd::setuid(Uid::from_raw(target_uid)).unwrap();
+                let target_uid = Uid::from_raw(std::env::var("SUDO_UID")?.parse()?);
+                let target_gid = Gid::from_raw(std::env::var("SUDO_GID")?.parse()?);
+                let target_user = CString::new(std::env::var("SUDO_USER")?)?;
+                nix::unistd::initgroups(&target_user, target_gid)?;
+                nix::unistd::setgid(target_gid)?;
+                nix::unistd::setuid(target_uid)?;
             }
 
-            let port = 3000;
-            let url = format!("http://localhost:{port}");
-            println!("Listening on {url}");
+            let profile = match profile {
+                Some(profile) => profile,
+                None => find_default_profile(&PathBuf::new())?,
+            };
+            let format = match format {
+                Some(ServerProfileFormat::Firefox) => ProfileFileFormat::Firefox,
+                Some(ServerProfileFormat::Perfetto) => ProfileFileFormat::Perfetto,
+                None => ProfileFileFormat::from_path(&profile).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "cannot infer profile format; use --format firefox or --format perfetto",
+                    )
+                })?,
+            };
+            if !profile.is_file() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("profile not found: {}", profile.to_string_lossy()),
+                )
+                .into());
+            }
+            let port = format.default_port();
+            let url = format!("http://127.0.0.1:{port}");
+            println!("Serving {} at {url}", profile.to_string_lossy());
             if !no_open {
                 open_browser(&url);
             }
-            start_server(port);
+            start_profile_server(port, profile, format)?;
             return Ok(());
         }
     }
@@ -350,14 +376,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
+    let profile_path = |default_name: &str| {
+        args.profile_path.clone().unwrap_or_default().join(
+            args.profile_name
+                .clone()
+                .unwrap_or_else(|| default_name.into()),
+        )
+    };
     let collector: Arc<Mutex<Box<dyn Collector + Send>>> =
         Arc::new(Mutex::new(match args.sender {
             ProfileSender::None => Box::new(NullCollector::new()),
             ProfileSender::LocalDisk => match args.profile_format {
                 ProfileFormat::Firefox => Box::new(FirefoxProfilerCollector::new(
-                    "firefox-profiler.json",
+                    profile_path(ProfileFileFormat::Firefox.default_profile_name()),
                     args.sample_freq,
                     metadata_provider.clone(),
+                )),
+                ProfileFormat::Perfetto => Box::new(PerfettoCollector::new(
+                    profile_path(ProfileFileFormat::Perfetto.default_profile_name()),
+                    args.sample_freq,
+                    args.symbolizer == Symbolizer::Local,
                 )),
                 _ => Box::new(AggregatorCollector::new()),
             },
@@ -398,6 +436,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             return Ok(());
         }
         _ => {}
+    }
+
+    // Timeline formats preserve and write raw samples in dedicated collectors.
+    if matches!(
+        &args.profile_format,
+        ProfileFormat::Firefox | ProfileFormat::Perfetto
+    ) {
+        return Ok(());
     }
 
     // Otherwise let's symbolize the profile and write it to disk.
@@ -459,7 +505,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
         }
-        ProfileFormat::Firefox => {} // Handled separately, as a different collector
+        ProfileFormat::Firefox | ProfileFormat::Perfetto => unreachable!("handled above"),
         ProfileFormat::None => {}
     }
 
@@ -572,7 +618,7 @@ mod tests {
                   Output file for Flame Graph in SVG format
                   
                   [default: flame-graph]
-                  [possible values: none, flame-graph, firefox, pprof]
+                  [possible values: none, flame-graph, firefox, perfetto, pprof]
 
               --flamegraph-aggregation <FLAMEGRAPH_AGGREGATION>
                   What information to show in the flamegraph. Won't do anything for other profile formats

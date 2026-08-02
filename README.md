@@ -34,7 +34,13 @@ As a CLI, **lightswitch** can be run with:
 $ sudo lightswitch
 ```
 
-Stop it with <kbd>Ctrl</kbd>+<kbd>C</kbd>, or alternatively, pass a `--duration` in seconds. By default, a flamegraph in SVG format will be written to disk. Profiles in the Firefox Profiler can be produced with `--profile-format=firefox` and visualized with `ligthswitch server`. Pprof is also supported with `--profile-format=pprof`. By default the whole machine will be profiled which can be overriden with `--pids`.
+Stop it with <kbd>Ctrl</kbd>+<kbd>C</kbd>, or alternatively, pass a `--duration` in seconds. By default, a flamegraph in SVG format will be written to disk. Pprof, Firefox Profiler, and Perfetto traces are also supported with `--profile-format=pprof`, `--profile-format=firefox`, and `--profile-format=perfetto`, respectively. Completed Firefox and Perfetto profiles can be visualized with `lightswitch server`. The server automatically selects `firefox-profiler.json` or `profile.pftrace` when exactly one exists, or accepts another path with `--profile <PROFILE>`. By default the whole machine will be profiled, which can be overridden with `--pids`.
+
+For example, open the default completed profile in its native web viewer with:
+
+```shell
+$ lightswitch server
+```
 
 Development
 -----------

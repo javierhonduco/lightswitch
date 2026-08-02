@@ -25,7 +25,14 @@ pub(crate) enum ProfileFormat {
     #[default]
     FlameGraph,
     Firefox,
+    Perfetto,
     Pprof,
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+pub(crate) enum ServerProfileFormat {
+    Firefox,
+    Perfetto,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Default, PartialEq)]
@@ -70,6 +77,13 @@ pub(crate) enum Commands {
     },
     SystemInfo,
     Server {
+        /// Completed profile to serve. Detects the default Firefox or Perfetto
+        /// output when omitted.
+        #[arg(long)]
+        profile: Option<PathBuf>,
+        /// Profile format. Inferred from .json or .pftrace when omitted.
+        #[arg(long, value_enum)]
+        format: Option<ServerProfileFormat>,
         #[arg(long)]
         no_open: bool,
     },
