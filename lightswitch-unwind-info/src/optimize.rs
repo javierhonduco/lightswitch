@@ -1,13 +1,13 @@
 use crate::types::{CfaType, CompactUnwindRow};
 
-/// Remove unecessary end of function markers.
+/// Remove unnecessary end of function markers.
 ///
 /// A function marker is superfluous when there is another unwind information
 /// entry for the same program counter. This logic might be changed later on to
 /// delete markers within a certain bytes of the closest instruction.
 ///
 /// The input *must* be sorted.
-pub fn remove_unnecesary_markers(unwind_info: &mut Vec<CompactUnwindRow>) {
+pub fn remove_unnecessary_markers(unwind_info: &mut Vec<CompactUnwindRow>) {
     let mut last_row: Option<CompactUnwindRow> = None;
     let mut new_i = 0;
 
@@ -74,7 +74,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_remove_unnecesary_markers() {
+    fn test_remove_unnecessary_markers() {
         let unwind_info = vec![
             CompactUnwindRow::stop_unwinding(0x100),
             CompactUnwindRow {
@@ -83,7 +83,7 @@ mod tests {
             },
         ];
         let mut processed = unwind_info.clone();
-        remove_unnecesary_markers(&mut processed);
+        remove_unnecessary_markers(&mut processed);
 
         assert_eq!(
             processed,

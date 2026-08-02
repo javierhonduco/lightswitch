@@ -65,7 +65,7 @@ impl K8sMetadataProvider {
 impl TaskMetadataProvider for K8sMetadataProvider {
     // called by GlobalMetadataProvider for each PID the profiler sees.
     // takes the provided TaskKey and maps it to the container id using procfs
-    // before checking it against the pod metadata that is being colected in a
+    // before checking it against the pod metadata that is being collected in a
     // background thread.
     fn get_metadata(
         &self,
