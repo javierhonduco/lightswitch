@@ -118,8 +118,5 @@ exec "$engine" $engine_args run -v "/sys:/sys" -v "/sys/kernel/debug:/sys/kernel
     --mount "type=volume,src=$target_volume,dst=/workspace/target" \
     --cap-add SYS_ADMIN \
     --workdir /workspace \
-    --env "HOST_UID=$(id -u)" \
-    --env "HOST_GID=$(id -g)" \
-    --env LIGHTSWITCH_CONTAINER_CHOWN="${LIGHTSWITCH_CONTAINER_CHOWN:-1}" \
     --privileged \
     "$image" "$@"
