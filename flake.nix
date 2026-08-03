@@ -118,7 +118,8 @@
               ## Analise and deal with profiles in the pprof format
               pprof
               graphviz
-            ];
+util-linux            
+];
             LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_21.libclang ];
             LIBBPF_SYS_LIBRARY_PATH = lib.makeLibraryPath [ zlib.static elfutils' ];
             RUST_GDB = "${gdb}/bin/gdb";

@@ -154,6 +154,7 @@ in
 {
   run-vmtest = lightswitch:
     pkgs.writeShellScriptBin "run-vmtests" ''
+      export PATH=${pkgs.lib.makeBinPath [ pkgs.qemu ]}:$PATH
       ${vmtest}/bin/vmtest --config ${vmtest-create-config lightswitch}/vmtest.toml
     '';
 }

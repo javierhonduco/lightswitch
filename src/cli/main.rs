@@ -690,7 +690,7 @@ mod tests {
                   enable parking_lot's deadlock detector
 
               --cache-dir-base <CACHE_DIR_BASE>
-                  [default: /tmp]
+                  [default: /tmp/nix-shell.EqfhMG]
 
               --killswitch-path-override <KILLSWITCH_PATH_OVERRIDE>
                   Override the default path to the killswitch file (/tmp/lightswitch/killswitch) which prevents the profiler from starting

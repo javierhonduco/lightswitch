@@ -49,6 +49,22 @@ We use `nix` for the development environment and the building system. It can be 
 * start a developer environment with `nix develop` and then you'll be able to build the project with cargo with `cargo build`. This might take a little while the first time.
 * generate a container image `nix build .#container` will write a symlink to the container image to `./result`.
 
+If you do not want to install Nix on the host, use Docker or Podman:
+
+```shell
+$ ./scripts/dev-container
+$ ./scripts/dev-container just ci
+$ ./scripts/dev-container cargo test --workspace
+```
+
+The wrapper builds the development image from `Dockerfile` on first use, bind-mounts this checkout at `/workspace`, and runs every command through `nix develop --command`. The Dockerfile does not `COPY` or `ADD` the project source into the image; the source stays on the host and Nix/Cargo build state is kept in named container volumes. Use `./scripts/dev-container --rebuild` after changing the Dockerfile. Rootless Podman needs working subuid/subgid mappings; if those are not configured, use Docker or rootful Podman instead.
+
+Kernel VM tests can also run through the wrapper. If your container engine supports KVM passthrough, pass it as an extra run argument:
+
+```shell
+$ LIGHTSWITCH_CONTAINER_RUN_ARGS="--device=/dev/kvm" ./scripts/dev-container nix run .#vmtest
+```
+
 ### Building
 ```shell
 # after running `nix develop`

@@ -1,0 +1,125 @@
+#!/usr/bin/env sh
+set -eu
+
+usage() {
+    cat <<'EOF'
+Usage:
+  scripts/dev-container [--rebuild] [--no-build] [COMMAND [ARG...]]
+
+Examples:
+  scripts/dev-container
+  scripts/dev-container just ci
+  scripts/dev-container cargo test --workspace
+
+Environment:
+  LIGHTSWITCH_CONTAINER_ENGINE=docker|podman  Select the container engine.
+  LIGHTSWITCH_CONTAINER_ENGINE_ARGS="..."     Extra flags passed to the engine.
+  LIGHTSWITCH_DEV_IMAGE=lightswitch-dev       Override the dev image tag.
+  LIGHTSWITCH_USE_NIX_VOLUME=auto|1|0         Persist /nix in a named volume.
+EOF
+}
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+
+rebuild=0
+build=auto
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --rebuild)
+            rebuild=1
+            shift
+            ;;
+        --no-build)
+            build=0
+            shift
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+if [ -n "${LIGHTSWITCH_CONTAINER_ENGINE:-}" ]; then
+    engine=$LIGHTSWITCH_CONTAINER_ENGINE
+elif command -v docker >/dev/null 2>&1; then
+    engine=docker
+elif command -v podman >/dev/null 2>&1; then
+    engine=podman
+else
+    echo "scripts/dev-container: install Docker or Podman to use the Nix dev container" >&2
+    exit 127
+fi
+
+image=${LIGHTSWITCH_DEV_IMAGE:-lightswitch-dev}
+engine_args=${LIGHTSWITCH_CONTAINER_ENGINE_ARGS:-}
+nix_volume=${LIGHTSWITCH_NIX_VOLUME:-lightswitch-dev-nix}
+cargo_volume=${LIGHTSWITCH_CARGO_VOLUME:-lightswitch-dev-cargo}
+nix_cache_volume=${LIGHTSWITCH_NIX_CACHE_VOLUME:-lightswitch-dev-nix-cache}
+target_volume=${LIGHTSWITCH_TARGET_VOLUME:-lightswitch-dev-target}
+use_nix_volume=${LIGHTSWITCH_USE_NIX_VOLUME:-auto}
+host_user=$(id -un)
+
+if [ "$engine" = podman ] && [ "$(id -u)" != 0 ]; then
+    if ! grep -q "^$host_user:" /etc/subuid 2>/dev/null || ! grep -q "^$host_user:" /etc/subgid 2>/dev/null; then
+        echo "scripts/dev-container: rootless Podman needs subuid/subgid ranges to run the Nix image" >&2
+        echo "scripts/dev-container: configure /etc/subuid and /etc/subgid, use Docker, or use rootful Podman" >&2
+        exit 125
+    fi
+fi
+
+if [ "$use_nix_volume" = auto ]; then
+    use_nix_volume=1
+fi
+
+if [ "$use_nix_volume" = 1 ]; then
+    nix_mount="--mount type=volume,src=$nix_volume,dst=/nix"
+else
+    nix_mount=
+fi
+
+if [ "$build" = auto ]; then
+    if [ "$rebuild" -eq 1 ] || ! "$engine" $engine_args image inspect "$image" >/dev/null 2>&1; then
+        build=1
+    else
+        build=0
+    fi
+fi
+
+if [ "$build" -eq 1 ]; then
+    if [ "$engine" = docker ]; then
+        DOCKER_BUILDKIT=1 "$engine" $engine_args build -t "$image" -f "$repo_root/Dockerfile" "$repo_root"
+    else
+        "$engine" $engine_args build -t "$image" -f "$repo_root/Dockerfile" "$repo_root"
+    fi
+fi
+
+interactive_flags=
+if [ -t 0 ]; then
+    interactive_flags="$interactive_flags -i"
+fi
+if [ -t 1 ]; then
+    interactive_flags="$interactive_flags -t"
+fi
+
+exec "$engine" $engine_args run -v "/sys:/sys" -v "/sys/kernel/debug:/sys/kernel/debug" --rm $interactive_flags \
+    --mount "type=bind,src=$repo_root,dst=/workspace" \
+    $nix_mount \
+    --mount "type=volume,src=$cargo_volume,dst=/root/.cargo" \
+    --mount "type=volume,src=$nix_cache_volume,dst=/root/.cache/nix" \
+    --mount "type=volume,src=$target_volume,dst=/workspace/target" \
+    --cap-add SYS_ADMIN \
+    --workdir /workspace \
+    --env "HOST_UID=$(id -u)" \
+    --env "HOST_GID=$(id -g)" \
+    --env LIGHTSWITCH_CONTAINER_CHOWN="${LIGHTSWITCH_CONTAINER_CHOWN:-1}" \
+    --privileged \
+    "$image" "$@"
