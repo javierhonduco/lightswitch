@@ -310,7 +310,7 @@ pub fn write_perfetto<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::{SymbolizationError, SymbolizedFrame};
+    use crate::profile::{SampleResult, SymbolizationError, SymbolizedFrame};
 
     #[derive(Debug)]
     enum Value<'a> {
@@ -391,6 +391,7 @@ mod tests {
                 sample: AggregatedSample {
                     pid: 42,
                     tid: 43,
+                    result: SampleResult::Success,
                     ustack: vec![
                         frame(3, "leaf", Some("sample.rs"), Some(30)),
                         frame(2, "caller", Some("sample.rs"), Some(20)),
@@ -405,6 +406,7 @@ mod tests {
                 sample: AggregatedSample {
                     pid: 42,
                     tid: 43,
+                    result: SampleResult::Success,
                     ustack: vec![frame(3, "leaf", Some("sample.rs"), Some(30))],
                     kstack: vec![],
                     count: 1,
@@ -458,6 +460,7 @@ mod tests {
             sample: AggregatedSample {
                 pid: 1,
                 tid: 1,
+                result: SampleResult::Success,
                 ustack: vec![
                     Frame {
                         virtual_address: 0x123,
