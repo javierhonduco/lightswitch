@@ -246,7 +246,35 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u
     return true;
 }
 
-static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
+void send_sample_impl(struct bpf_perf_event_data *ctx, sample_t *sample) {
+    u32 sample_size = sizeof(sample_t)
+                      // Remove the actual stack buffer which was doubled to appease the verifier.
+                      - 2 * MAX_STACK_DEPTH * sizeof(u64)
+                      // Add the actual stack size in bytes.
+                      + (sample->stack.ulen + sample->stack.klen) * sizeof(u64);
+
+    // Appease the verifier.
+    if (sample_size > sizeof(sample_t)) {
+        return;
+    }
+
+    int ret = 0;
+    if (lightswitch_config.use_ring_buffers) {
+        ret = bpf_ringbuf_output(&stacks_rb, sample, sample_size, 0);
+    } else {
+        ret = bpf_perf_event_output(ctx, &stacks, BPF_F_CURRENT_CPU, sample, sample_size);
+    }
+
+    if (ret < 0) {
+        bpf_printk(
+            "send_sample_impl failed ret=%d, use_ring_buffers=%d",
+            ret,
+            lightswitch_config.use_ring_buffers);
+        bump_unwind_error_failure_sending_stack();
+    }
+}
+
+static __always_inline void send_sample(struct bpf_perf_event_data *ctx,
                                       unwind_state_t *unwind_state) {
     // Unwind and copy kernel stack.
     u32 ulen = unwind_state->sample.stack.ulen;
@@ -266,31 +294,7 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx,
     unwind_state->sample.tid = per_thread_id;
     unwind_state->sample.collected_at = bpf_ktime_get_boot_ns();
 
-    u32 sample_size = sizeof(sample_t)
-                      // Remove the actual stack buffer which was doubled to appease the verifier.
-                      - 2 * MAX_STACK_DEPTH * sizeof(u64)
-                      // Add the actual stack size in bytes.
-                      + (unwind_state->sample.stack.ulen + unwind_state->sample.stack.klen) * sizeof(u64);
-
-    // Appease the verifier.
-    if (sample_size > sizeof(sample_t)) {
-        return;
-    }
-
-    int ret = 0;
-    if (lightswitch_config.use_ring_buffers) {
-        ret = bpf_ringbuf_output(&stacks_rb, &(unwind_state->sample), sample_size, 0);
-    } else {
-        ret = bpf_perf_event_output(ctx, &stacks, BPF_F_CURRENT_CPU, &(unwind_state->sample), sample_size);
-    }
-
-    if (ret < 0) {
-        bpf_printk(
-            "add_stack failed ret=%d, use_ring_buffers=%d",
-            ret,
-            lightswitch_config.use_ring_buffers);
-        bump_unwind_error_failure_sending_stack();
-    }
+    send_sample_impl(ctx, &(unwind_state->sample));
 }
 
 // The unwinding machinery lives here.
@@ -300,9 +304,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     unsigned int level = lightswitch_config.userspace_pid_ns_level;
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
 
-    bool reached_bottom_of_stack = false;
     u64 zero = 0;
-
     unwind_state_t *unwind_state = bpf_map_lookup_elem(&heap, &zero);
     if (unwind_state == NULL) {
         LOG("unwind_state is NULL, should not happen");
@@ -321,19 +323,22 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
         if (mapping == NULL) {
             LOG("[error] no mapping found for pc %llx", unwind_state->ip);
             bump_unwind_error_mapping_not_found();
-            return 1;
+            unwind_state->sample.result = SAMPLE_MAPPING_NOT_FOUND;
+            break;
         }
 
         if (unwind_state->ip < mapping->begin || unwind_state->ip >= mapping->end) {
             LOG("[error] pc %llx not contained within begin: %llx end: %llx", unwind_state->ip, mapping->begin, mapping->end);
             bump_unwind_error_mapping_does_not_contain_pc();
-            return 1;
+            unwind_state->sample.result = SAMPLE_MAPPING_DOES_NOT_CONTAIN_PC;
+            break;
         }
 
         if (mapping->type == MAPPING_TYPE_ANON) {
             LOG("JIT section, stopping");
             bump_unwind_jit_encountered();
-            return 1;
+            unwind_state->sample.result = SAMPLE_MAPPING_JIT;
+            break;
         }
 
         if (mapping->type == MAPPING_TYPE_VDSO) {
@@ -359,7 +364,8 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
                 .address = unwind_state->ip & PAGE_MASK,
             };
             send_event(&event, ctx);
-            return 1;
+            unwind_state->sample.result = SAMPLE_MAPPING_MISSING_UNWIND_INFO;
+            break;
         }
 
         u64 table_idx = find_offset_for_pc(inner, object_relative_pc_low, low_index, high_index);
@@ -405,24 +411,26 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 
         if (found_cfa_type == CFA_TYPE_OFFSET_DID_NOT_FIT) {
             bump_unwind_error_cfa_offset_did_not_fit();
-            return 1;
+            unwind_state->sample.result = SAMPLE_UNSUPPORTED_UNWIND_RULE;
+            break;
         }
 
         if (found_cfa_type == CFA_TYPE_END_OF_FDE_MARKER) {
             LOG("[info] pc %llx not contained in the unwind info, found marker",
                 unwind_state->ip);
-            reached_bottom_of_stack = true;
+            unwind_state->sample.result = SAMPLE_SUCCESS;
             break;
         }
 
         if (found_rbp_type == RBP_TYPE_OFFSET_DID_NOT_FIT) {
             bump_unwind_error_rbp_offset_did_not_fit();
-            return 1;
+            unwind_state->sample.result = SAMPLE_UNSUPPORTED_UNWIND_RULE;
+            break;
         }
 
         if (found_rbp_type == RBP_TYPE_UNDEFINED_RETURN_ADDRESS) {
             LOG("[info] null return address, end of stack", unwind_state->ip);
-            reached_bottom_of_stack = true;
+            unwind_state->sample.result = SAMPLE_SUCCESS;
             break;
         }
 
@@ -439,7 +447,8 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
             LOG("\t[error] frame pointer is %d (register or exp), bailing out",
                 found_rbp_type);
             bump_unwind_error_unsupported_frame_pointer_action();
-            return 1;
+            unwind_state->sample.result = SAMPLE_UNSUPPORTED_UNWIND_RULE;;
+            break;
         }
 
         u64 previous_rsp = 0;
@@ -456,6 +465,8 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
             if (ret < 0) {
                 LOG("[error] reading previous rsp failed with %d", ret);
                 bump_unwind_error_previous_rsp_read();
+                unwind_state->sample.result = ret == -EFAULT ? SAMPLE_MEM_READ_FAULT_ERROR : SAMPLE_MEM_READ_GENERIC_ERROR;
+                break;
             }
             previous_rsp += addition;
         } else if (found_cfa_type == CFA_TYPE_CFA_TYPE_UNSUP_EXP) {
@@ -474,7 +485,8 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
         } else {
             LOG("\t[unsup] cfa type %d not valid at ip: %llx", found_cfa_type, object_relative_pc);
             bump_unwind_error_unsupported_cfa_register();
-            return 1;
+            unwind_state->sample.result = SAMPLE_UNSUPPORTED_UNWIND_RULE;
+            break;
         }
 
         // TODO(javierhonduco): A possible check could be to see whether this value
@@ -500,7 +512,8 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
             if (ret < 0) {
                 LOG("[error] previous_rbp read failed with %d", ret);
                 bump_unwind_error_previous_rbp_read();
-                return 1;
+                unwind_state->sample.result = ret == -EFAULT ? SAMPLE_MEM_READ_FAULT_ERROR : SAMPLE_MEM_READ_GENERIC_ERROR;
+                break;
             }
         }
 
@@ -539,7 +552,8 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
             LOG("[error] previous_rip read failed, ret=%d @ %llx",
                 err, previous_rip_addr);
             bump_unwind_error_previous_rip_read();
-            return 1;
+            unwind_state->sample.result = err == -EFAULT ? SAMPLE_MEM_READ_FAULT_ERROR : SAMPLE_MEM_READ_GENERIC_ERROR;
+            break;
         }
 
         if (previous_rip == 0) {
@@ -560,7 +574,30 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
         // Frame finished! :)
     }
 
-    if (reached_bottom_of_stack) {
+    // Continue unwinding the stack if we have enough tail call budget and space
+    // in our stack storage.
+    if (unwind_state->sample.result == SAMPLE_STARTED) {
+        if (unwind_state->sample.stack.ulen < MAX_STACK_DEPTH &&
+                   unwind_state->tail_calls < MAX_TAIL_CALLS)
+        {
+            LOG("Continuing walking the stack in a tail call, current tail %d",
+                unwind_state->tail_calls);
+            unwind_state->tail_calls++;
+            bpf_tail_call(ctx, &programs, PROGRAM_NATIVE_UNWINDER);
+            // While `bpf_tail_call` won't typically fail, it can if the tail call limit
+            // is exceeded etc or the programs map is not correctly populated. Setting the
+            // state to truncated to surface this error.
+            unwind_state->sample.result = SAMPLE_TRUNCATED;
+        } else {
+            // We couldn't get the whole stacktrace.
+            bump_unwind_error_truncated();
+            unwind_state->sample.result = SAMPLE_TRUNCATED;
+        }
+    }
+
+    if (unwind_state->sample.result == SAMPLE_SUCCESS) {
+        LOG("======= reached bottom frame! =======");
+        bump_unwind_success_dwarf();
 #ifdef __TARGET_ARCH_x86
         // We've reached the bottom of the stack once we don't find an unwind
         // entry for the given program counter and the current frame pointer
@@ -581,22 +618,11 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
             bump_unwind_bp_non_zero_for_bottom_frame();
         }
 #endif
-        LOG("======= reached bottom frame! =======");
-        add_stack(ctx, unwind_state);
-        bump_unwind_success_dwarf();
-        return 0;
-
-    } else if (unwind_state->sample.stack.ulen < MAX_STACK_DEPTH &&
-               unwind_state->tail_calls < MAX_TAIL_CALLS) {
-        LOG("Continuing walking the stack in a tail call, current tail %d",
-            unwind_state->tail_calls);
-        unwind_state->tail_calls++;
-        bpf_tail_call(ctx, &programs, PROGRAM_NATIVE_UNWINDER);
     }
 
-    // We couldn't get the whole stacktrace.
-    LOG("Truncated stack, won't be sent");
-    bump_unwind_error_truncated();
+    // Either way send the sample, the `result` field will be set to success
+    // or an error type if any, which can be surfaced to end users.
+    send_sample(ctx, unwind_state);
     return 0;
 }
 
@@ -608,6 +634,7 @@ static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_
 
     unwind_state->sample.pid = 0;
     unwind_state->sample.tid = 0;
+    unwind_state->sample.result = SAMPLE_STARTED;
     unwind_state->sample.collected_at = 0;
 
     if (in_kernel(PT_REGS_IP(regs))) {
@@ -653,7 +680,6 @@ int on_event(struct bpf_perf_event_data *ctx) {
             return 0;
         }
         set_initial_state(profiler_state, &ctx->regs);
-
         bpf_tail_call(ctx, &programs, PROGRAM_NATIVE_UNWINDER);
         return 0;
     }

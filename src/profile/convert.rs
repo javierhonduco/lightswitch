@@ -19,7 +19,8 @@ use crate::ksym::KsymIter;
 use crate::process::ObjectFileInfo;
 use crate::process::ProcessInfo;
 use crate::profile::{
-    AggregatedProfile, AggregatedSample, Frame, FrameAddress, RawAggregatedProfile, SymbolizedFrame,
+    AggregatedProfile, AggregatedSample, Frame, FrameAddress, RawAggregatedProfile, SampleResult,
+    SymbolizedFrame,
 };
 use crate::usym::symbolize_native_stack_blaze;
 use lightswitch_object::ExecutableId;
@@ -190,6 +191,14 @@ pub fn to_pprof(
             }
         }
 
+        if sample.result != SampleResult::Success {
+            let mapping_id = pprof.add_mapping(0x0, 0x0, 0x0, "lightswitch-unwinder-errors", "");
+            let (line, _) =
+                pprof.add_line(&format!("error/unwinder: {:?}", sample.result), None, None);
+            let location = pprof.add_location(0x0, mapping_id, vec![line]);
+            location_ids.push(location);
+        }
+
         let task_key = TaskKey {
             tid: sample.tid,
             pid: sample.pid,
@@ -236,13 +245,18 @@ pub fn fold_profile(
     let mut folded = String::new();
 
     for sample in profile {
-        let ustack = sample
+        let mut ustack = sample
             .ustack
             .clone()
             .into_iter()
             .rev()
             .map(|e| e.format_all_info(only_show_function_names))
             .collect::<Vec<String>>();
+
+        if sample.result != SampleResult::Success {
+            ustack.push(format!("error/unwinder: {:?}", sample.result));
+        }
+
         let ustack = ustack.join(";");
         let kstack = sample
             .kstack
@@ -318,19 +332,29 @@ pub fn symbolize_profile(
     let ksyms = KsymIter::from_kallsyms()
         .sorted_by(|a, b| a.start_addr.cmp(&b.start_addr))
         .collect::<Vec<_>>();
+    use crate::profile::SampleResult;
 
     for sample in profile {
+        let mut ustack = symbolize_user_stack(
+            &addresses_per_sample,
+            procs,
+            objs,
+            sample.pid,
+            &sample.ustack,
+        );
+
+        if sample.result != SampleResult::Success {
+            ustack.push(Frame::with_error(
+                0x0,
+                format!("sample failed with `{:?}`", sample.result),
+            ));
+        }
         let symbolized_sample = AggregatedSample {
             pid: sample.pid,
             tid: sample.tid,
+            result: sample.result,
             count: sample.count,
-            ustack: symbolize_user_stack(
-                &addresses_per_sample,
-                procs,
-                objs,
-                sample.pid,
-                &sample.ustack,
-            ),
+            ustack,
             kstack: symbolize_kernel_stack(&sample.kstack, &ksyms),
         };
         r.push(symbolized_sample);
@@ -348,9 +372,6 @@ pub fn fetch_symbols_for_profile(
         HashMap::new();
 
     for sample in profile {
-        if sample.ustack.is_empty() {
-            continue;
-        }
         let Some(info) = procs.get(&sample.pid) else {
             continue;
         };
@@ -442,7 +463,7 @@ fn symbolize_user_stack(
     pid: i32,
     native_stack: &[Frame],
 ) -> Vec<Frame> {
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(native_stack.len());
 
     for frame in native_stack.iter() {
         let Some(info) = procs.get(&pid) else {
