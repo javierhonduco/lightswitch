@@ -8,12 +8,20 @@
 volatile const int userspace_pid = -1;
 bool feature_check_done = false;
 
+// BPF helpers
 bool has_tail_call = false;
 bool has_ringbuf = false;
 bool has_map_of_maps = false;
 bool has_batch_map_operations = false;
 bool has_task_pt_regs_helper = false;
 bool has_get_current_task_btf = false;
+bool has_loop = false;
+
+// BPF kfuncs
+bool has_iter_num_new = false;
+bool has_iter_num_next = false;
+bool has_iter_num_destroy = false;
+
 unsigned int userspace_pid_ns_level = 0;
 
 SEC("tracepoint/sched/sched_switch")
@@ -45,7 +53,19 @@ int detect_bpf_features() {
         enum bpf_func_id, BPF_FUNC_task_pt_regs);
 
     has_get_current_task_btf = bpf_core_enum_value_exists(
-        enum bpf_func_id, BPF_FUNC_get_current_task_btf );
+        enum bpf_func_id, BPF_FUNC_get_current_task_btf);
+
+    has_loop = bpf_core_enum_value_exists(
+        enum bpf_func_id, BPF_FUNC_loop);
+
+    has_iter_num_new = bpf_core_enum_value_exists(
+        enum special_kfunc_type, KF_bpf_iter_num_new);
+
+    has_iter_num_next = bpf_core_enum_value_exists(
+        enum special_kfunc_type, KF_bpf_iter_num_next);
+
+    has_iter_num_destroy = bpf_core_enum_value_exists(
+        enum special_kfunc_type, KF_bpf_iter_num_destroy);
 
     userspace_pid_ns_level = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, level);
 
