@@ -15,7 +15,7 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-    - uses: DeterminateSystems/flakehub-cache-action@77c6bddd7d747943530aaa578c57f233ee5d920e # v2
+    - uses: DeterminateSystems/flakehub-cache-action@e62e272c914d4ad8e4d1587a864e9c3ad2cba9de # v2
 
     - name: Install system dependencies
       run: |
