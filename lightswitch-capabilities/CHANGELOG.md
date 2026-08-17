@@ -1,6 +1,7 @@
 Unreleased
 ----------
 - Add `has_btf` helper to probe the paths that libbpf probes for kernel BTF
+- Added support for various loop related helpers and kfuncs `bpf_loop`, `bpf_iter_num_*`
 
 v0.3.1
 ------

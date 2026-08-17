@@ -34,6 +34,12 @@ pub struct BpfFeatures {
     pub has_get_current_task_btf: bool,
     pub has_variable_inner_map: bool,
     pub has_non_prealloc_hash_maps_in_tracing: bool,
+
+    pub has_loop: bool,
+    pub has_iter_num_new: bool,
+    pub has_iter_num_next: bool,
+    pub has_iter_num_destroy: bool,
+
     pub userspace_pid_ns_level: u32,
 }
 
@@ -300,6 +306,10 @@ fn check_bpf_features(btf_custom_path: Option<String>) -> Result<BpfFeatures> {
         has_variable_inner_map: has_variable_inner_map(),
         has_non_prealloc_hash_maps_in_tracing: has_non_prealloc_hash_maps_in_tracing(),
         userspace_pid_ns_level: bpf_features_bss.userspace_pid_ns_level,
+        has_loop: bpf_features_bss.has_loop,
+        has_iter_num_new: bpf_features_bss.has_iter_num_new,
+        has_iter_num_next: bpf_features_bss.has_iter_num_next,
+        has_iter_num_destroy: bpf_features_bss.has_iter_num_destroy,
     };
 
     Ok(features)
