@@ -76,6 +76,12 @@ pub(crate) enum Commands {
         path: String,
     },
     SystemInfo,
+    BpfMapSizes {
+        /// PID of the running lightswitch instance to inspect. When omitted,
+        /// all running lightswitch processes are inspected.
+        #[arg(long)]
+        pid: Option<i32>,
+    },
     Server {
         /// Completed profile to serve. Detects the default Firefox or Perfetto
         /// output when omitted.

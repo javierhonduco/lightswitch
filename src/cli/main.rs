@@ -46,6 +46,7 @@ use lightswitch_unwind_info::compact_unwind_info;
 use lightswitch_unwind_info::CompactUnwindInfoBuilder;
 
 mod args;
+mod bpf_map_sizes;
 mod killswitch;
 mod validators;
 
@@ -156,6 +157,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             println!("- has kernel BTF: {}", has_btf());
 
+            return Ok(());
+        }
+        Some(Commands::BpfMapSizes { pid }) => {
+            bpf_map_sizes::show_bpf_map_sizes(pid)?;
             return Ok(());
         }
         Some(Commands::Server {
@@ -579,11 +584,12 @@ mod tests {
         Usage: lightswitch [OPTIONS] [COMMAND]
 
         Commands:
-          object-info  
-          show-unwind  
-          system-info  
-          server       
-          help         Print this message or the help of the given subcommand(s)
+          object-info    
+          show-unwind    
+          system-info    
+          bpf-map-sizes  
+          server         
+          help           Print this message or the help of the given subcommand(s)
 
         Options:
               --pids <PIDS>
