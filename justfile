@@ -16,5 +16,8 @@ ci: test
     cargo clippy --workspace --all-targets -- -D warnings
     cargo rustdoc --all-features -- -Zunstable-options --check -Dwarnings
 
+cov:
+    cargo llvm-cov --open --workspace --ignore-filename-regex "(_skel)\.rs"
+
 c-fmt:
     find src/bpf/ ! -iname vmlinux*.h -iname *.h -o -iname *.c | xargs clang-format -i
