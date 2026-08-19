@@ -95,6 +95,7 @@
                 extensions = [
                   "rust-src"
                   "rust-analyzer"
+                  "llvm-tools-preview"
                 ];
               })
               # Debugging tools
@@ -118,6 +119,7 @@
               ## Analise and deal with profiles in the pprof format
               pprof
               graphviz
+              cargo-llvm-cov
             ];
             LIBCLANG_PATH = lib.makeLibraryPath [ llvmPackages_21.libclang ];
             LIBBPF_SYS_LIBRARY_PATH = lib.makeLibraryPath [ zlib.static elfutils' ];
