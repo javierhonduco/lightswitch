@@ -163,24 +163,20 @@ impl Bpf {
         inner_map_shape
     }
 
-    fn get_stacks_ringbuf_max_entries(sample_freq: u32) -> u32 {
-        // The assumption here is that although the ringbuf is shared
-        // by all CPUs, it's not expected to get filled up since
-        // 1. At any "single instance", we expect at most n samples to be written
-        // to the ringbuf where n is the number of online cpus emitting events.
-        // i.e if all the CPUs are busy at that instance. We also account for
-        // the case where the sampling frequency is less than num online CPUs.
-        // 2. The userspace consumer is pretty lightweight. It simply
-        // reads the sample and dispatches it to another thread for processing.
+    /// Returns the ring buffer size for a given frequency and the CPU count.
+    /// It assumes to never lag behind, since the threads processing the events
+    /// are pretty lightweight.
+    fn ringbuf_size(sample_freq: u32) -> u32 {
+        let num_cpus = get_online_cpus().expect("get online CPUs").len();
+        let num_max_samples = num_cpus.saturating_mul(sample_freq as usize);
 
-        let num_cpus = get_online_cpus().expect("get online CPUs").len() as u32;
-        let num_expected_entries = std::cmp::max(num_cpus, sample_freq);
+        // Note that it's unlikely for most samples to have a full stacktrace.
+        // Assume the average sample to be half the size.
+        let sample_size_bytes = std::mem::size_of::<sample_t>().saturating_div(2);
+        let max_entries_bytes = num_max_samples.saturating_mul(sample_size_bytes);
 
-        let sample_size_bytes = std::mem::size_of::<sample_t>() as u32;
-        let max_entries_bytes: u32 = sample_size_bytes * num_expected_entries;
-
-        // max_entries for ringbuf is required to be specified in bytes, be a multiple
-        // of the page size and a power of two
+        // It is required that this is page-aligned and a multiple of two. libbpf
+        // takes care of rounding up to the next multiple of two.
         roundup_page(max_entries_bytes as usize) as u32
     }
 
@@ -274,8 +270,8 @@ impl Bpf {
 
         if profiler_config.use_ring_buffers {
             // Set sample collecting ringbuf size based sampling frequency
-            let profile_sample_max_entries =
-                Self::get_stacks_ringbuf_max_entries(profiler_config.sample_freq as u32);
+            let profile_sample_max_entries = Self::ringbuf_size(profiler_config.sample_freq as u32);
+            debug!("setting the stacks ring buffer max entries to {profile_sample_max_entries}");
             open_skel
                 .maps
                 .stacks_rb
