@@ -3,9 +3,10 @@ use std::fs::File;
 
 use anyhow::Result;
 use gimli::{
-    CfaRule, CieOrFde, EhFrame, Encoding, Format,
+    BaseAddresses, CfaRule, CieOrFde, EhFrame, Encoding, EndianSlice, Endianity, Format,
+    FrameDescriptionEntry,
     Operation::{Deref, PlusConstant, RegisterOffset},
-    UnwindContext, UnwindSection,
+    Register, StoreOnHeap, UnwindContext, UnwindSection, UnwindTableRow,
 };
 use memmap2::Mmap;
 use object::Architecture;
@@ -13,9 +14,206 @@ use object::{Object, ObjectSection};
 use thiserror::Error;
 use tracing::{Level, debug, span};
 
-use crate::optimize::remove_redundant;
-use crate::optimize::remove_unnecessary_markers;
-use crate::types::*;
+use crate::{
+    optimize::{remove_redundant, remove_unnecessary_markers},
+    types::*,
+};
+
+/// Converts a `gimli::UnwindTableRow` into our `CompactUnwindRow` which is then
+/// used as a random access-friendly unwind table suitable for mmap'd and
+/// eBPF-based unwinders.
+fn convert<E>(
+    row: &UnwindTableRow<usize, StoreOnHeap>,
+    fde: &FrameDescriptionEntry<EndianSlice<'_, E>>,
+    eh_frame: &EhFrame<EndianSlice<'_, E>>,
+    frame_pointer: &Register,
+    stack_pointer: &Register,
+    is_arm: bool,
+) -> CompactUnwindRow
+where
+    E: Endianity,
+{
+    let mut compact_row = CompactUnwindRow {
+        pc: row.start_address(),
+        ..Default::default()
+    };
+
+    match row.cfa() {
+        CfaRule::RegisterAndOffset { register, offset } => {
+            if register == frame_pointer {
+                compact_row.cfa_type = CfaType::FramePointerOffset;
+            } else if register == stack_pointer {
+                compact_row.cfa_type = CfaType::StackPointerOffset;
+            } else {
+                compact_row.cfa_type = CfaType::UnsupportedRegisterOffset;
+            }
+
+            match u16::try_from(*offset) {
+                Ok(off) => {
+                    compact_row.cfa_offset = off;
+                }
+                Err(_) => {
+                    compact_row.cfa_type = CfaType::OffsetDidNotFit;
+                }
+            }
+        }
+        CfaRule::Expression(exp) => {
+            compact_row.cfa_type = CfaType::UnsupportedExpression;
+
+            if let Ok(expression) = exp.get(eh_frame) {
+                let expression_data = expression.0.slice();
+                if expression_data == *PLT1 {
+                    compact_row.cfa_type = CfaType::Plt1;
+                } else if expression_data == *PLT2 {
+                    compact_row.cfa_type = CfaType::Plt2;
+                } else {
+                    let mut ops = expression.operations(Encoding {
+                        format: Format::Dwarf64,
+                        version: 4,
+                        address_size: 8,
+                    });
+
+                    match (ops.next(), ops.next(), ops.next(), ops.next(), ops.next()) {
+                        (
+                            Ok(Some(RegisterOffset {
+                                register, offset, ..
+                            })),
+                            Ok(Some(Deref { .. })),
+                            Ok(Some(PlusConstant { value: addition1 })),
+                            Ok(last_instr),
+                            Ok(None), // All PlusConstant + none
+                        ) if register == *stack_pointer => {
+                            let addition = match last_instr {
+                                None => Some(addition1),
+                                // OCaml has a couple of expressions with two                     //
+                                // additions which their backend is not folding,
+                                // so we do it here.
+                                Some(PlusConstant { value: addition2 }) => {
+                                    Some(addition1 + addition2)
+                                }
+                                _ => None,
+                            };
+                            if let Some(addition) = addition {
+                                debug!("*(rsp+{offset})+{addition}");
+                                compact_row.cfa_type = CfaType::DerefAndAdd;
+                                // Assumes that both the offset and addition will
+                                // fit in 2 bytes, which seems to be
+                                // the case for many binaries I've tried but would be good to
+                                // test against larger ones.
+                                compact_row.cfa_offset = ((offset as u16) << 8) | (addition as u16);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    };
+
+    let fp = row.register(*frame_pointer);
+    match fp {
+        Some(gimli::RegisterRule::Undefined) => {}
+        Some(gimli::RegisterRule::Offset(offset)) => {
+            compact_row.rbp_type = RbpType::CfaOffset;
+
+            match i16::try_from(offset) {
+                Ok(off) => {
+                    compact_row.rbp_offset = off;
+                }
+                Err(_) => {
+                    compact_row.rbp_type = RbpType::OffsetDidNotFit;
+                }
+            }
+        }
+        Some(gimli::RegisterRule::Register(_reg)) => {
+            compact_row.rbp_type = RbpType::Register;
+        }
+        Some(gimli::RegisterRule::Expression(_)) => {
+            compact_row.rbp_type = RbpType::Expression;
+        }
+        _ => {
+            debug!("unsupported frame pointer {:?}", fp);
+        }
+    }
+
+    match row.register(fde.cie().return_address_register()) {
+        Some(gimli::RegisterRule::Undefined) => {
+            compact_row.rbp_type = RbpType::UndefinedReturnAddress;
+        }
+        Some(gimli::RegisterRule::Offset(offset)) if is_arm => {
+            // In the presence of frame pointers, the following locations
+            // are guaranteed by the aarch64 ABI.
+            let fp_layout = offset - compact_row.rbp_offset as i64 == 8;
+            if compact_row.rbp_type == RbpType::CfaOffset && fp_layout {
+                compact_row.rbp_type = RbpType::Arm64ReturnAddressFrame;
+            } else {
+                compact_row.rbp_type = RbpType::Arm64ReturnAddressElsewhere;
+                match i16::try_from(offset) {
+                    Ok(off) => {
+                        compact_row.rbp_offset = off;
+                    }
+                    Err(_) => {
+                        compact_row.rbp_type = RbpType::OffsetDidNotFit;
+                    }
+                }
+            }
+        }
+        None if is_arm => {
+            compact_row.rbp_type = RbpType::Arm64ReturnAddressLr;
+        }
+        _ => {}
+    }
+
+    compact_row
+}
+
+/// For a given `gimli::eh_frame` section, returns the program counters and
+/// their associated frame description offset entries, sorted by program
+/// counter.
+fn pc_and_fde_offset<E>(
+    bases: &BaseAddresses,
+    eh_frame: &EhFrame<EndianSlice<'_, E>>,
+) -> Vec<(u64, usize)>
+where
+    E: Endianity,
+{
+    let mut pc_and_fde_offset = Vec::new();
+    let mut entries_iter = eh_frame.entries(bases);
+    let mut cur_cie = None;
+
+    while let Ok(Some(entry)) = entries_iter.next() {
+        match entry {
+            CieOrFde::Cie(cie) => {
+                cur_cie = Some(cie);
+            }
+            CieOrFde::Fde(partial_fde) => {
+                let fde = partial_fde.parse(|eh_frame, bases, cie_offset| {
+                    if let Some(cie) = &cur_cie
+                        && cie.offset() == cie_offset.0
+                    {
+                        return Ok(cie.clone());
+                    }
+                    let cie = eh_frame.cie_from_offset(bases, cie_offset);
+                    if let Ok(cie) = &cie {
+                        cur_cie = Some(cie.clone());
+                    }
+                    cie
+                });
+
+                if let Ok(fde) = fde {
+                    pc_and_fde_offset.push((fde.initial_address(), fde.offset()));
+                }
+            }
+        }
+    }
+
+    {
+        let _span = span!(Level::DEBUG, "sort pc and fdes").entered();
+        pc_and_fde_offset.sort_by_key(|(pc, _)| *pc);
+    }
+
+    pc_and_fde_offset
+}
 
 #[derive(Debug, Error)]
 pub enum UnwindInfoError {
@@ -110,10 +308,6 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
         if object_file.architecture() == Architecture::Aarch64 {
             eh_frame.set_vendor(gimli::Vendor::AArch64);
         }
-        let mut entries_iter = eh_frame.entries(&bases);
-
-        let mut cur_cie = None;
-        let mut pc_and_fde_offset = Vec::new();
 
         let frame_pointer = if object_file.architecture() == Architecture::Aarch64 {
             ARM64_FP
@@ -126,36 +320,7 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
             X86_SP
         };
 
-        while let Ok(Some(entry)) = entries_iter.next() {
-            match entry {
-                CieOrFde::Cie(cie) => {
-                    cur_cie = Some(cie);
-                }
-                CieOrFde::Fde(partial_fde) => {
-                    let fde = partial_fde.parse(|eh_frame, bases, cie_offset| {
-                        if let Some(cie) = &cur_cie
-                            && cie.offset() == cie_offset.0
-                        {
-                            return Ok(cie.clone());
-                        }
-                        let cie = eh_frame.cie_from_offset(bases, cie_offset);
-                        if let Ok(cie) = &cie {
-                            cur_cie = Some(cie.clone());
-                        }
-                        cie
-                    });
-
-                    if let Ok(fde) = fde {
-                        pc_and_fde_offset.push((fde.initial_address(), fde.offset()));
-                    }
-                }
-            }
-        }
-
-        {
-            let _span = span!(Level::DEBUG, "sort pc and fdes").entered();
-            pc_and_fde_offset.sort_by_key(|(pc, _)| *pc);
-        }
+        let pc_and_fde_offset = pc_and_fde_offset(&bases, &eh_frame);
 
         let mut ctx = Box::new(UnwindContext::new());
         for (_, fde_offset) in pc_and_fde_offset {
@@ -167,150 +332,24 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
 
             (self.callback)(&UnwindData::Function(
                 fde.initial_address(),
-                fde.initial_address() + fde.len(),
+                fde.end_address(),
             ));
 
             let mut table = fde.rows(&eh_frame, &bases, &mut ctx)?;
 
             loop {
-                let mut compact_row = CompactUnwindRow::default();
-
-                match table.next_row() {
+                let mut compact_row = match table.next_row() {
                     Ok(None) => break,
-                    Ok(Some(row)) => {
-                        compact_row.pc = row.start_address();
-                        match row.cfa() {
-                            CfaRule::RegisterAndOffset { register, offset } => {
-                                if register == &frame_pointer {
-                                    compact_row.cfa_type = CfaType::FramePointerOffset;
-                                } else if register == &stack_pointer {
-                                    compact_row.cfa_type = CfaType::StackPointerOffset;
-                                } else {
-                                    compact_row.cfa_type = CfaType::UnsupportedRegisterOffset;
-                                }
-
-                                match u16::try_from(*offset) {
-                                    Ok(off) => {
-                                        compact_row.cfa_offset = off;
-                                    }
-                                    Err(_) => {
-                                        compact_row.cfa_type = CfaType::OffsetDidNotFit;
-                                    }
-                                }
-                            }
-                            CfaRule::Expression(exp) => {
-                                compact_row.cfa_type = CfaType::UnsupportedExpression;
-
-                                if let Ok(expression) = exp.get(&eh_frame) {
-                                    let expression_data = expression.0.slice();
-                                    if expression_data == *PLT1 {
-                                        compact_row.cfa_type = CfaType::Plt1;
-                                    } else if expression_data == *PLT2 {
-                                        compact_row.cfa_type = CfaType::Plt2;
-                                    } else {
-                                        let mut ops = expression.operations(Encoding {
-                                            format: Format::Dwarf64,
-                                            version: 4,
-                                            address_size: 8,
-                                        });
-
-                                        match (ops.next(), ops.next(), ops.next(), ops.next()) {
-                                            (
-                                                Ok(Some(RegisterOffset {
-                                                    register, offset, ..
-                                                })),
-                                                Ok(Some(Deref { .. })),
-                                                Ok(Some(PlusConstant { value: addition1 })),
-                                                Ok(last_instr),
-                                                // All PlusConstant + none
-                                            ) if register == stack_pointer => {
-                                                let addition = match last_instr {
-                                                    None => addition1,
-                                                    // OCaml has a couple of expressions with two
-                                                    // additions which their backend is not folding,
-                                                    // so we do it here.
-                                                    Some(PlusConstant { value: addition2 }) => {
-                                                        addition1 + addition2
-                                                    }
-                                                    _ => {
-                                                        continue;
-                                                    }
-                                                };
-                                                debug!("*(rsp+{offset})+{addition}");
-                                                compact_row.cfa_type = CfaType::DerefAndAdd;
-                                                // Assumes that both the offset and addition will
-                                                // fit in 2 bytes,
-                                                // which seems to be the case for many binaries I've
-                                                // tried but
-                                                // would be good to test against larger ones.
-                                                compact_row.cfa_offset =
-                                                    ((offset as u16) << 8) | (addition as u16);
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                }
-                            }
-                        };
-
-                        let fp = row.register(frame_pointer);
-                        match fp {
-                            Some(gimli::RegisterRule::Undefined) => {}
-                            Some(gimli::RegisterRule::Offset(offset)) => {
-                                compact_row.rbp_type = RbpType::CfaOffset;
-
-                                match i16::try_from(offset) {
-                                    Ok(off) => {
-                                        compact_row.rbp_offset = off;
-                                    }
-                                    Err(_) => {
-                                        compact_row.rbp_type = RbpType::OffsetDidNotFit;
-                                    }
-                                }
-                            }
-                            Some(gimli::RegisterRule::Register(_reg)) => {
-                                compact_row.rbp_type = RbpType::Register;
-                            }
-                            Some(gimli::RegisterRule::Expression(_)) => {
-                                compact_row.rbp_type = RbpType::Expression;
-                            }
-                            _ => {
-                                debug!("unsupported frame pointer {:?}", fp);
-                            }
-                        }
-
-                        let is_arm = object_file.architecture() == Architecture::Aarch64;
-
-                        match row.register(fde.cie().return_address_register()) {
-                            Some(gimli::RegisterRule::Undefined) => {
-                                compact_row.rbp_type = RbpType::UndefinedReturnAddress;
-                            }
-                            Some(gimli::RegisterRule::Offset(offset)) if is_arm => {
-                                // In the presence of frame pointers, the following locations
-                                // are guaranteed by the aarch64 ABI.
-                                let fp_layout = offset - compact_row.rbp_offset as i64 == 8;
-                                if compact_row.rbp_type == RbpType::CfaOffset && fp_layout {
-                                    compact_row.rbp_type = RbpType::Arm64ReturnAddressFrame;
-                                } else {
-                                    compact_row.rbp_type = RbpType::Arm64ReturnAddressElsewhere;
-                                    match i16::try_from(offset) {
-                                        Ok(off) => {
-                                            compact_row.rbp_offset = off;
-                                        }
-                                        Err(_) => {
-                                            compact_row.rbp_type = RbpType::OffsetDidNotFit;
-                                        }
-                                    }
-                                }
-                            }
-                            None if is_arm => {
-                                compact_row.rbp_type = RbpType::Arm64ReturnAddressLr;
-                            }
-                            _ => {}
-                        }
-                    }
+                    Ok(Some(row)) => convert(
+                        row,
+                        &fde,
+                        &eh_frame,
+                        &frame_pointer,
+                        &stack_pointer,
+                        object_file.architecture() == Architecture::Aarch64,
+                    ),
                     _ => continue,
-                }
+                };
 
                 if let Some(first_frame_override) = self.first_frame_override
                     && compact_row.pc == first_frame_override.0
@@ -329,9 +368,29 @@ pub fn compact_unwind_info(
     path: &str,
     first_frame_override: Option<(u64, u64)>,
 ) -> anyhow::Result<Vec<CompactUnwindRow>> {
-    let mut unwind_info: Vec<CompactUnwindRow> = Vec::new();
+    let mut unwind_info = Vec::new();
+    compact_unwind_info_callback(path, first_frame_override, |row| unwind_info.push(*row))?;
+
+    // Reduce the unwind information size
+    let unwind_info_size_before = unwind_info.len();
+    let span = span!(Level::DEBUG, "optimize unwind info").entered();
+    remove_unnecessary_markers(&mut unwind_info);
+    remove_redundant(&mut unwind_info);
+    span.exit();
+    let unwind_info_size_after = unwind_info.len();
+    debug!(
+        "Unwind info size ratio after optimizations {:.2}",
+        unwind_info_size_after as f64 / unwind_info_size_before as f64
+    );
+    Ok(unwind_info)
+}
+
+fn compact_unwind_info_callback(
+    path: &str,
+    first_frame_override: Option<(u64, u64)>,
+    mut callback: impl FnMut(&CompactUnwindRow),
+) -> anyhow::Result<()> {
     let mut last_function_end_addr: Option<u64> = None;
-    let mut last_row = None;
 
     let builder =
         CompactUnwindInfoBuilder::with_callback(path, first_frame_override, |unwind_data| {
@@ -341,7 +400,7 @@ pub fn compact_unwind_info(
                     match last_function_end_addr {
                         Some(addr) => {
                             let row = CompactUnwindRow::stop_unwinding(addr);
-                            unwind_info.push(row)
+                            callback(&row)
                         }
                         None => {
                             // todo: cleanup
@@ -357,8 +416,7 @@ pub fn compact_unwind_info(
                         rbp_type: compact_row.rbp_type,
                         rbp_offset: compact_row.rbp_offset,
                     };
-                    unwind_info.push(row);
-                    last_row = Some(*compact_row)
+                    callback(&row);
                 }
             }
         });
@@ -371,26 +429,23 @@ pub fn compact_unwind_info(
 
     // Add the last marker
     let marker = CompactUnwindRow::stop_unwinding(last_function_end_addr);
-    unwind_info.push(marker);
+    callback(&marker);
 
-    // Reduce the unwind information size
-    let unwind_info_size_before = unwind_info.len();
-    let span = span!(Level::DEBUG, "optimize unwind info").entered();
-    remove_unnecessary_markers(&mut unwind_info);
-    remove_redundant(&mut unwind_info);
-    span.exit();
-    let unwind_info_size_after = unwind_info.len();
-    debug!(
-        "Unwind info size ratio after optimizations {:.2}",
-        unwind_info_size_after as f64 / unwind_info_size_before as f64
-    );
-
-    Ok(unwind_info)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use gimli::write::{
+        Address, CallFrameInstruction, CommonInformationEntry, EhFrame as WriteEhFrame, EndianVec,
+        Expression as WriteExpression, FrameDescriptionEntry as WriteFrameDescriptionEntry,
+        FrameTable,
+    };
+    use gimli::{AArch64, Encoding, Format, LittleEndian, Register, Vendor, X86_64};
+
+    const TEST_PC: u64 = 0x1357;
 
     #[test]
     fn reads_unwind_info_from_program_headers() {
@@ -403,5 +458,412 @@ mod tests {
 
         assert!(!unwind_info.is_empty());
         assert!(unwind_info.iter().any(|row| row.pc == 0x40_0360));
+    }
+
+    fn convert_row(
+        frame_pointer: Register,
+        stack_pointer: Register,
+        return_address_register: Register,
+        is_arm: bool,
+        cie_instructions: Vec<CallFrameInstruction>,
+        fde_instructions: Vec<(u32, CallFrameInstruction)>,
+    ) -> CompactUnwindRow {
+        const TEST_LEN: u32 = 0x20;
+
+        let encoding = Encoding {
+            format: Format::Dwarf32,
+            version: 1,
+            address_size: 8,
+        };
+
+        let mut frame_table = FrameTable::default();
+        let mut cie = CommonInformationEntry::new(encoding, 1, -8, return_address_register);
+        for instruction in cie_instructions {
+            cie.add_instruction(instruction);
+        }
+        let cie_id = frame_table.add_cie(cie);
+
+        let mut fde = WriteFrameDescriptionEntry::new(Address::Constant(TEST_PC), TEST_LEN);
+        for (offset, instruction) in fde_instructions {
+            fde.add_instruction(offset, instruction);
+        }
+        frame_table.add_fde(cie_id, fde);
+
+        let mut write_eh_frame = WriteEhFrame::from(EndianVec::new(LittleEndian));
+        frame_table.write_eh_frame(&mut write_eh_frame).unwrap();
+
+        let mut read_eh_frame = EhFrame::new(write_eh_frame.slice(), LittleEndian);
+        read_eh_frame.set_address_size(8);
+        if is_arm {
+            read_eh_frame.set_vendor(Vendor::AArch64);
+        }
+
+        let bases = BaseAddresses::default();
+        let fde = read_eh_frame
+            .fde_for_address(&bases, TEST_PC, EhFrame::cie_from_offset)
+            .unwrap();
+        let mut ctx = UnwindContext::new();
+        let row = fde
+            .unwind_info_for_address(&read_eh_frame, &bases, &mut ctx, TEST_PC)
+            .unwrap();
+
+        convert(
+            row,
+            &fde,
+            &read_eh_frame,
+            &frame_pointer,
+            &stack_pointer,
+            is_arm,
+        )
+    }
+
+    fn convert_x86(fde_instructions: Vec<(u32, CallFrameInstruction)>) -> CompactUnwindRow {
+        convert_row(
+            X86_FP,
+            X86_SP,
+            X86_64::RA,
+            false,
+            vec![
+                CallFrameInstruction::Cfa(X86_64::RSP, 8),
+                CallFrameInstruction::Offset(X86_64::RA, -8),
+            ],
+            fde_instructions,
+        )
+    }
+
+    fn convert_arm64(
+        cie_instructions: Vec<CallFrameInstruction>,
+        fde_instructions: Vec<(u32, CallFrameInstruction)>,
+    ) -> CompactUnwindRow {
+        convert_row(
+            ARM64_FP,
+            ARM64_SP,
+            AArch64::X30,
+            true,
+            cie_instructions,
+            fde_instructions,
+        )
+    }
+
+    fn unsupported_expression() -> WriteExpression {
+        let mut expression = WriteExpression::new();
+        expression.op_constu(1);
+        expression
+    }
+
+    #[test]
+    fn converts_x86_dwarf_frame_pointer_rule_to_compact_row() {
+        assert_eq!(
+            convert_x86(vec![
+                (0, CallFrameInstruction::CfaOffset(16)),
+                (0, CallFrameInstruction::Offset(X86_64::RBP, -16)),
+                (0, CallFrameInstruction::CfaRegister(X86_64::RBP)),
+            ]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::FramePointerOffset,
+                rbp_type: RbpType::CfaOffset,
+                cfa_offset: 16,
+                rbp_offset: -16,
+            },
+        );
+    }
+
+    #[test]
+    fn converts_x86_cfa_register_offset_variants_to_compact_rows() {
+        assert_eq!(
+            convert_x86(vec![]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::StackPointerOffset,
+                cfa_offset: 8,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            convert_x86(vec![(0, CallFrameInstruction::Cfa(X86_64::RAX, 8))]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::UnsupportedRegisterOffset,
+                cfa_offset: 8,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            convert_x86(vec![(0, CallFrameInstruction::CfaOffset(70_000))]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::OffsetDidNotFit,
+                ..Default::default()
+            },
+        );
+    }
+
+    #[test]
+    fn converts_x86_cfa_expression_variants_to_compact_rows() {
+        fn deref_and_add_expression(additions: &[u64]) -> WriteExpression {
+            let mut expression = WriteExpression::new();
+            expression.op_breg(X86_64::RSP, 16);
+            expression.op_deref();
+            for addition in additions {
+                expression.op_plus_uconst(*addition);
+            }
+            expression
+        }
+
+        assert_eq!(
+            convert_x86(vec![(
+                0,
+                CallFrameInstruction::CfaExpression(unsupported_expression()),
+            )]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::UnsupportedExpression,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            convert_x86(vec![(
+                0,
+                CallFrameInstruction::CfaExpression(WriteExpression::raw((*PLT1).to_vec())),
+            )]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::Plt1,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            convert_x86(vec![(
+                0,
+                CallFrameInstruction::CfaExpression(WriteExpression::raw((*PLT2).to_vec())),
+            )]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::Plt2,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            convert_x86(vec![(
+                0,
+                CallFrameInstruction::CfaExpression(deref_and_add_expression(&[24])),
+            )]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::DerefAndAdd,
+                cfa_offset: (16 << 8) | 24,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            convert_x86(vec![(
+                0,
+                CallFrameInstruction::CfaExpression(deref_and_add_expression(&[8, 16])),
+            )]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::DerefAndAdd,
+                cfa_offset: (16 << 8) | 24,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            convert_x86(vec![(
+                0,
+                CallFrameInstruction::CfaExpression(deref_and_add_expression(&[8, 16, 0, 1])),
+            )]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::UnsupportedExpression,
+                ..Default::default()
+            },
+        );
+
+        let mut expression = deref_and_add_expression(&[8]);
+        expression.op_constu(42);
+        assert_eq!(
+            convert_x86(vec![(0, CallFrameInstruction::CfaExpression(expression))]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::UnsupportedExpression,
+                ..Default::default()
+            },
+        );
+    }
+
+    #[test]
+    fn converts_x86_frame_pointer_register_rule_variants_to_compact_rows() {
+        assert_eq!(
+            convert_x86(vec![(0, CallFrameInstruction::Undefined(X86_64::RBP))]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::StackPointerOffset,
+                cfa_offset: 8,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            convert_x86(vec![(
+                0,
+                CallFrameInstruction::Offset(X86_64::RBP, -40_000),
+            )]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::StackPointerOffset,
+                rbp_type: RbpType::OffsetDidNotFit,
+                cfa_offset: 8,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            convert_x86(vec![(
+                0,
+                CallFrameInstruction::Register(X86_64::RBP, X86_64::RBX),
+            )]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::StackPointerOffset,
+                rbp_type: RbpType::Register,
+                cfa_offset: 8,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            convert_x86(vec![(
+                0,
+                CallFrameInstruction::Expression(X86_64::RBP, unsupported_expression()),
+            )]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::StackPointerOffset,
+                rbp_type: RbpType::Expression,
+                cfa_offset: 8,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            convert_x86(vec![(0, CallFrameInstruction::SameValue(X86_64::RBP))]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::StackPointerOffset,
+                cfa_offset: 8,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            convert_x86(vec![(0, CallFrameInstruction::ValOffset(X86_64::RBP, -16))]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::StackPointerOffset,
+                cfa_offset: 8,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            convert_x86(vec![(
+                0,
+                CallFrameInstruction::ValExpression(X86_64::RBP, unsupported_expression()),
+            )]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::StackPointerOffset,
+                cfa_offset: 8,
+                ..Default::default()
+            },
+        );
+    }
+
+    #[test]
+    fn converts_return_address_rules_to_compact_rows() {
+        assert_eq!(
+            convert_x86(vec![(0, CallFrameInstruction::Undefined(X86_64::RA))]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::StackPointerOffset,
+                rbp_type: RbpType::UndefinedReturnAddress,
+                cfa_offset: 8,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            convert_arm64(vec![CallFrameInstruction::Cfa(AArch64::SP, 0)], vec![]),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::StackPointerOffset,
+                rbp_type: RbpType::Arm64ReturnAddressLr,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            convert_arm64(
+                vec![CallFrameInstruction::Cfa(AArch64::SP, 0)],
+                vec![
+                    (0, CallFrameInstruction::CfaOffset(16)),
+                    (0, CallFrameInstruction::Offset(AArch64::X29, -16)),
+                    (0, CallFrameInstruction::Offset(AArch64::X30, -8)),
+                    (0, CallFrameInstruction::CfaRegister(AArch64::X29)),
+                ],
+            ),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::FramePointerOffset,
+                rbp_type: RbpType::Arm64ReturnAddressFrame,
+                cfa_offset: 16,
+                rbp_offset: -16,
+            },
+        );
+
+        assert_eq!(
+            convert_arm64(
+                vec![CallFrameInstruction::Cfa(AArch64::SP, 0)],
+                vec![
+                    (0, CallFrameInstruction::CfaOffset(16)),
+                    (0, CallFrameInstruction::Offset(AArch64::X29, -16)),
+                    (0, CallFrameInstruction::Offset(AArch64::X30, -24)),
+                    (0, CallFrameInstruction::CfaRegister(AArch64::X29)),
+                ],
+            ),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::FramePointerOffset,
+                rbp_type: RbpType::Arm64ReturnAddressElsewhere,
+                cfa_offset: 16,
+                rbp_offset: -24,
+            },
+        );
+
+        assert_eq!(
+            convert_arm64(
+                vec![CallFrameInstruction::Cfa(AArch64::SP, 0)],
+                vec![
+                    (0, CallFrameInstruction::CfaOffset(16)),
+                    (0, CallFrameInstruction::Offset(AArch64::X29, -16)),
+                    (0, CallFrameInstruction::Offset(AArch64::X30, -40_000)),
+                    (0, CallFrameInstruction::CfaRegister(AArch64::X29)),
+                ],
+            ),
+            CompactUnwindRow {
+                pc: TEST_PC,
+                cfa_type: CfaType::FramePointerOffset,
+                rbp_type: RbpType::OffsetDidNotFit,
+                cfa_offset: 16,
+                rbp_offset: -16,
+            },
+        );
     }
 }

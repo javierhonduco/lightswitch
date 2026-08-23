@@ -1,10 +1,10 @@
-/target
+target
 flame.svg
 profile.pb
 firefox-profiler.json
 profile.pftrace
 **/bpf/*_skel.rs
 .vmtest.log
-/result
+result
 .vscode/
 .direnv/
