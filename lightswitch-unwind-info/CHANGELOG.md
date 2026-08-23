@@ -4,3 +4,4 @@ Unreleased
 - Ensure unwind information data is valid. This fixes undefined behaviour when formatting data that can't be represented in the enums.
 - Added support for resolving .eh_frame when the section header is not present, common in stripped executables.
 - Extracted conversion rule to make it more amenable to testing
+- Extract `remove_redundant` implementation to operate on one unwind row at a time, leaving the current behaviour unchanged

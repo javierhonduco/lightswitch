@@ -40,18 +40,20 @@ pub fn remove_unnecessary_markers(unwind_info: &mut Vec<CompactUnwindRow>) {
     unwind_info.truncate(new_i);
 }
 
-/// Remove contiguous unwind information entries that are repeated.
-///
-/// The input *must* be sorted.
-pub fn remove_redundant(unwind_info: &mut Vec<CompactUnwindRow>) {
-    let mut last_row: Option<CompactUnwindRow> = None;
-    let mut new_i = 0;
+#[derive(Default)]
+struct RemoveRedundant {
+    last_row: Option<CompactUnwindRow>,
+}
 
-    for i in 0..unwind_info.len() {
+impl RemoveRedundant {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn add<'a>(&mut self, row: &'a CompactUnwindRow) -> Option<&'a CompactUnwindRow> {
         let mut redundant = false;
-        let row = unwind_info[i];
-
-        if let Some(last_row_unwrapped) = last_row {
+        let mut result = None;
+        if let Some(last_row_unwrapped) = self.last_row {
             redundant = row.cfa_type == last_row_unwrapped.cfa_type
                 && row.cfa_offset == last_row_unwrapped.cfa_offset
                 && row.rbp_type == last_row_unwrapped.rbp_type
@@ -59,13 +61,28 @@ pub fn remove_redundant(unwind_info: &mut Vec<CompactUnwindRow>) {
         }
 
         if !redundant {
-            unwind_info[new_i] = row;
-            new_i += 1;
+            result = Some(row);
         }
 
-        last_row = Some(row);
+        self.last_row = Some(*row);
+        result
     }
+}
 
+/// Remove contiguous unwind information entries that are repeated.
+///
+/// The input *must* be sorted.
+pub fn remove_redundant(unwind_info: &mut Vec<CompactUnwindRow>) {
+    let mut opt = RemoveRedundant::new();
+    let mut new_i = 0;
+    for i in 0..unwind_info.len() {
+        let row = unwind_info[i];
+
+        if let Some(r) = opt.add(&row) {
+            unwind_info[new_i] = *r;
+            new_i += 1;
+        }
+    }
     unwind_info.truncate(new_i);
 }
 
@@ -96,9 +113,14 @@ mod tests {
 
     #[test]
     fn test_remove_redundant() {
+        let mut opt = RemoveRedundant::new();
         let unwind_info = vec![CompactUnwindRow::default(), CompactUnwindRow::default()];
-        let mut processed = unwind_info.clone();
-        remove_redundant(&mut processed);
+        let processed = unwind_info
+            .clone()
+            .iter()
+            .filter_map(|e| opt.add(e))
+            .copied()
+            .collect::<Vec<_>>();
 
         assert_eq!(processed, vec![CompactUnwindRow::default()])
     }
