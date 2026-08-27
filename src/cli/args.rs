@@ -87,6 +87,7 @@ pub(crate) enum Commands {
         #[arg(long)]
         no_open: bool,
     },
+    MapSizes,
 }
 
 #[derive(Parser, Debug)]
