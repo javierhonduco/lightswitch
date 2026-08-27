@@ -49,6 +49,25 @@ We use `nix` for the development environment and the building system. It can be 
 * start a developer environment with `nix develop` and then you'll be able to build the project with cargo with `cargo build`. This might take a little while the first time.
 * generate a container image `nix build .#container` will write a symlink to the container image to `./result`.
 
+### Fedora without Nix
+On Fedora 43, install these packages for a DNF-only development build and test run:
+
+```shell
+$ sudo dnf install rustup clang clang-devel elfutils-libelf-devel \
+    zlib-ng-compat-devel pkgconf-pkg-config gcc gcc-c++ make golang ocaml \
+    util-linux-core sudo
+$ rustup toolchain install nightly
+```
+
+Then build and test with the dynamic `elf`/`zlib` link mode:
+
+```shell
+$ cargo +nightly build --no-default-features
+$ LIGHTSWITCH_TESTPROGS_BUILD=local cargo +nightly test --workspace --no-default-features
+```
+
+The repository default feature asks `libbpf-rs`/`libbpf-sys` to link `libbpf`, `libelf`, and `zlib` statically. Fedora 43 provides `zlib-ng-compat-static` for `libz.a`, but not a DNF package that provides `libelf.a`; use Nix or provide a static elfutils build through `LIBBPF_SYS_LIBRARY_PATH` for that mode.
+
 ### Building
 ```shell
 # after running `nix develop`
