@@ -35,6 +35,7 @@ let
 
       clang -O3 -fno-omit-frame-pointer main.cpp -o main_cpp_clang_no_omit_fp_O3
       clang -O1 -fomit-frame-pointer -fasynchronous-unwind-tables large_stack_frame.cpp -o large_stack_frame
+      clang -O2 vdso_clock.cpp -o vdso_clock
 
       ${if system == "aarch64-linux" then "clang -O3 -mbranch-protection=pac-ret main.cpp -o main_cpp_clang_pac" else ""}
     '';
@@ -51,6 +52,7 @@ let
 
       cp main_cpp_clang_no_omit_fp_O3 $out/bin
       cp large_stack_frame $out/bin
+      cp vdso_clock $out/bin
       ${if system == "aarch64-linux" then "cp main_cpp_clang_pac $out/bin" else ""}
     '';
     buildInputs = [
