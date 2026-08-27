@@ -89,7 +89,12 @@
                 doCheck = false;
                 doInstallCheck = false;
                 configureFlags = attrs.configureFlags ++ [ "--without-zstd" ];
-                nativeBuildInputs = attrs.nativeBuildInputs ++ [ pkgs.pkg-config ];
+                nativeBuildInputs = attrs.nativeBuildInputs ++ [ pkgs.pkg-config pkgs.binutils ];
+                # Both libelf and zlib export a function with the same name, breaking
+                # static builds. Use zlib's rather than libelf's.
+                postInstall = (attrs.postInstall or "") + ''
+                  ar d $out/lib/libelf.a crc32.o
+                '';
               });
               args = commonArgs // {
                 cargoExtraArgs = "--target ${target}";
@@ -102,10 +107,10 @@
                 "CFLAGS_${targetEnvLower}" = "-isystem ${pkgsCross.zlib.dev}/include -isystem ${pkgsCross.musl.dev}/include";
                 buildInputs = buildInputs;
                 nativeBuildInputs = with pkgs; [
+                  clang'
                   pkg-config
-                  llvmPackages_19.clang
-                  llvmPackages_19.libclang
-                  llvmPackages_19.lld
+                  llvmPackages_21.libclang
+                  llvmPackages_21.lld
                 ];
                 "LIBBPF_SYS_LIBRARY_PATH_${targetEnvLower}" = pkgs.lib.makeLibraryPath [
                   pkgsCross.zlib.static
