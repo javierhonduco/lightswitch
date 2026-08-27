@@ -9,6 +9,13 @@ use crate::validators::parse_duration;
 use crate::validators::sample_freq_in_range;
 use crate::validators::value_is_power_of_two;
 
+pub(crate) const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (git ",
+    env!("LIGHTSWITCH_GIT_SHA"),
+    ")"
+);
+
 #[derive(clap::ValueEnum, Debug, Clone, Default)]
 pub(crate) enum LoggingLevel {
     Trace,
@@ -91,7 +98,7 @@ pub(crate) enum Commands {
 }
 
 #[derive(Parser, Debug)]
-#[command(version)]
+#[command(version = VERSION)]
 pub(crate) struct CliArgs {
     /// Specific PIDs to profile
     #[arg(long)]

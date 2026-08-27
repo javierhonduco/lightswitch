@@ -556,6 +556,7 @@ fn show_object_file_info(path: &str) {
 mod tests {
     use super::*;
 
+    use crate::args::VERSION;
     use assert_cmd::Command;
     use clap::Parser;
     use rstest::rstest;
@@ -581,6 +582,11 @@ mod tests {
         cmd.arg("--help");
         cmd.assert().success();
         let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
+        let actual = actual
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
         insta::assert_snapshot!(actual, @"
         Usage: lightswitch [OPTIONS] [COMMAND]
 
@@ -589,6 +595,7 @@ mod tests {
           show-unwind
           system-info
           server
+          map-sizes
           help         Print this message or the help of the given subcommand(s)
 
         Options:
@@ -728,6 +735,20 @@ mod tests {
           -V, --version
                   Print version
         ");
+    }
+
+    #[test]
+    fn cli_version() {
+        #[allow(deprecated)]
+        let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+
+        let output = cmd.arg("--version").output().unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("lightswitch {VERSION}\n")
+        );
     }
 
     #[rstest]

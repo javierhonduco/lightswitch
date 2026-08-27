@@ -66,6 +66,12 @@
           rust-toolchain = rust-toolchain-for pkgs;
           craneLib = (crane.mkLib nixpkgs.legacyPackages.${system}).overrideToolchain rust-toolchain;
           integration-tests-progs = import ./tests/testprogs/shell.nix { inherit pkgs system; };
+          gitSha =
+            if self ? rev && self.rev != null then self.rev
+            else if self ? dirtyRev && self.dirtyRev != null then self.dirtyRev
+            else if self ? shortRev && self.shortRev != null then self.shortRev
+            else if self ? dirtyShortRev && self.dirtyShortRev != null then self.dirtyShortRev
+            else "unknown";
           commonArgs = {
             src = ./.;
             doCheck = false;
@@ -77,6 +83,7 @@
           lightswitch = craneLib.buildPackage (
             commonArgs // {
               cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+              LIGHTSWITCH_GIT_SHA = gitSha;
             }
           );
           muslPackage =

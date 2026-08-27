@@ -57,7 +57,8 @@ impl RemoveRedundant {
             redundant = row.cfa_type == last_row_unwrapped.cfa_type
                 && row.cfa_offset == last_row_unwrapped.cfa_offset
                 && row.rbp_type == last_row_unwrapped.rbp_type
-                && row.rbp_offset == last_row_unwrapped.rbp_offset;
+                && row.rbp_offset == last_row_unwrapped.rbp_offset
+                && row.cfa_type != CfaType::EndFdeMarker;
         }
 
         if !redundant {
@@ -123,5 +124,17 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(processed, vec![CompactUnwindRow::default()])
+    }
+
+    #[test]
+    fn test_remove_redundant_preserves_distinct_markers() {
+        let unwind_info = vec![
+            CompactUnwindRow::stop_unwinding(0x18410),
+            CompactUnwindRow::stop_unwinding(0x20000),
+        ];
+        let mut processed = unwind_info.clone();
+        remove_redundant(&mut processed);
+
+        assert_eq!(processed, unwind_info)
     }
 }

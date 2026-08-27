@@ -47,6 +47,7 @@ fn resolve_from_program_headers<'data, Header>(
     file_data: &'data [u8],
     address_size: u8,
     text_address: u64,
+    text_end_address: u64,
     runtime_endian: gimli::RunTimeEndian,
 ) -> Result<ResolvedUnwindInfo<'data>>
 where
@@ -79,6 +80,7 @@ where
         data: Cow::Borrowed(data),
         eh_frame_address,
         text_address,
+        text_end_address,
     })
 }
 
@@ -88,10 +90,10 @@ pub(crate) fn unwind_info<'data>(
     runtime_endian: gimli::RunTimeEndian,
 ) -> Result<ResolvedUnwindInfo<'data>> {
     // Without sections, use the executable load segment as the text base.
-    let text_address = object_file
+    let (text_address, text_end_address) = object_file
         .segments()
         .find(|segment| segment.permissions().executable())
-        .map(|segment| segment.address())
+        .map(|segment| (segment.address(), segment.address() + segment.size()))
         .ok_or(UnwindInfoError::NoTextSection)?;
 
     // `object_file` already parsed the ELF headers, so use its raw program
@@ -104,6 +106,7 @@ pub(crate) fn unwind_info<'data>(
             file_data,
             4,
             text_address,
+            text_end_address,
             runtime_endian,
         ),
         object::File::Elf64(file) => resolve_from_program_headers(
@@ -113,6 +116,7 @@ pub(crate) fn unwind_info<'data>(
             file_data,
             8,
             text_address,
+            text_end_address,
             runtime_endian,
         ),
         _ => Err(UnwindInfoError::NoEhFrameSection.into()),

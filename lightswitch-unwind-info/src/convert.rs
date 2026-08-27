@@ -19,6 +19,8 @@ use crate::{
     types::*,
 };
 
+const UNWIND_INFO_PAGE_SIZE: u64 = 1 << 16;
+
 /// Converts a `gimli::UnwindTableRow` into our `CompactUnwindRow` which is then
 /// used as a random access-friendly unwind table suitable for mmap'd and
 /// eBPF-based unwinders.
@@ -235,6 +237,7 @@ pub(crate) struct ResolvedUnwindInfo<'data> {
     pub(crate) data: Cow<'data, [u8]>,
     pub(crate) eh_frame_address: u64,
     pub(crate) text_address: u64,
+    pub(crate) text_end_address: u64,
 }
 
 fn resolve_unwind_info<'data>(
@@ -251,6 +254,7 @@ fn resolve_unwind_info<'data>(
             data: eh_frame_section.uncompressed_data()?,
             eh_frame_address: eh_frame_section.address(),
             text_address: text.address(),
+            text_end_address: text.address() + text.size(),
         });
     }
 
@@ -258,6 +262,7 @@ fn resolve_unwind_info<'data>(
 }
 
 pub enum UnwindData {
+    TextSection(u64, u64),
     // Initial, end addresses
     Function(u64, u64),
     Instruction(CompactUnwindRow),
@@ -300,6 +305,10 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
         };
 
         let unwind_info = resolve_unwind_info(&object_file, &self.mmap, endian)?;
+        (self.callback)(&UnwindData::TextSection(
+            unwind_info.text_address,
+            unwind_info.text_end_address,
+        ));
         let bases = gimli::BaseAddresses::default()
             .set_eh_frame(unwind_info.eh_frame_address)
             .set_text(unwind_info.text_address);
@@ -391,19 +400,26 @@ fn compact_unwind_info_callback(
     mut callback: impl FnMut(&CompactUnwindRow),
 ) -> anyhow::Result<()> {
     let mut last_function_end_addr: Option<u64> = None;
+    let mut text_range: Option<(u64, u64)> = None;
 
     let builder =
         CompactUnwindInfoBuilder::with_callback(path, first_frame_override, |unwind_data| {
             match unwind_data {
-                UnwindData::Function(_start_addr, end_addr) => {
-                    // Add the end addr when we hit a new func
+                UnwindData::TextSection(start_addr, end_addr) => {
+                    text_range = Some((*start_addr, *end_addr));
+                }
+                UnwindData::Function(start_addr, end_addr) => {
+                    // Add stop markers for executable text not covered by the previous FDE.
                     match last_function_end_addr {
                         Some(addr) => {
-                            let row = CompactUnwindRow::stop_unwinding(addr);
-                            callback(&row)
+                            emit_stop_markers_for_gap(addr, *start_addr, |row| callback(&row));
                         }
                         None => {
-                            // todo: cleanup
+                            if let Some((text_start, _)) = text_range {
+                                emit_stop_markers_for_gap(text_start, *start_addr, |row| {
+                                    callback(&row)
+                                });
+                            }
                         }
                     }
                     last_function_end_addr = Some(*end_addr);
@@ -427,15 +443,46 @@ fn compact_unwind_info_callback(
         return Err(UnwindInfoError::NoFunctionsFoundInEhFrameData.into());
     };
 
-    // Add the last marker
-    let marker = CompactUnwindRow::stop_unwinding(last_function_end_addr);
-    callback(&marker);
+    // Add stop markers for executable text after the last FDE.
+    let gap_end = text_range
+        .map(|(_, text_end)| text_end)
+        .unwrap_or(last_function_end_addr);
+    emit_stop_markers_for_gap(last_function_end_addr, gap_end, |row| callback(&row));
 
     Ok(())
 }
 
+fn emit_stop_markers_for_gap(gap_start: u64, gap_end: u64, mut emit: impl FnMut(CompactUnwindRow)) {
+    if gap_start >= gap_end {
+        return;
+    }
+
+    emit(CompactUnwindRow::stop_unwinding(gap_start));
+
+    let mut next_marker = next_unwind_page(gap_start);
+    while next_marker < gap_end {
+        emit(CompactUnwindRow::stop_unwinding(next_marker));
+        next_marker += UNWIND_INFO_PAGE_SIZE;
+    }
+}
+
+#[cfg(test)]
+fn push_stop_markers_for_gap(
+    unwind_info: &mut Vec<CompactUnwindRow>,
+    gap_start: u64,
+    gap_end: u64,
+) {
+    emit_stop_markers_for_gap(gap_start, gap_end, |row| unwind_info.push(row));
+}
+
+fn next_unwind_page(address: u64) -> u64 {
+    (address / UNWIND_INFO_PAGE_SIZE + 1) * UNWIND_INFO_PAGE_SIZE
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::pages::to_pages;
+
     use super::*;
 
     use gimli::write::{
@@ -446,6 +493,44 @@ mod tests {
     use gimli::{AArch64, Encoding, Format, LittleEndian, Register, Vendor, X86_64};
 
     const TEST_PC: u64 = 0x1357;
+
+    #[test]
+    fn test_stop_markers_cover_text_gap_pages() {
+        let mut unwind_info = Vec::new();
+        push_stop_markers_for_gap(&mut unwind_info, 0x18410, 0x6db78);
+
+        let marker_pcs: Vec<_> = unwind_info.iter().map(|row| row.pc).collect();
+        assert_eq!(
+            marker_pcs,
+            vec![0x18410, 0x20000, 0x30000, 0x40000, 0x50000, 0x60000]
+        );
+
+        let pages = to_pages(&unwind_info);
+        for expected_page in [0x10000, 0x20000, 0x30000, 0x40000, 0x50000, 0x60000] {
+            assert!(
+                pages.iter().any(|page| page.address == expected_page),
+                "missing page 0x{expected_page:x}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_stop_markers_do_not_duplicate_page_aligned_gap_start() {
+        let mut unwind_info = Vec::new();
+        push_stop_markers_for_gap(&mut unwind_info, 0x20000, 0x30001);
+
+        let marker_pcs: Vec<_> = unwind_info.iter().map(|row| row.pc).collect();
+        assert_eq!(marker_pcs, vec![0x20000, 0x30000]);
+    }
+
+    #[test]
+    fn test_stop_markers_ignore_empty_and_inverted_gaps() {
+        let mut unwind_info = Vec::new();
+        push_stop_markers_for_gap(&mut unwind_info, 0x20000, 0x20000);
+        push_stop_markers_for_gap(&mut unwind_info, 0x30000, 0x20000);
+
+        assert!(unwind_info.is_empty());
+    }
 
     #[test]
     fn reads_unwind_info_from_program_headers() {

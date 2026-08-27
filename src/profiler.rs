@@ -53,7 +53,6 @@ use crate::process::{
 use crate::profile::*;
 use crate::util::architecture;
 use crate::util::executable_path;
-use crate::util::page_size;
 use crate::util::Architecture;
 use lightswitch_metadata::metadata_provider::{
     GlobalMetadataProvider, ThreadSafeGlobalMetadataProvider,
@@ -817,6 +816,7 @@ impl Profiler {
                 mapping.executable_id,
                 mapping.start_addr,
                 mapping.end_addr,
+                mapping.load_address,
             ) {
                 warn!(
                     "error adding unwind information for process {pid}, executable 0x{} due to {:?}",
@@ -854,10 +854,25 @@ impl Profiler {
         executable_id: ExecutableId,
         start_address: u64,
         end_address: u64,
+        load_address: u64,
     ) -> Result<AddUnwindInformationResult, AddUnwindInformationError> {
         if self.native_unwind_state.is_known(executable_id) {
             return Ok(AddUnwindInformationResult::AlreadyLoaded);
         }
+        let object_start_address = start_address.checked_sub(load_address).ok_or_else(|| {
+            AddUnwindInformationError::Generic(
+                format!(
+                    "mapping start 0x{start_address:x} is below load address 0x{load_address:x}"
+                ),
+                executable_id.to_string(),
+            )
+        })?;
+        let object_end_address = end_address.checked_sub(load_address).ok_or_else(|| {
+            AddUnwindInformationError::Generic(
+                format!("mapping end 0x{end_address:x} is below load address 0x{load_address:x}"),
+                executable_id.to_string(),
+            )
+        })?;
         let object_files = self.object_files.read();
         let executable_info = object_files.get(&executable_id).unwrap();
         let executable_path = executable_info.path.clone();
@@ -934,8 +949,8 @@ impl Profiler {
                 if needs_synthesis {
                     debug!("synthetising arm64 unwind information using frame pointers for vDSO");
                     Ok(vec![
-                        CompactUnwindRow::frame_pointer(start_address, is_arm64),
-                        CompactUnwindRow::stop_unwinding(end_address),
+                        CompactUnwindRow::frame_pointer(object_start_address, is_arm64),
+                        CompactUnwindRow::stop_unwinding(object_end_address),
                     ])
                 } else {
                     let _span = span!(
@@ -1159,15 +1174,59 @@ impl Profiler {
         };
 
         let mapping_data = if let Some(mapping) = proc_info.mappings.for_address(&address) {
-            Some((mapping.executable_id, mapping.start_addr, mapping.end_addr))
+            if tracing::enabled!(Level::DEBUG) {
+                let object_relative_address = address.checked_sub(mapping.load_address);
+                let object_relative_page = object_relative_address.map(|pc| pc & HIGH_PC_MASK);
+                let object_relative_address = object_relative_address
+                    .map(|pc| format!("0x{pc:x}"))
+                    .unwrap_or_else(|| "below load address".to_string());
+                let object_relative_page = object_relative_page
+                    .map(|pc| format!("0x{pc:x}"))
+                    .unwrap_or_else(|| "below load address".to_string());
+                let unwind_range = self
+                    .native_unwind_state
+                    .last_used_executables()
+                    .into_iter()
+                    .find(|(executable_id, _)| *executable_id == mapping.executable_id)
+                    .map(|(_, info)| {
+                        format!(
+                            "0x{:x}..0x{:x} ({} rows)",
+                            info.unwind_info_start_address,
+                            info.unwind_info_end_address,
+                            info.unwind_info_len
+                        )
+                    })
+                    .unwrap_or_else(|| "not loaded".to_string());
+                debug!(
+                    "need unwind info for pid {} address 0x{:x}: executable 0x{}, mapping 0x{:x}..0x{:x} offset 0x{:x}, load_address 0x{:x}, object_relative_address {}, object_relative_page {}, loaded unwind range {}",
+                    pid,
+                    address,
+                    mapping.executable_id,
+                    mapping.start_addr,
+                    mapping.end_addr,
+                    mapping.offset,
+                    mapping.load_address,
+                    object_relative_address,
+                    object_relative_page,
+                    unwind_range
+                );
+            }
+            Some((
+                mapping.executable_id,
+                mapping.start_addr,
+                mapping.end_addr,
+                mapping.load_address,
+            ))
         } else {
             info!("event_need_unwind_info, mapping not known");
             None
         };
         std::mem::drop(procs);
 
-        if let Some((executable_id, s, e)) = mapping_data {
-            if let Err(e) = self.add_unwind_information_for_executable(pid, executable_id, s, e) {
+        if let Some((executable_id, s, e, load_address)) = mapping_data {
+            if let Err(e) =
+                self.add_unwind_information_for_executable(pid, executable_id, s, e, load_address)
+            {
                 warn!(
                     "error adding unwind information for process {pid}, executable 0x{} due to {:?}",
                     executable_id, e
@@ -1370,28 +1429,37 @@ impl Profiler {
                         pid
                     );
 
-                    // mmap'ed data is always page aligned but the load segment information
-                    // might not be. As we need to account for
-                    // any randomisation added by ASLR, by
-                    // subtracting the virtual address from the
-                    // first load segment once it's been page aligned we'll get the offset
-                    // at which the executable has been loaded.
-                    //
-                    // Note: this doesn't take into consideration the mmap'ed or load
-                    // offsets.
-                    let load_address = |map_start: u64, first_elf_load: &ElfLoad| {
-                        let page_mask = !(page_size() - 1) as u64;
-                        map_start.saturating_sub(first_elf_load.p_vaddr & page_mask)
-                    };
+                    if let Ok((Some(build_id), _first_elf_load)) = info {
+                        let executable_id = build_id.id().expect("executable id");
+                        let object_files = self.object_files.read();
+                        let Some(object_file_info) = object_files.get(&executable_id) else {
+                            debug!(
+                                "could not find object file info for executable 0x{}",
+                                executable_id
+                            );
+                            continue;
+                        };
+                        let Some(load_address) =
+                            object_file_info.load_address_for_mapping(map.address.0, map.offset)
+                        else {
+                            debug!(
+                                "skipping executable mapping at {:x}-{:x} offset {:x} for {} because no executable ELF load segment contains it",
+                                map.address.0,
+                                map.address.1,
+                                map.offset,
+                                mapping_path.display()
+                            );
+                            continue;
+                        };
+                        std::mem::drop(object_files);
 
-                    if let Ok((Some(build_id), first_elf_load)) = info {
                         mappings.push(ExecutableMapping {
-                            executable_id: build_id.id().expect("executable id"),
+                            executable_id,
                             kind: ExecutableMappingType::FileBacked,
                             start_addr: map.address.0,
                             end_addr: map.address.1,
                             offset: map.offset,
-                            load_address: load_address(map.address.0, &first_elf_load),
+                            load_address,
                             soft_delete: false,
                         });
                     } else {
