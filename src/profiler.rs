@@ -710,9 +710,9 @@ impl Profiler {
         for proc in procs.values() {
             if proc.unwind_errors.len() > 0 {
                 println!(
-                    "- unwind errors for {}, count {} {:?}",
+                    "- unwind errors for {}, count {:?} {:?}",
                     proc.comm,
-                    proc.unwind_errors.len(),
+                    proc.unwind_errors.values().fold(0, |acc, e| acc + e),
                     proc.unwind_errors
                 )
             }
@@ -823,7 +823,7 @@ impl Profiler {
             // We might know about a mapping that failed to open for some reason.
             let object_file_info = object_file.get(&mapping.executable_id);
             if object_file_info.is_none() {
-                warn!("mapping not found");
+                warn!("object file not found for mapping {:?}", mapping);
                 continue;
             }
             std::mem::drop(object_file);
