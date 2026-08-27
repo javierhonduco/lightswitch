@@ -707,11 +707,12 @@ impl Profiler {
 
     pub fn top_errors_per_process(&self) {
         let procs = self.procs.read();
-        for proc in procs.values() {
+        for (pid, proc) in procs.iter() {
             if proc.unwind_errors.len() > 0 {
                 println!(
-                    "- unwind errors for {}, count {:?} {:?}",
+                    "- unwind errors for {} ({}), count {:?} {:?}",
                     proc.comm,
+                    pid,
                     proc.unwind_errors.values().fold(0, |acc, e| acc + e),
                     proc.unwind_errors
                 )
