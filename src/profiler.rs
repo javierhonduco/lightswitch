@@ -420,6 +420,7 @@ impl Profiler {
                         compatibility_mode: false,
                         last_used: Instant::now(),
                         file_id,
+                        unwind_errors: HashMap::new(),
                     },
                 );
 
@@ -776,6 +777,34 @@ impl Profiler {
         }
     }
 
+    pub fn per_process_errors(&mut self, raw_samples: &[RawSample]) {
+        for raw_sample in raw_samples {
+            let pid = raw_sample.pid;
+            let mut procs = self.procs.write();
+            if let Some(proc) = procs.get_mut(&pid) {
+                if raw_sample.result == SampleResult::Success {
+                    continue;
+                }
+                let entry = proc.unwind_errors.entry(raw_sample.result).or_default();
+                *entry += 1;
+            }
+        }
+    }
+
+    pub fn top_errors_per_process(&self) {
+        let procs = self.procs.read();
+        for proc in procs.values() {
+            if !proc.unwind_errors.is_empty() {
+                println!(
+                    "- unwind errors for {}, count {} {:?}",
+                    proc.comm,
+                    proc.unwind_errors.len(),
+                    proc.unwind_errors
+                )
+            }
+        }
+    }
+
     /// Updates the last time processes and executables were seen. This is used
     /// during evictions.
     pub fn bump_last_used(&mut self, raw_samples: &[RawSample]) {
@@ -815,6 +844,8 @@ impl Profiler {
         debug!("collecting profile");
         let raw_samples = std::mem::take(&mut self.raw_samples);
         self.bump_last_used(&raw_samples);
+        self.per_process_errors(&raw_samples);
+        self.top_errors_per_process();
         self.bpf.show_unwinder_stats();
         self.clear_maps();
         raw_samples
@@ -1629,6 +1660,7 @@ impl Profiler {
             compatibility_mode,
             last_used: Instant::now(),
             file_id,
+            unwind_errors: HashMap::new(),
         };
         self.procs.clone().write().insert(pid, proc_info);
 

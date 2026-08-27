@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 use tracing::debug;
 
+use crate::profile::SampleResult;
 use lightswitch_object::BuildId;
 use lightswitch_object::ElfLoad;
 use lightswitch_object::ExecutableId;
@@ -58,6 +59,7 @@ pub struct ProcessInfo {
     pub compatibility_mode: bool,
     pub last_used: Instant,
     pub file_id: FileId,
+    pub unwind_errors: HashMap<SampleResult, usize>,
 }
 
 /// Stores information for a executable mapping with all
