@@ -79,11 +79,11 @@
             nativeBuildInputs = nativeBuildInputs;
             LIBCLANG_PATH = with pkgs; lib.makeLibraryPath [ llvmPackages_21.libclang ];
             LIBBPF_SYS_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [ zlib.static elfutils' ];
+            LIGHTSWITCH_GIT_SHA = gitSha;
           };
           lightswitch = craneLib.buildPackage (
             commonArgs // {
               cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-              LIGHTSWITCH_GIT_SHA = gitSha;
             }
           );
           muslPackage =
