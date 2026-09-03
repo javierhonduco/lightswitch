@@ -166,16 +166,14 @@ impl K8sMetadataCache {
                 .flatten()
                 .chain(status.init_container_statuses.iter().flatten())
             {
-                if let Some(ref raw_id) = cs.container_id {
-                    if let Some(id) = parse_container_id(raw_id) {
-                        if id == container_id {
+                if let Some(ref raw_id) = cs.container_id
+                    && let Some(id) = parse_container_id(raw_id)
+                        && id == container_id {
                             let (uid, meta) = pod_to_cache_entry(&pod.metadata, status)?;
                             self.container_to_pod.insert(id, uid.clone());
                             self.pod_metadata.insert(uid, meta.clone());
                             return Some(meta);
                         }
-                    }
-                }
             }
         }
 
@@ -193,11 +191,10 @@ impl K8sMetadataCache {
 impl Drop for K8sMetadataCache {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.handle.take() {
-            if let Err(e) = handle.join() {
+        if let Some(handle) = self.handle.take()
+            && let Err(e) = handle.join() {
                 error!("k8s pod informer thread panicked: {:?}", e);
             }
-        }
     }
 }
 
@@ -335,8 +332,8 @@ fn handle_pod_event(
         .flatten()
         .chain(status.init_container_statuses.iter().flatten())
     {
-        if let Some(ref container_id) = cs.container_id {
-            if let Some(id) = parse_container_id(container_id) {
+        if let Some(ref container_id) = cs.container_id
+            && let Some(id) = parse_container_id(container_id) {
                 if is_delete {
                     debug!("remove container {} for deleted pod", id);
                     container_to_pod.invalidate(&id);
@@ -345,7 +342,6 @@ fn handle_pod_event(
                     container_to_pod.insert(id, pod_uid.clone());
                 }
             }
-        }
     }
 }
 

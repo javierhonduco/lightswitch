@@ -254,25 +254,23 @@ impl Profiler {
             profiler_config.cache_dir_base.display()
         );
         let cache_dir = profiler_config.cache_dir_base.join("lightswitch");
-        if let Err(e) = fs::create_dir(&cache_dir) {
-            if e.kind() != ErrorKind::AlreadyExists {
+        if let Err(e) = fs::create_dir(&cache_dir)
+            && e.kind() != ErrorKind::AlreadyExists {
                 panic!(
                     "could not create cache dir at {} with: {:?}",
                     cache_dir.display(),
                     e
                 );
             }
-        }
         let unwind_cache_dir = cache_dir.join("unwind-info").to_path_buf();
-        if let Err(e) = fs::create_dir(&unwind_cache_dir) {
-            if e.kind() != ErrorKind::AlreadyExists {
+        if let Err(e) = fs::create_dir(&unwind_cache_dir)
+            && e.kind() != ErrorKind::AlreadyExists {
                 panic!(
                     "could not create cache dir at {} with: {:?}",
                     unwind_cache_dir.display(),
                     e
                 );
             }
-        }
 
         let (sender, receiver) = unbounded();
         let chan_send = Arc::new(sender);
@@ -1166,14 +1164,13 @@ impl Profiler {
         };
         std::mem::drop(procs);
 
-        if let Some((executable_id, s, e)) = mapping_data {
-            if let Err(e) = self.add_unwind_information_for_executable(pid, executable_id, s, e) {
+        if let Some((executable_id, s, e)) = mapping_data
+            && let Err(e) = self.add_unwind_information_for_executable(pid, executable_id, s, e) {
                 warn!(
                     "error adding unwind information for process {pid}, executable 0x{} due to {:?}",
                     executable_id, e
                 );
             }
-        }
     }
 
     /// Evicts a process. If *only_when_exceeded* is true, this will only be

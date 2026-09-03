@@ -503,14 +503,13 @@ impl Bpf {
                 .maps
                 .exec_mappings
                 .delete(unsafe { plain::as_bytes(&key) });
-            if let Err(e) = res {
-                if !partial_write {
+            if let Err(e) = res
+                && !partial_write {
                     error!(
                         "failed to delete bpf mappings for process {} with {:?}",
                         pid, e
                     );
                 }
-            }
         }
     }
 
@@ -635,11 +634,10 @@ pub(crate) fn clear_map(map: &Map) {
     let mut previous_key: Option<Vec<u8>> = None;
 
     let mut delete_entry = |previous_key: Option<Vec<u8>>| {
-        if let Some(previous_key) = previous_key {
-            if map.delete(&previous_key).is_err() {
+        if let Some(previous_key) = previous_key
+            && map.delete(&previous_key).is_err() {
                 failures += 1;
             }
-        }
     };
 
     for key in map.keys() {

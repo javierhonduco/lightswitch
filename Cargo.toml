@@ -35,6 +35,7 @@ plain = "0.2.3"
 [features]
 default = ["libbpf-rs-static"]
 libbpf-rs-static = ["libbpf-rs/static"]
+libbpf-rs-vendored = ["libbpf-rs/vendored"]
 
 [dependencies]
 plain = { workspace = true }
