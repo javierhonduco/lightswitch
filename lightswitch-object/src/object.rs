@@ -5,9 +5,6 @@ use std::path::Path;
 
 use anyhow::{Result, anyhow};
 use memmap2::Mmap;
-use object::elf::ELF_NOTE_GO;
-use object::elf::NT_GO_BUILD_ID;
-use object::read::elf::NoteIterator;
 use ring::digest::{Context, Digest, SHA256};
 
 use object::Endianness;
@@ -16,9 +13,8 @@ use object::Object;
 use object::ObjectKind;
 use object::ObjectSection;
 use object::ObjectSymbol;
-use object::elf::{FileHeader32, FileHeader64, PF_X, PT_LOAD};
-use object::read::elf::FileHeader;
-use object::read::elf::ProgramHeader;
+use object::elf::{ELF_NOTE_GO, FileHeader32, FileHeader64, NT_GO_BUILD_ID, PF_X, PT_LOAD};
+use object::read::elf::{FileHeader, NoteIterator, ProgramHeader};
 
 use crate::{BuildId, ExecutableId};
 
@@ -244,7 +240,8 @@ impl ObjectFile {
 
                 let mut elf_loads = Vec::new();
                 for segment in segments {
-                    if segment.p_type(endian) != PT_LOAD || segment.p_flags(endian) & PF_X == 0 {
+                    if segment.p_type(endian) != PT_LOAD || !segment.p_flags(endian).contains(PF_X)
+                    {
                         continue;
                     }
                     elf_loads.push(ElfLoad {
@@ -262,7 +259,8 @@ impl ObjectFile {
 
                 let mut elf_loads = Vec::new();
                 for segment in segments {
-                    if segment.p_type(endian) != PT_LOAD || segment.p_flags(endian) & PF_X == 0 {
+                    if segment.p_type(endian) != PT_LOAD || !segment.p_flags(endian).contains(PF_X)
+                    {
                         continue;
                     }
                     elf_loads.push(ElfLoad {
