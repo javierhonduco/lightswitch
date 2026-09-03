@@ -54,9 +54,10 @@ pub fn executable_path(pid: Pid, path: &Path) -> PathBuf {
     let procfs_path = format!("/proc/{}/root{}", pid, path.to_string_lossy());
     let procfs_path = PathBuf::from(procfs_path);
     if let (Ok(file_id_left), Ok(file_id_right)) = (FileId::new(&procfs_path), FileId::new(path))
-        && file_id_left == file_id_right {
-            return path.to_path_buf();
-        }
+        && file_id_left == file_id_right
+    {
+        return path.to_path_buf();
+    }
 
     procfs_path
 }

@@ -1,29 +1,29 @@
-use crate::bpf_objects::clear_map;
 use crate::bpf_objects::Bpf;
+use crate::bpf_objects::clear_map;
 use crate::bpf_poller::start_poll_thread;
 use crate::deletion_scheduler::DeletionScheduler;
 use crate::deletion_scheduler::ToDelete;
-use crate::native_unwind_state::unwind_info_size_bytes;
 use crate::native_unwind_state::KnownExecutableInfo;
 use crate::native_unwind_state::NativeUnwindState;
+use crate::native_unwind_state::unwind_info_size_bytes;
 use crate::perf_events::setup_perf_event;
 use crate::process::opened_exe_path;
-use crate::util::get_online_cpus;
 use crate::util::FileId;
-use libbpf_rs::skel::Skel;
+use crate::util::get_online_cpus;
 use libbpf_rs::Link;
 use libbpf_rs::MapCore;
+use libbpf_rs::skel::Skel;
 use lightswitch_object::BuildId;
 use lightswitch_object::ElfLoad;
 use lru::LruCache;
 use parking_lot::RwLock;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::env::temp_dir;
 use std::ffi::CStr;
 use std::fs;
-use std::fs::read_link;
 use std::fs::File;
+use std::fs::read_link;
 use std::io::ErrorKind;
 use std::num::NonZeroUsize;
 
@@ -34,27 +34,27 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, bounded, select, tick, unbounded};
 use itertools::Itertools;
 use procfs;
-use tracing::{debug, error, info, span, warn, Level};
+use tracing::{Level, debug, error, info, span, warn};
 
 use crate::bpf::profiler_bindings::*;
 use crate::bpf::tracers_bindings::*;
 use crate::collector::*;
 use crate::debug_info::DebugInfoBackendNull;
 use crate::debug_info::DebugInfoManager;
-use crate::kernel::get_all_kernel_modules;
 use crate::kernel::KERNEL_PID;
+use crate::kernel::get_all_kernel_modules;
 use crate::process::{
     ExecutableMapping, ExecutableMappingType, ExecutableMappings, ObjectFileInfo, Pid, ProcessInfo,
     ProcessStatus,
 };
 use crate::profile::*;
+use crate::util::Architecture;
 use crate::util::architecture;
 use crate::util::executable_path;
 use crate::util::page_size;
-use crate::util::Architecture;
 use lightswitch_metadata::metadata_provider::{
     GlobalMetadataProvider, ThreadSafeGlobalMetadataProvider,
 };
@@ -255,22 +255,24 @@ impl Profiler {
         );
         let cache_dir = profiler_config.cache_dir_base.join("lightswitch");
         if let Err(e) = fs::create_dir(&cache_dir)
-            && e.kind() != ErrorKind::AlreadyExists {
-                panic!(
-                    "could not create cache dir at {} with: {:?}",
-                    cache_dir.display(),
-                    e
-                );
-            }
+            && e.kind() != ErrorKind::AlreadyExists
+        {
+            panic!(
+                "could not create cache dir at {} with: {:?}",
+                cache_dir.display(),
+                e
+            );
+        }
         let unwind_cache_dir = cache_dir.join("unwind-info").to_path_buf();
         if let Err(e) = fs::create_dir(&unwind_cache_dir)
-            && e.kind() != ErrorKind::AlreadyExists {
-                panic!(
-                    "could not create cache dir at {} with: {:?}",
-                    unwind_cache_dir.display(),
-                    e
-                );
-            }
+            && e.kind() != ErrorKind::AlreadyExists
+        {
+            panic!(
+                "could not create cache dir at {} with: {:?}",
+                unwind_cache_dir.display(),
+                e
+            );
+        }
 
         let (sender, receiver) = unbounded();
         let chan_send = Arc::new(sender);
@@ -480,16 +482,19 @@ impl Profiler {
         let object_files = self.object_files.clone();
         let collector = collector.clone();
 
-        thread::spawn(move || loop {
-            match profile_receive.recv() {
-                Ok(profile) => {
-                    collector
-                        .lock()
-                        .unwrap()
-                        .collect(profile, &procs.read(), &object_files.read());
-                }
-                Err(_e) => {
-                    // println!("failed to receive event {:?}", e);
+        thread::spawn(move || {
+            loop {
+                match profile_receive.recv() {
+                    Ok(profile) => {
+                        collector.lock().unwrap().collect(
+                            profile,
+                            &procs.read(),
+                            &object_files.read(),
+                        );
+                    }
+                    Err(_e) => {
+                        // println!("failed to receive event {:?}", e);
+                    }
                 }
             }
         });
@@ -679,7 +684,10 @@ impl Profiler {
                         }
                     }
                     None => {
-                        debug!("could not find memory mapping starting at {:x} for pid {} while handling munmap", start_address, pid);
+                        debug!(
+                            "could not find memory mapping starting at {:x} for pid {} while handling munmap",
+                            start_address, pid
+                        );
                     }
                 }
             }
@@ -1058,12 +1066,12 @@ impl Profiler {
         // We should print info log if we're going to need to evict for now
         if to_free_bytes > 0 {
             info!(
-            "want to add {:.2} MB of unwind information, need to free at least {:.2} MB (used {:.2} MB / {} MB)",
-            this_unwind_info_bytes as f64 / MB_TO_BYTES as f64,
-            to_free_bytes as f64 / MB_TO_BYTES as f64,
-            total_memory_used_bytes as f64 / MB_TO_BYTES as f64,
-            max_memory_mb
-        );
+                "want to add {:.2} MB of unwind information, need to free at least {:.2} MB (used {:.2} MB / {} MB)",
+                this_unwind_info_bytes as f64 / MB_TO_BYTES as f64,
+                to_free_bytes as f64 / MB_TO_BYTES as f64,
+                total_memory_used_bytes as f64 / MB_TO_BYTES as f64,
+                max_memory_mb
+            );
         }
 
         // Figure out what are the unwind info we should evict to stay below the memory
@@ -1165,12 +1173,13 @@ impl Profiler {
         std::mem::drop(procs);
 
         if let Some((executable_id, s, e)) = mapping_data
-            && let Err(e) = self.add_unwind_information_for_executable(pid, executable_id, s, e) {
-                warn!(
-                    "error adding unwind information for process {pid}, executable 0x{} due to {:?}",
-                    executable_id, e
-                );
-            }
+            && let Err(e) = self.add_unwind_information_for_executable(pid, executable_id, s, e)
+        {
+            warn!(
+                "error adding unwind information for process {pid}, executable 0x{} due to {:?}",
+                executable_id, e
+            );
+        }
     }
 
     /// Evicts a process. If *only_when_exceeded* is true, this will only be

@@ -52,12 +52,13 @@ impl<R: Read> Iterator for KsymIter<R> {
                             || symbol_type == "t"
                             || symbol_type == "W"
                             || symbol_type == "D")
-                            && let Ok(start_addr) = u64::from_str_radix(addr_str, 16) {
-                                return Some(Ksym {
-                                    start_addr,
-                                    symbol_name: symbol_name.trim().to_string(),
-                                });
-                            }
+                            && let Ok(start_addr) = u64::from_str_radix(addr_str, 16)
+                        {
+                            return Some(Ksym {
+                                start_addr,
+                                symbol_name: symbol_name.trim().to_string(),
+                            });
+                        }
                     }
                 }
                 Err(_) => {
