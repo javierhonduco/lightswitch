@@ -1,7 +1,7 @@
-[package]
+ [package]
 name = "lightswitch-capabilities"
-version = "0.3.1"
-edition = "2021"
+version = "0.3.2"
+edition = "2024"
 description = "Discover which BPF features are available"
 license = "MIT"
 repository = "https://github.com/javierhonduco/lightswitch"
