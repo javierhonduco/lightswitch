@@ -197,9 +197,11 @@ mod tests {
         };
 
         // no elf segments
-        assert!(object_file_info
-            .normalized_address(0x110, &mapping)
-            .is_none());
+        assert!(
+            object_file_info
+                .normalized_address(0x110, &mapping)
+                .is_none()
+        );
 
         // matches an elf segment
         object_file_info.elf_load_segments = vec![ElfLoad {
@@ -217,8 +219,10 @@ mod tests {
             p_vaddr: 0x0,
             p_filesz: 0x5,
         }];
-        assert!(object_file_info
-            .normalized_address(0x110, &mapping)
-            .is_none());
+        assert!(
+            object_file_info
+                .normalized_address(0x110, &mapping)
+                .is_none()
+        );
     }
 }

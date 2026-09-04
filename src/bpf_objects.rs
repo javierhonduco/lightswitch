@@ -8,9 +8,9 @@ use std::{
 use crate::{
     bpf::{
         profiler_bindings::{
-            exec_mappings_key, mapping_t, page_key_t, page_value_t,
-            program_PROGRAM_NATIVE_UNWINDER, sample_t, stack_unwind_row_t, unwinder_stats_t,
-            HIGH_PC_MASK, UNWIND_INFO_PAGE_SIZE,
+            HIGH_PC_MASK, UNWIND_INFO_PAGE_SIZE, exec_mappings_key, mapping_t, page_key_t,
+            page_value_t, program_PROGRAM_NATIVE_UNWINDER, sample_t, stack_unwind_row_t,
+            unwinder_stats_t,
         },
         profiler_skel::{OpenProfilerSkel, ProfilerSkel, ProfilerSkelBuilder},
         tracers_skel::{OpenTracersSkel, TracersSkel, TracersSkelBuilder},
@@ -20,11 +20,11 @@ use crate::{
     profiler::ProfilerConfig,
     util::{get_online_cpus, roundup_page, summarize_address_range},
 };
-use libbpf_rs::{skel::Skel, Map, OpenObject};
 use libbpf_rs::{
-    skel::{OpenSkel, SkelBuilder},
     Link,
+    skel::{OpenSkel, SkelBuilder},
 };
+use libbpf_rs::{Map, OpenObject, skel::Skel};
 use libbpf_rs::{MapCore, MapFlags, MapHandle, MapType};
 use lightswitch_object::ExecutableId;
 use lightswitch_unwind_info::types::CompactUnwindRow;

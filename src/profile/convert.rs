@@ -5,13 +5,13 @@ use lightswitch_metadata::taskname::ThreadInfo;
 use lightswitch_metadata::types::{MetadataLabel, MetadataLabelValue, TaskKey};
 
 use lightswitch_proto::profile::pprof::Label;
-use lightswitch_proto::profile::{pprof, LabelStringOrNumber, PprofBuilder};
+use lightswitch_proto::profile::{LabelStringOrNumber, PprofBuilder, pprof};
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::SystemTime;
-use tracing::{debug, error, span, Level};
+use tracing::{Level, debug, error, span};
 
 use crate::kernel::KERNEL_PID;
 use crate::ksym::Ksym;

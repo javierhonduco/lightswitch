@@ -23,9 +23,9 @@ use lightswitch::collector::{
 use lightswitch::debug_info::DebugInfoManager;
 use lightswitch::profile::symbolize_profile;
 use nix::unistd::{Gid, Uid};
-use tracing::{debug, error, info, Level};
-use tracing_subscriber::fmt::format::FmtSpan;
+use tracing::{Level, debug, error, info};
 use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::fmt::format::FmtSpan;
 
 use lightswitch_capabilities::has_btf;
 use lightswitch_capabilities::system_info::SystemInfo;
@@ -39,11 +39,11 @@ use lightswitch::debug_info::{
 use lightswitch::kernel::kernel_build_id;
 use lightswitch::profile::{fold_profile, to_pprof};
 use lightswitch::profiler::{Profiler, ProfilerConfig};
-use lightswitch::server::{find_default_profile, start_profile_server, ProfileFileFormat};
-use lightswitch_object::kernel::kaslr_offset;
+use lightswitch::server::{ProfileFileFormat, find_default_profile, start_profile_server};
 use lightswitch_object::ObjectFile;
-use lightswitch_unwind_info::compact_unwind_info;
+use lightswitch_object::kernel::kaslr_offset;
 use lightswitch_unwind_info::CompactUnwindInfoBuilder;
+use lightswitch_unwind_info::compact_unwind_info;
 
 mod args;
 mod killswitch;
@@ -75,15 +75,17 @@ fn panic_thread_hook() {
 
 /// Starts `parking_lot`'s deadlock detector.
 fn start_deadlock_detector() {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        for deadlock in parking_lot::deadlock::check_deadlock() {
-            for deadlock in deadlock {
-                eprintln!(
-                    "Found a deadlock! {:?}: {:?}",
-                    deadlock.thread_id(),
-                    deadlock.backtrace()
-                );
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            for deadlock in parking_lot::deadlock::check_deadlock() {
+                for deadlock in deadlock {
+                    eprintln!(
+                        "Found a deadlock! {:?}: {:?}",
+                        deadlock.thread_id(),
+                        deadlock.backtrace()
+                    );
+                }
             }
         }
     });
@@ -333,10 +335,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         let killswitch_ticker = tick(KILLSWITCH_POLL_INTERVAL);
         let killswitch_poll_thread =
             thread::Builder::new().name("killswitch-poll-thread".to_string());
-        let _ = killswitch_poll_thread.spawn(move || loop {
-            if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
-                let _ = stop_signal_sender.send(());
-                break;
+        let _ = killswitch_poll_thread.spawn(move || {
+            loop {
+                if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
+                    let _ = stop_signal_sender.send(());
+                    break;
+                }
             }
         });
 
@@ -368,11 +372,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Start a thread to stop the profiler if the killswitch is enabled
     let killswitch_ticker = tick(KILLSWITCH_POLL_INTERVAL);
     let killswitch_poll_thread = thread::Builder::new().name("killswitch-poll-thread".to_string());
-    let _ = killswitch_poll_thread.spawn(move || loop {
-        if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
-            info!("killswitch detected. Sending stop signal to profiler.");
-            let _ = stop_signal_sender.send(());
-            break;
+    let _ = killswitch_poll_thread.spawn(move || {
+        loop {
+            if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
+                info!("killswitch detected. Sending stop signal to profiler.");
+                let _ = stop_signal_sender.send(());
+                break;
+            }
         }
     });
 

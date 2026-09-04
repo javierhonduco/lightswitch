@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use nix::unistd::{sysconf, SysconfVar};
+use nix::unistd::{SysconfVar, sysconf};
 
 static PAGE_SIZE: OnceLock<usize> = OnceLock::new();
 

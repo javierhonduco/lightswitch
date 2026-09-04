@@ -36,11 +36,11 @@ pub fn summarize_address_range(low: u64, high: u64) -> Vec<AddressBlockRange> {
 mod tests {
     use std::mem::size_of;
 
-    use libbpf_rs::libbpf_sys;
     use libbpf_rs::MapCore;
     use libbpf_rs::MapFlags;
     use libbpf_rs::MapHandle;
     use libbpf_rs::MapType;
+    use libbpf_rs::libbpf_sys;
 
     use crate::bpf::profiler_bindings::exec_mappings_key;
     use crate::bpf::profiler_bindings::mapping_t;

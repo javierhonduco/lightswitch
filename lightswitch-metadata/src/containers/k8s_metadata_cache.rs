@@ -1,13 +1,13 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
 use futures::{StreamExt, TryStreamExt};
 use k8s_openapi::api::core::v1::Pod;
-use kube::api::{Api, ListParams};
-use kube::runtime::{watcher, WatchStreamExt};
 use kube::Client;
+use kube::api::{Api, ListParams};
+use kube::runtime::{WatchStreamExt, watcher};
 use mini_moka::sync::Cache;
 use tracing::{debug, error, info, warn};
 
@@ -521,9 +521,11 @@ mod tests {
                 .unwrap(),
             "9c154e1e-01fc-4c58-9645-1591ea556275"
         );
-        assert!(pod_cache
-            .get(&"9c154e1e-01fc-4c58-9645-1591ea556275".to_string())
-            .is_some());
+        assert!(
+            pod_cache
+                .get(&"9c154e1e-01fc-4c58-9645-1591ea556275".to_string())
+                .is_some()
+        );
     }
 
     // archive-579664cb57-5tzgb
@@ -565,12 +567,18 @@ mod tests {
             Some("argocd-redis-65858f5d69"),
         );
         handle_pod_event(&cid_cache, &pod_cache, pod, false);
-        assert!(cid_cache
-            .get(&"a49f75b30fd21c458e1da2356d1f94b0412aaf92cb2439b2deb631964dce213c".to_string())
-            .is_some());
-        assert!(pod_cache
-            .get(&"fa06d8bf-ba2f-4518-9f47-823676b6da2a".to_string())
-            .is_some());
+        assert!(
+            cid_cache
+                .get(
+                    &"a49f75b30fd21c458e1da2356d1f94b0412aaf92cb2439b2deb631964dce213c".to_string()
+                )
+                .is_some()
+        );
+        assert!(
+            pod_cache
+                .get(&"fa06d8bf-ba2f-4518-9f47-823676b6da2a".to_string())
+                .is_some()
+        );
 
         let delete_pod = make_pod(
             Some("fa06d8bf-ba2f-4518-9f47-823676b6da2a"),
@@ -582,12 +590,18 @@ mod tests {
             Some("argocd-redis-65858f5d69"),
         );
         handle_pod_event(&cid_cache, &pod_cache, delete_pod, true);
-        assert!(cid_cache
-            .get(&"a49f75b30fd21c458e1da2356d1f94b0412aaf92cb2439b2deb631964dce213c".to_string())
-            .is_none());
-        assert!(pod_cache
-            .get(&"fa06d8bf-ba2f-4518-9f47-823676b6da2a".to_string())
-            .is_none());
+        assert!(
+            cid_cache
+                .get(
+                    &"a49f75b30fd21c458e1da2356d1f94b0412aaf92cb2439b2deb631964dce213c".to_string()
+                )
+                .is_none()
+        );
+        assert!(
+            pod_cache
+                .get(&"fa06d8bf-ba2f-4518-9f47-823676b6da2a".to_string())
+                .is_none()
+        );
     }
 
     #[test]
@@ -603,9 +617,13 @@ mod tests {
             None,
         );
         handle_pod_event(&cid_cache, &_pod_cache, pod, false);
-        assert!(cid_cache
-            .get(&"a49f75b30fd21c458e1da2356d1f94b0412aaf92cb2439b2deb631964dce213c".to_string())
-            .is_none());
+        assert!(
+            cid_cache
+                .get(
+                    &"a49f75b30fd21c458e1da2356d1f94b0412aaf92cb2439b2deb631964dce213c".to_string()
+                )
+                .is_none()
+        );
     }
 
     #[test]
@@ -622,9 +640,11 @@ mod tests {
             ..Default::default()
         };
         handle_pod_event(&_cid_cache, &pod_cache, pod, false);
-        assert!(pod_cache
-            .get(&"7dac1222-2472-4b95-ac14-41daa7b96215".to_string())
-            .is_none());
+        assert!(
+            pod_cache
+                .get(&"7dac1222-2472-4b95-ac14-41daa7b96215".to_string())
+                .is_none()
+        );
     }
 
     #[test]
@@ -647,9 +667,11 @@ mod tests {
             ..Default::default()
         };
         handle_pod_event(&cid_cache, &pod_cache, pod, false);
-        assert!(pod_cache
-            .get(&"7dac1222-2472-4b95-ac14-41daa7b96215".to_string())
-            .is_some());
+        assert!(
+            pod_cache
+                .get(&"7dac1222-2472-4b95-ac14-41daa7b96215".to_string())
+                .is_some()
+        );
     }
 
     // metallb-speaker-hf926
@@ -800,9 +822,13 @@ mod tests {
     #[test]
     fn test_get_pod_metadata_unknown_returns_none() {
         let cache = K8sMetadataCache::new_for_test(vec![], vec![]);
-        assert!(cache
-            .get_pod_metadata("e9bddc1edab79f0e9bdcf34e7db20242c0b59b01db2467c6b05b4a5d2a6873aa")
-            .is_none());
+        assert!(
+            cache
+                .get_pod_metadata(
+                    "e9bddc1edab79f0e9bdcf34e7db20242c0b59b01db2467c6b05b4a5d2a6873aa"
+                )
+                .is_none()
+        );
     }
 
     #[test]
@@ -812,8 +838,12 @@ mod tests {
             "e9bddc1edab79f0e9bdcf34e7db20242c0b59b01db2467c6b05b4a5d2a6873aa".to_string(),
             (),
         );
-        assert!(cache
-            .get_pod_metadata("e9bddc1edab79f0e9bdcf34e7db20242c0b59b01db2467c6b05b4a5d2a6873aa")
-            .is_none());
+        assert!(
+            cache
+                .get_pod_metadata(
+                    "e9bddc1edab79f0e9bdcf34e7db20242c0b59b01db2467c6b05b4a5d2a6873aa"
+                )
+                .is_none()
+        );
     }
 }
