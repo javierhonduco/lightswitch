@@ -92,12 +92,11 @@ fn start_deadlock_detector() {
 }
 
 fn open_browser(url: &str) {
-    if let Ok(browser_bin) = std::env::var("BROWSER") {
-        if let Ok(output) = Command::new(browser_bin).arg(url).output() {
-            if output.status.success() {
-                return;
-            }
-        }
+    if let Ok(browser_bin) = std::env::var("BROWSER")
+        && let Ok(output) = Command::new(browser_bin).arg(url).output()
+        && output.status.success()
+    {
+        return;
     }
 
     let _ = Command::new("xdg-open").arg(url).output();
