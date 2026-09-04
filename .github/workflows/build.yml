@@ -37,6 +37,8 @@ jobs:
               run: nix develop --command cargo rustdoc --all-features -- -Zunstable-options --check -Dwarnings
             - name: Run `nix fmt`
               run: nix fmt -- --check .
+            - name: Ensure C code is formatted
+              run: nix develop --command just c-fmt && git diff --exit-code
             - name: Run `cargo shear`
               run: nix develop --command cargo shear
 

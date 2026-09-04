@@ -21,7 +21,7 @@ struct {
 #define DEFINE_COUNTER(__func__name)                   \
     static void bump_unwind_##__func__name() {         \
         u32 zero = 0;                                  \
-        struct unwinder_stats_t *unwinder_stats =      \
+        struct unwinder_stats_t* unwinder_stats =      \
             bpf_map_lookup_elem(&percpu_stats, &zero); \
         if (unwinder_stats != NULL) {                  \
             unwinder_stats->__func__name++;            \

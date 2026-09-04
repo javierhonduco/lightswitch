@@ -74,7 +74,7 @@ struct {
 
 // Binary search the unwind table to find the row index containing the unwind
 // information for a given program counter (pc) relative to the object file.
-static __always_inline u64 find_offset_for_pc(void *inner_map, u16 pc_low, u64 left,
+static __always_inline u64 find_offset_for_pc(void* inner_map, u16 pc_low, u64 left,
                                               u64 right) {
     u64 found = BINARY_SEARCH_DEFAULT;
 
@@ -94,7 +94,7 @@ static __always_inline u64 find_offset_for_pc(void *inner_map, u16 pc_low, u64 l
 
         u32 mid = (left + right) / 2;
 
-        stack_unwind_row_t *row = bpf_map_lookup_elem(inner_map, &mid);
+        stack_unwind_row_t* row = bpf_map_lookup_elem(inner_map, &mid);
         if (row == NULL) {
             return BINARY_SEARCH_DEFAULT;
         }
@@ -112,17 +112,17 @@ static __always_inline u64 find_offset_for_pc(void *inner_map, u16 pc_low, u64 l
 // Finds the shard information for a given pid and program counter. Optionally,
 // an offset can be passed that will be filled in with the mapping's load
 // address.
-static __always_inline void *
-find_page(mapping_t *mapping, u64 object_relative_pc, u64 *low_index, u64 *high_index) {
+static __always_inline void*
+find_page(mapping_t* mapping, u64 object_relative_pc, u64* low_index, u64* high_index) {
     page_key_t page_key = {
         .executable_id = mapping->executable_id,
         .file_offset = object_relative_pc,
     };
 
-    page_value_t *found_page = bpf_map_lookup_elem(&executable_to_page, &page_key);
+    page_value_t* found_page = bpf_map_lookup_elem(&executable_to_page, &page_key);
 
     if (found_page != NULL) {
-        void *inner_map = bpf_map_lookup_elem(&outer_map, &mapping->executable_id);
+        void* inner_map = bpf_map_lookup_elem(&outer_map, &mapping->executable_id);
         if (inner_map != NULL) {
             *low_index = found_page->low_index;
             *high_index = found_page->high_index;
@@ -135,9 +135,9 @@ find_page(mapping_t *mapping, u64 object_relative_pc, u64 *low_index, u64 *high_
     return NULL;
 }
 
-static __always_inline void send_event(Event *event, struct bpf_perf_event_data *ctx) {
+static __always_inline void send_event(Event* event, struct bpf_perf_event_data* ctx) {
     u64 event_id = ((u64)event->pid << 32 | event->type);
-    bool *is_rate_limited = bpf_map_lookup_elem(&rate_limits, &event_id);
+    bool* is_rate_limited = bpf_map_lookup_elem(&rate_limits, &event_id);
     if (is_rate_limited != NULL && *is_rate_limited) {
         LOG("[debug] send_event was rate limited for process %d", event->pid);
         return;
@@ -205,12 +205,12 @@ static __always_inline bool in_kernel(u64 ip) { return ip & (1UL << 63); }
 // We don't check for the return value of `retrieve_task_registers`, it's
 // caller due the verifier not liking that code.
 static __always_inline bool is_kthread() {
-    struct task_struct *task = current_task();
+    struct task_struct* task = current_task();
     if (task == NULL) {
         return false;
     }
 
-    void *mm;
+    void* mm;
     int err = bpf_probe_read_kernel(&mm, 8, &task->mm);
     if (err) {
         LOG("[warn] bpf_probe_read_kernel failed with %d", err);
@@ -222,7 +222,7 @@ static __always_inline bool is_kthread() {
 
 // avoid R0 invalid mem access 'scalar'
 // Port of `task_pt_regs` in BPF.
-static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u64 *lr) {
+static __always_inline bool retrieve_task_registers(u64* ip, u64* sp, u64* bp, u64* lr) {
     if (ip == NULL || sp == NULL || bp == NULL || lr == NULL) {
         return false;
     }
@@ -231,8 +231,8 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u
         return false;
     }
 
-    struct task_struct *task = current_task();
-    struct pt_regs *regs = pt_regs(task);
+    struct task_struct* task = current_task();
+    struct pt_regs* regs = pt_regs(task);
     if (regs == NULL) {
         return false;
     }
@@ -246,7 +246,7 @@ static __always_inline bool retrieve_task_registers(u64 *ip, u64 *sp, u64 *bp, u
     return true;
 }
 
-void send_sample_impl(struct bpf_perf_event_data *ctx, sample_t *sample) {
+void send_sample_impl(struct bpf_perf_event_data* ctx, sample_t* sample) {
     u32 sample_size = sizeof(sample_t)
                       // Remove the actual stack buffer which was doubled to appease the verifier.
                       - 2 * MAX_STACK_DEPTH * sizeof(u64)
@@ -274,8 +274,8 @@ void send_sample_impl(struct bpf_perf_event_data *ctx, sample_t *sample) {
     }
 }
 
-static __always_inline void send_sample(struct bpf_perf_event_data *ctx,
-                                      unwind_state_t *unwind_state) {
+static __always_inline void send_sample(struct bpf_perf_event_data* ctx,
+                                        unwind_state_t* unwind_state) {
     // Unwind and copy kernel stack.
     u32 ulen = unwind_state->sample.stack.ulen;
     if (ulen < MAX_STACK_DEPTH) {
@@ -285,7 +285,7 @@ static __always_inline void send_sample(struct bpf_perf_event_data *ctx,
         }
     }
 
-    struct task_struct *task = current_task();
+    struct task_struct* task = current_task();
     unsigned int level = lightswitch_config.userspace_pid_ns_level;
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
     int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
@@ -299,13 +299,13 @@ static __always_inline void send_sample(struct bpf_perf_event_data *ctx,
 
 // The unwinding machinery lives here.
 SEC("perf_event")
-int dwarf_unwind(struct bpf_perf_event_data *ctx) {
-    struct task_struct *task = current_task();
+int dwarf_unwind(struct bpf_perf_event_data* ctx) {
+    struct task_struct* task = current_task();
     unsigned int level = lightswitch_config.userspace_pid_ns_level;
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
 
     u64 zero = 0;
-    unwind_state_t *unwind_state = bpf_map_lookup_elem(&heap, &zero);
+    unwind_state_t* unwind_state = bpf_map_lookup_elem(&heap, &zero);
     if (unwind_state == NULL) {
         LOG("unwind_state is NULL, should not happen");
         return 1;
@@ -318,7 +318,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
         LOG("\tcurrent sp: %llx", unwind_state->sp);
         LOG("\tcurrent bp: %llx", unwind_state->bp);
 
-        mapping_t *mapping = find_mapping(per_process_id, unwind_state->ip);
+        mapping_t* mapping = find_mapping(per_process_id, unwind_state->ip);
 
         if (mapping == NULL) {
             LOG("[error] no mapping found for pc %llx", unwind_state->ip);
@@ -352,7 +352,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 
         u64 low_index = 0;
         u64 high_index = 0;
-        void *inner = find_page(mapping, object_relative_pc_high, &low_index, &high_index);
+        void* inner = find_page(mapping, object_relative_pc_high, &low_index, &high_index);
         if (inner == NULL) {
             Event event = {
                 .type = EVENT_NEED_UNWIND_INFO,
@@ -377,7 +377,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 
             if (table_idx == BINARY_SEARCH_DEFAULT) {
                 low_index -= 1;
-                stack_unwind_row_t *previous_row = bpf_map_lookup_elem(inner, &low_index);
+                stack_unwind_row_t* previous_row = bpf_map_lookup_elem(inner, &low_index);
                 if (previous_row != NULL && object_relative_pc > PREVIOUS_PAGE(object_relative_pc_high) + previous_row->pc_low) {
                     table_idx = low_index;
                     in_previous_page = true;
@@ -396,7 +396,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
         LOG("\t=> table_index: %d", table_idx);
         LOG("\t=> object relative pc: %llx", object_relative_pc);
 
-        stack_unwind_row_t *row = bpf_map_lookup_elem(inner, &table_idx);
+        stack_unwind_row_t* row = bpf_map_lookup_elem(inner, &table_idx);
         if (row == NULL) {
             return 1;
         }
@@ -447,7 +447,8 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
             LOG("\t[error] frame pointer is %d (register or exp), bailing out",
                 found_rbp_type);
             bump_unwind_error_unsupported_frame_pointer_action();
-            unwind_state->sample.result = SAMPLE_UNSUPPORTED_UNWIND_RULE;;
+            unwind_state->sample.result = SAMPLE_UNSUPPORTED_UNWIND_RULE;
+            ;
             break;
         }
 
@@ -461,7 +462,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
             u8 addition = found_cfa_offset;
             LOG("dwarf exp: *($rsp + %d) + %d", offset, addition);
             int ret =
-                bpf_probe_read_user(&previous_rsp, 8, (void *)(unwind_state->sp + offset));
+                bpf_probe_read_user(&previous_rsp, 8, (void*)(unwind_state->sp + offset));
             if (ret < 0) {
                 LOG("[error] reading previous rsp failed with %d", ret);
                 bump_unwind_error_previous_rsp_read();
@@ -508,7 +509,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
             LOG("\t(bp_offset: %d, bp value stored at %llx)", found_rbp_offset,
                 previous_rbp_addr);
             int ret =
-                bpf_probe_read_user(&previous_rbp, 8, (void *)(previous_rbp_addr));
+                bpf_probe_read_user(&previous_rbp, 8, (void*)(previous_rbp_addr));
             if (ret < 0) {
                 LOG("[error] previous_rbp read failed with %d", ret);
                 bump_unwind_error_previous_rbp_read();
@@ -525,7 +526,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
         // The return address is guaranteed to be 8 bytes ahead of
         // the previous stack pointer in x86_64.
         previous_rip_addr = previous_rsp - 8;
-        err = bpf_probe_read_user(&previous_rip, 8, (void *)(previous_rip_addr));
+        err = bpf_probe_read_user(&previous_rip, 8, (void*)(previous_rip_addr));
 
 #endif
 
@@ -539,12 +540,12 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
             // The binary was compiled with frame pointers, the location of the return
             // address is guaranteed by the Aarch64 ABI.
             previous_rip_addr = previous_rbp_addr + 8;
-            err = bpf_probe_read_user(&previous_rip, 8, (void *)(previous_rip_addr));
+            err = bpf_probe_read_user(&previous_rip, 8, (void*)(previous_rip_addr));
         } else {
             // If there are not frame pointers, we need to fetch the return address somewhere
             // else in the stack.
             previous_rip_addr = previous_rsp + found_rbp_offset;
-            err = bpf_probe_read_user(&previous_rip, 8, (void *)(previous_rip_addr));
+            err = bpf_probe_read_user(&previous_rip, 8, (void*)(previous_rip_addr));
         }
 #endif
 
@@ -578,8 +579,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
     // in our stack storage.
     if (unwind_state->sample.result == SAMPLE_STARTED) {
         if (unwind_state->sample.stack.ulen < MAX_STACK_DEPTH &&
-                   unwind_state->tail_calls < MAX_TAIL_CALLS)
-        {
+            unwind_state->tail_calls < MAX_TAIL_CALLS) {
             LOG("Continuing walking the stack in a tail call, current tail %d",
                 unwind_state->tail_calls);
             unwind_state->tail_calls++;
@@ -627,7 +627,7 @@ int dwarf_unwind(struct bpf_perf_event_data *ctx) {
 }
 
 // Set up the initial unwinding state.
-static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_user_pt_regs_t *regs) {
+static __always_inline bool set_initial_state(unwind_state_t* unwind_state, bpf_user_pt_regs_t* regs) {
     unwind_state->sample.stack.ulen = 0;
     unwind_state->sample.stack.klen = 0;
     unwind_state->tail_calls = 0;
@@ -655,8 +655,8 @@ static __always_inline bool set_initial_state(unwind_state_t *unwind_state, bpf_
 }
 
 SEC("perf_event")
-int on_event(struct bpf_perf_event_data *ctx) {
-    struct task_struct *task = current_task();
+int on_event(struct bpf_perf_event_data* ctx) {
+    struct task_struct* task = current_task();
     unsigned int level = lightswitch_config.userspace_pid_ns_level;
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
 
@@ -674,7 +674,7 @@ int on_event(struct bpf_perf_event_data *ctx) {
         bump_unwind_total();
 
         u32 zero = 0;
-        unwind_state_t *profiler_state = bpf_map_lookup_elem(&heap, &zero);
+        unwind_state_t* profiler_state = bpf_map_lookup_elem(&heap, &zero);
         if (profiler_state == NULL) {
             LOG("[error] profiler state should never be NULL");
             return 0;
