@@ -48,8 +48,8 @@ struct munmap_entry_args {
 };
 
 SEC("tracepoint/sched/sched_process_exit")
-int tracer_process_exit(void *ctx) {
-    struct task_struct *task = current_task();
+int tracer_process_exit(void* ctx) {
+    struct task_struct* task = current_task();
     unsigned int level = lightswitch_config.userspace_pid_ns_level;
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
     int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
@@ -85,17 +85,17 @@ int tracer_process_exit(void *ctx) {
 }
 
 SEC("tracepoint/syscalls/sys_enter_munmap")
-int tracer_enter_munmap(struct munmap_entry_args *args) {
+int tracer_enter_munmap(struct munmap_entry_args* args) {
     u64 start_address = args->addr;
     u64 end_address = args->addr + args->len;
 
-    struct task_struct *task = current_task();
+    struct task_struct* task = current_task();
     unsigned int level = lightswitch_config.userspace_pid_ns_level;
     int per_process_id = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
 
     // We might not know about some mappings, but also we definitely don't want to notify
     // of non-executable mappings being unmapped.
-    mapping_t *mapping = find_mapping(per_process_id, start_address);
+    mapping_t* mapping = find_mapping(per_process_id, start_address);
     if (mapping == NULL) {
         return 0;
     }
@@ -119,8 +119,8 @@ int tracer_enter_munmap(struct munmap_entry_args *args) {
 }
 
 SEC("tracepoint/syscalls/sys_exit_munmap")
-int tracer_exit_munmap(struct syscall_trace_exit *ctx) {
-    struct task_struct *task = current_task();
+int tracer_exit_munmap(struct syscall_trace_exit* ctx) {
+    struct task_struct* task = current_task();
     unsigned int level = lightswitch_config.userspace_pid_ns_level;
     int per_thread_id = BPF_CORE_READ(task, thread_pid, numbers[level].nr);
 
@@ -128,7 +128,7 @@ int tracer_exit_munmap(struct syscall_trace_exit *ctx) {
         .tid = per_thread_id,
     };
 
-    mmap_data_value_t *value = bpf_map_lookup_elem(&tracked_munmap, &key);
+    mmap_data_value_t* value = bpf_map_lookup_elem(&tracked_munmap, &key);
     if (value == NULL) {
         return 0;
     }

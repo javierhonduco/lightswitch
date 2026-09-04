@@ -20,4 +20,4 @@ cov:
     cargo llvm-cov --open --workspace --ignore-filename-regex "(_skel)\.rs"
 
 c-fmt:
-    find src/bpf/ ! -iname vmlinux*.h -iname *.h -o -iname *.c | xargs clang-format -i
+    find \( -iname *.h -o -iname *.c \) -not -path "./target/*" -not -path "*vmlinux*" | xargs clang-format -i
