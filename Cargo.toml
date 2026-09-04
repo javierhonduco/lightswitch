@@ -1,6 +1,6 @@
 [package]
 name = "lightswitch"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "CPU profiler as a library for Linux suitable for on-demand and continuous profiling"
 license = "MIT"
@@ -14,8 +14,8 @@ members = [
 [workspace.dependencies]
 memmap2 = "0.9.11"
 anyhow = "1.0.102"
-object = "0.39.1"
-libbpf-rs = { version = "0.26.2" }
+object = "0.40.0"
+libbpf-rs = { version = "0.27.0" }
 tracing = "0.1.44"
 thiserror = "2.0.18"
 perf-event-open-sys = "6.0.0"
@@ -24,11 +24,11 @@ nix = { version = "0.31.2" }
 # workspace dev dependencies below
 tempfile = "3.27.0"
 # workspace build dependencies below
-libbpf-cargo = { version = "0.26.2" }
+libbpf-cargo = { version = "0.27.0" }
 glob = "0.3.3"
 ring = "0.17.14"
 libbpf-sys = "1.7.0"
-lru = "0.16.3"
+lru = "0.18.2"
 lightswitch-object = { path = "lightswitch-object", version = "0.3.3" }
 plain = "0.2.3"
 
@@ -47,11 +47,11 @@ prost = "0.14" # Needed to encode protocol buffers to bytes.
 reqwest = { version = "0.13", features = ["blocking", "rustls", "json"], default-features = false }
 ctrlc = "3.5.2"
 serde = { version = "1.0.228", features = ["derive"] }
-base64 = "0.22.1"
+base64 = "0.23.1"
 flate2 = "1.1.4"
 uuid = { version = "1.18.1", features = ["v4"], default-features = false }
 crossbeam-channel = "0.5.15"
-itertools = "0.14.0"
+itertools = "0.15.0"
 lightswitch-metadata = { path = "lightswitch-metadata", version = "0.2.3" }
 lightswitch-proto = { path = "lightswitch-proto", version = "0.3.0" }
 lightswitch-capabilities = { path = "lightswitch-capabilities", version = "0.3.1" }
@@ -75,7 +75,7 @@ serde_json = "1.0.150"
 axum = "0.8.9"
 tokio =  { version = "1.52.3", features = ["rt-multi-thread"] }
 urlencoding = "2.1.3"
-tower-http = { version = "0.6.11", features = ["cors", "fs"] }
+tower-http = { version = "0.7.0", features = ["cors", "fs"] }
 
 [dev-dependencies]
 assert_cmd = { version = "2.2.0" }

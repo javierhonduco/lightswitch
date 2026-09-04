@@ -16,11 +16,13 @@ pub unsafe fn setup_perf_event(cpu: i32, sample_freq: u64) -> Result<c_int, io::
     attrs.set_disabled(1);
     attrs.set_freq(1);
 
-    let ret = sys::perf_event_open(
-        &mut attrs, -1, /* pid */
-        cpu, -1, /* group_fd */
-        0,  /* flags */
-    ) as c_int;
+    let ret = unsafe {
+        sys::perf_event_open(
+            &mut attrs, -1, /* pid */
+            cpu, -1, /* group_fd */
+            0,  /* flags */
+        )
+    } as c_int;
 
     if ret < 0 {
         return Err(io::Error::last_os_error());
