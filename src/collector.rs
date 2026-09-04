@@ -1,6 +1,6 @@
 use base64::Engine;
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use prost::Message;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::{debug, span, warn, Level};
+use tracing::{Level, debug, span, warn};
 use uuid::Uuid;
 
 use lightswitch_metadata::{
@@ -19,17 +19,17 @@ use lightswitch_metadata::{
 use lightswitch_object::ExecutableId;
 use std::fs::File;
 
+use crate::NAME_AND_VERSION;
 use crate::aggregator::Aggregator;
 use crate::process::ObjectFileInfo;
 use crate::process::ProcessInfo;
 use crate::profile::{
-    fold_profile, symbolize_profile, to_pprof, AggregatedSample, SymbolizedFrame,
+    AggregatedProfile, RawAggregatedProfile, RawAggregatedSample, TimestampedSample, write_perfetto,
 };
-use crate::profile::{raw_to_processed, RawSample};
 use crate::profile::{
-    write_perfetto, AggregatedProfile, RawAggregatedProfile, RawAggregatedSample, TimestampedSample,
+    AggregatedSample, SymbolizedFrame, fold_profile, symbolize_profile, to_pprof,
 };
-use crate::NAME_AND_VERSION;
+use crate::profile::{RawSample, raw_to_processed};
 
 pub trait Collector {
     fn collect(

@@ -166,8 +166,9 @@ NUMBER(sme_mask)=0";
 
     #[test]
     fn test_aslr_offset() {
-        // Some distributions (`Linux fedora 6.17.8-orbstack-00308-g8f9c941121b1`) don't
-        // ship with this file and we fall back to a zero offset.
+        // Some distributions (`Linux fedora
+        // 6.17.8-orbstack-00308-g8f9c941121b1`) don't ship with this
+        // file and we fall back to a zero offset.
         if !PathBuf::from(KCORE_PATH).exists() {
             println!("{KCORE_PATH} not present, skipping");
             return;

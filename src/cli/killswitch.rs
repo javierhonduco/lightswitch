@@ -27,7 +27,7 @@ impl KillSwitch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::{create_dir_all, remove_file, File};
+    use std::fs::{File, create_dir_all, remove_file};
 
     #[test]
     fn test_killswitch_enabled() {

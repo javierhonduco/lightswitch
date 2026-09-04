@@ -11,8 +11,8 @@ use thiserror::Error;
 use tracing::{error, warn};
 
 use anyhow::Result;
-use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::MapType;
+use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags, MapHandle};
 use libc::close;
 use nix::sys::utsname;

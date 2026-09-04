@@ -7,8 +7,8 @@ use std::time::Duration;
 use crossbeam_channel::bounded;
 
 use lightswitch::collector::{AggregatorCollector, Collector, NullCollector};
-use lightswitch::profile::symbolize_profile;
 use lightswitch::profile::AggregatedProfile;
+use lightswitch::profile::symbolize_profile;
 use lightswitch::profiler::{Profiler, ProfilerConfig};
 use lightswitch_capabilities::system_info::SystemInfo;
 use lightswitch_metadata::metadata_provider::GlobalMetadataProvider;
@@ -115,12 +115,12 @@ fn assert_any_stack_contains_subsequence(
         let mut expected = expected_iter.next();
 
         for frame in stack {
-            if let Some(needle) = expected {
-                if frame.contains(needle) {
-                    expected = expected_iter.next();
-                    if expected.is_none() {
-                        return true;
-                    }
+            if let Some(needle) = expected
+                && frame.contains(needle)
+            {
+                expected = expected_iter.next();
+                if expected.is_none() {
+                    return true;
                 }
             }
         }
@@ -321,7 +321,9 @@ fn test_use_pt_regs_helper() {
     if !system_info.available_bpf_features.has_task_pt_regs_helper
         || !system_info.available_bpf_features.has_get_current_task_btf
     {
-        eprintln!("Skipping test_use_pt_regs_helper: required BPF features (task_pt_regs helper and/or get_current_task BTF) are not available on this system");
+        eprintln!(
+            "Skipping test_use_pt_regs_helper: required BPF features (task_pt_regs helper and/or get_current_task BTF) are not available on this system"
+        );
         return;
     }
 
