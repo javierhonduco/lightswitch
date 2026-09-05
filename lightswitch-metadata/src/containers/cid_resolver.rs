@@ -154,7 +154,9 @@ mod tests {
     #[test]
     fn test_strip_scope_suffix_with_scope() {
         assert_eq!(
-            strip_scope_suffix("cri-containerd-36bbe89f0d3c9b982f920d6edf290b7083774993cca48b7fcf11e845875e8b4e.scope"),
+            strip_scope_suffix(
+                "cri-containerd-36bbe89f0d3c9b982f920d6edf290b7083774993cca48b7fcf11e845875e8b4e.scope"
+            ),
             "cri-containerd-36bbe89f0d3c9b982f920d6edf290b7083774993cca48b7fcf11e845875e8b4e"
         );
     }

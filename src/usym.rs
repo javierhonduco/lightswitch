@@ -1,13 +1,13 @@
 use std::borrow::Borrow;
 use std::path::PathBuf;
 
-use blazesym::symbolize::source::Elf;
-use blazesym::symbolize::source::Source;
 use blazesym::symbolize::CodeInfo;
 use blazesym::symbolize::Input;
 use blazesym::symbolize::Sym;
 use blazesym::symbolize::Symbolized;
 use blazesym::symbolize::Symbolizer;
+use blazesym::symbolize::source::Elf;
+use blazesym::symbolize::source::Source;
 use tracing::error;
 
 use crate::profile::Frame;

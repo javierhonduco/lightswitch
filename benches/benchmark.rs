@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use itertools::Itertools;
 use libbpf_rs::{MapCore, MapFlags, MapHandle, MapType};
 use lightswitch::bpf::profiler_bindings::stack_unwind_row_t;
