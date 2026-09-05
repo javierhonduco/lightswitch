@@ -115,12 +115,12 @@ fn assert_any_stack_contains_subsequence(
         let mut expected = expected_iter.next();
 
         for frame in stack {
-            if let Some(needle) = expected {
-                if frame.contains(needle) {
-                    expected = expected_iter.next();
-                    if expected.is_none() {
-                        return true;
-                    }
+            if let Some(needle) = expected
+                && frame.contains(needle)
+            {
+                expected = expected_iter.next();
+                if expected.is_none() {
+                    return true;
                 }
             }
         }
