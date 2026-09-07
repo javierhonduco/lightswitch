@@ -405,7 +405,8 @@ pub fn compact_unwind_info(
             &found_gaps
                 .iter()
                 .map(|e| format!("0x{:x}", e))
-                .collect::<Vec<_>>()[3..]
+                .collect::<Vec<_>>()
+                .get(0..3)
         );
     }
     span.exit();
