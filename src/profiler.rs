@@ -16,6 +16,7 @@ use libbpf_rs::Link;
 use libbpf_rs::MapCore;
 use lightswitch_object::BuildId;
 use lightswitch_object::ElfLoad;
+use lightswitch_unwind_info::manager::FetchUnwindInfoError;
 use lru::LruCache;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
@@ -227,7 +228,7 @@ enum AddUnwindInformationResult {
     AlreadyLoaded,
 }
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error)]
 enum AddUnwindInformationError {
     #[error("could not evict unwind information")]
     Eviction,
@@ -243,6 +244,8 @@ enum AddUnwindInformationError {
     BpfPages(String),
     #[error("stripped Go binaries aren't supported yet")]
     StrippedGo,
+    #[error("failed to fetch unwind info")]
+    FetchUnwind(#[from] FetchUnwindInfoError),
 }
 
 impl Profiler {
@@ -813,19 +816,23 @@ impl Profiler {
                 },
             });
 
-            // Fetch unwind info and store it in in BPF maps.
-            if let Err(e) = self.add_unwind_information_for_executable(
+            let add_unwind_res = self.add_unwind_information_for_executable(
                 pid,
                 mapping.executable_id,
                 mapping.start_addr,
                 mapping.end_addr,
-            ) {
-                warn!(
-                    "error adding unwind information for process {pid}, executable 0x{} due to {:?}",
-                    mapping.executable_id, e
-                );
+            );
+            match &add_unwind_res {
+                Ok(_) => {}
+                Err(AddUnwindInformationError::FetchUnwind(FetchUnwindInfoError::Io(e)))
+                    if e.kind() == ErrorKind::NotFound => {}
+                Err(e) => {
+                    warn!("error adding unwind information for process {pid}, executable 0x{} due to {:?}", mapping.executable_id, e );
+                }
+            }
 
-                // TODO: cleanup unwind information map in case of a partial write.
+            // TODO: cleanup unwind information map in case of a partial write.
+            if add_unwind_res.is_err() {
                 errored = true;
                 break;
             }
@@ -956,21 +963,7 @@ impl Profiler {
                     )
                 }
             }
-        };
-
-        let unwind_info = match unwind_info {
-            Ok(unwind_info) => unwind_info,
-            Err(e) => {
-                return Err(AddUnwindInformationError::Generic(
-                    format!("{:?}", e),
-                    format!(
-                        "{} aka {}",
-                        opened_exe_path.display(),
-                        executable_path.display()
-                    ),
-                ));
-            }
-        };
+        }?;
 
         if !self.maybe_evict_executables(unwind_info.len(), self.max_native_unwind_info_size_mb) {
             return Err(AddUnwindInformationError::Eviction);
@@ -1169,11 +1162,13 @@ impl Profiler {
         std::mem::drop(procs);
 
         if let Some((executable_id, s, e)) = mapping_data {
-            if let Err(e) = self.add_unwind_information_for_executable(pid, executable_id, s, e) {
-                warn!(
-                    "error adding unwind information for process {pid}, executable 0x{} due to {:?}",
-                    executable_id, e
-                );
+            match self.add_unwind_information_for_executable(pid, executable_id, s, e) {
+                Ok(_) => {}
+                Err(AddUnwindInformationError::FetchUnwind(FetchUnwindInfoError::Io(e)))
+                    if e.kind() == ErrorKind::NotFound => {}
+                Err(e) => {
+                    warn!("error adding unwind information for process {pid}, executable 0x{} due to {:?}", executable_id, e );
+                }
             }
         }
     }
