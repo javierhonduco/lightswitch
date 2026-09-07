@@ -12,7 +12,7 @@ use memmap2::Mmap;
 use object::Architecture;
 use object::{Object, ObjectSection};
 use thiserror::Error;
-use tracing::{Level, debug, span};
+use tracing::{Level, debug, span, warn};
 
 use crate::{
     optimize::{remove_redundant, remove_unnecessary_markers},
@@ -364,6 +364,27 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
     }
 }
 
+/// Find program counter gaps larger than *gap_size* in the provided unwind
+/// information slice.
+///
+/// This is important as the unwind information is chunked in pages of 2^16 =
+/// 65,536 elements, and gaps larger than that can cause issues since the
+/// current unwind information conversion code doesn't expect this to ever
+/// happen but they do occur in the wild.
+fn gaps(unwind_info: &[CompactUnwindRow], gap_size: u64) -> Vec<u64> {
+    let mut gaps = Vec::new();
+    for window in unwind_info.windows(2) {
+        let mut iter = window.iter();
+        if let (Some(curr), Some(next)) = (iter.next(), iter.next())
+            && let Some(diff) = next.pc.checked_sub(curr.pc)
+            && diff > gap_size
+        {
+            gaps.push(curr.pc);
+        }
+    }
+    gaps
+}
+
 pub fn compact_unwind_info(
     path: &str,
     first_frame_override: Option<(u64, u64)>,
@@ -376,6 +397,17 @@ pub fn compact_unwind_info(
     let span = span!(Level::DEBUG, "optimize unwind info").entered();
     remove_unnecessary_markers(&mut unwind_info);
     remove_redundant(&mut unwind_info);
+    let found_gaps = gaps(&unwind_info, 2_u64.pow(16));
+    if !found_gaps.is_empty() {
+        warn!(
+            "found {} large unwind information coverage gap for {path} for PCs: {:?}[3..]",
+            found_gaps.len(),
+            &found_gaps
+                .iter()
+                .map(|e| format!("0x{:x}", e))
+                .collect::<Vec<_>>()[3..]
+        );
+    }
     span.exit();
     let unwind_info_size_after = unwind_info.len();
     debug!(
