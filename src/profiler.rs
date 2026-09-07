@@ -19,6 +19,7 @@ use lightswitch_object::ElfLoad;
 use lightswitch_unwind_info::manager::FetchUnwindInfoError;
 use lru::LruCache;
 use parking_lot::RwLock;
+use std::any::Any;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::env::temp_dir;
@@ -353,17 +354,24 @@ impl Profiler {
         }
     }
 
-    pub fn add_kernel_modules(&mut self) {
+    pub fn add_kernel_modules(&mut self, requires_correct_kaslr: bool) {
         let kaslr_offset = match lightswitch_object::kernel::kaslr_offset() {
             Ok(kaslr_offset) => {
                 debug!("kaslr offset: 0x{:x}", kaslr_offset);
                 kaslr_offset
             }
             Err(e) => {
-                error!(
-                    "fetching the kaslr offset failed with {:?}, assuming it is 0. This ",
+                let msg = format!(
+                    "fetching the kASLR offset failed with `{:?}`, assuming it is 0x0.",
                     e
                 );
+
+                if requires_correct_kaslr {
+                    warn!(msg);
+                } else {
+                    debug!(msg);
+                }
+
                 0
             }
         };
@@ -425,8 +433,16 @@ impl Profiler {
     }
 
     pub fn run(mut self, collector: ThreadSafeCollector) -> Duration {
+        // This is a heuristic since some collectors do symbolization and others
+        // do not deal with it but typically shipping the profiles to a backend in
+        // in a production like environment is done unsymbolized to minimise resource
+        // usage.
+        let requires_correct_kaslr = (&collector as &dyn Any)
+            .downcast_ref::<StreamingCollector>()
+            .is_some();
+
         self.setup_perf_events();
-        self.add_kernel_modules();
+        self.add_kernel_modules(requires_correct_kaslr);
         self.bpf.attach_tracers();
 
         let chan_send = self.new_proc_chan_send.clone();
