@@ -10,6 +10,7 @@ use crate::perf_events::setup_perf_event;
 use crate::process::opened_exe_path;
 use crate::util::get_online_cpus;
 use crate::util::FileId;
+use anyhow::Context;
 use libbpf_rs::skel::Skel;
 use libbpf_rs::Link;
 use libbpf_rs::MapCore;
@@ -206,13 +207,14 @@ fn fetch_vdso_info(
     vdso_path: &Path,
 ) -> Result<ObjectFile> {
     // Read the vDSO object from the process' memory
-    let file = File::open(format!("/proc/{pid}/mem"))?;
+    let file = File::open(format!("/proc/{pid}/mem")).context("Failed to open procfs mem")?;
     let size = end_addr - start_addr;
     let mut buf: Vec<u8> = vec![0; size as usize];
-    file.read_exact_at(&mut buf, start_addr + offset)?;
+    file.read_exact_at(&mut buf, start_addr + offset)
+        .context("Failed to read procfs mem")?;
     // Write to a temporary location, so it can be inspected, if needed
     fs::write(vdso_path, &buf)?;
-    let object = ObjectFile::from_path(vdso_path)?;
+    let object = ObjectFile::from_path(vdso_path).context("Failed to parse vDSO object file")?;
     Ok(object)
 }
 
