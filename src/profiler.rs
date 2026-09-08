@@ -1392,9 +1392,11 @@ impl Profiler {
                     //
                     // Note: this doesn't take into consideration the mmap'ed or load
                     // offsets.
-                    let load_address = |map_start: u64, first_elf_load: &ElfLoad| {
+                    let load_address = |map_start: u64, first_elf_load: &ElfLoad, offset: u64| {
                         let page_mask = !(page_size() - 1) as u64;
                         map_start.saturating_sub(first_elf_load.p_vaddr & page_mask)
+                        //  + offset
+                        //     - first_elf_load.p_offset
                     };
 
                     if let Ok((Some(build_id), first_elf_load)) = info {
@@ -1404,7 +1406,7 @@ impl Profiler {
                             start_addr: map.address.0,
                             end_addr: map.address.1,
                             offset: map.offset,
-                            load_address: load_address(map.address.0, &first_elf_load),
+                            load_address: load_address(map.address.0, &first_elf_load, map.offset),
                             soft_delete: false,
                         });
                     } else {

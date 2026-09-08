@@ -12,7 +12,7 @@ use memmap2::Mmap;
 use object::Architecture;
 use object::{Object, ObjectSection};
 use thiserror::Error;
-use tracing::{Level, debug, span, warn};
+use tracing::{Level, debug, span};
 
 use crate::{
     optimize::{remove_redundant, remove_unnecessary_markers},
@@ -321,6 +321,13 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
         };
 
         let pc_and_fde_offset = pc_and_fde_offset(&bases, &eh_frame);
+        let mut other_regions = Vec::new();
+        let plts = object_file.section_by_name_bytes(b".plt");
+        if let Some(plts) = plts {
+            let start = plts.address();
+            let end = plts.address() + plts.size();
+            other_regions.push((start, end));
+        }
 
         let mut ctx = Box::new(UnwindContext::new());
         for (_, fde_offset) in pc_and_fde_offset {
@@ -329,6 +336,19 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
                 gimli::EhFrameOffset(fde_offset),
                 EhFrame::cie_from_offset,
             )?;
+
+            if let Some(other_region) = &other_regions.pop_if(|e| e.1 < fde.initial_address()) {
+                (self.callback)(&UnwindData::Instruction(CompactUnwindRow {
+                    pc: other_region.0,
+                    cfa_type: CfaType::StackPointerOffset,
+                    rbp_type: RbpType::Unchanged,
+                    cfa_offset: 8,
+                    rbp_offset: 0,
+                }));
+                (self.callback)(&UnwindData::Instruction(CompactUnwindRow::stop_unwinding(
+                    other_region.1,
+                )));
+            }
 
             (self.callback)(&UnwindData::Function(
                 fde.initial_address(),
@@ -364,27 +384,6 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
     }
 }
 
-/// Find program counter gaps larger than *gap_size* in the provided unwind
-/// information slice.
-///
-/// This is important as the unwind information is chunked in pages of 2^16 =
-/// 65,536 elements, and gaps larger than that can cause issues since the
-/// current unwind information conversion code doesn't expect this to ever
-/// happen but they do occur in the wild.
-fn gaps(unwind_info: &[CompactUnwindRow], gap_size: u64) -> Vec<u64> {
-    let mut gaps = Vec::new();
-    for window in unwind_info.windows(2) {
-        let mut iter = window.iter();
-        if let (Some(curr), Some(next)) = (iter.next(), iter.next())
-            && let Some(diff) = next.pc.checked_sub(curr.pc)
-            && diff > gap_size
-        {
-            gaps.push(curr.pc);
-        }
-    }
-    gaps
-}
-
 pub fn compact_unwind_info(
     path: &str,
     first_frame_override: Option<(u64, u64)>,
@@ -397,18 +396,6 @@ pub fn compact_unwind_info(
     let span = span!(Level::DEBUG, "optimize unwind info").entered();
     remove_unnecessary_markers(&mut unwind_info);
     remove_redundant(&mut unwind_info);
-    let found_gaps = gaps(&unwind_info, 2_u64.pow(16));
-    if !found_gaps.is_empty() {
-        warn!(
-            "found {} large unwind information coverage gap for {path} for PCs: {:?}[3..]",
-            found_gaps.len(),
-            &found_gaps
-                .iter()
-                .map(|e| format!("0x{:x}", e))
-                .collect::<Vec<_>>()
-                .get(0..3)
-        );
-    }
     span.exit();
     let unwind_info_size_after = unwind_info.len();
     debug!(

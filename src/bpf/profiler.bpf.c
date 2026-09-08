@@ -375,7 +375,7 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
             table_idx == BINARY_SEARCH_EXHAUSTED_ITERATIONS) {
             bool in_previous_page = false;
 
-            if (table_idx == BINARY_SEARCH_DEFAULT) {
+            if (table_idx == BINARY_SEARCH_DEFAULT && low_index != 0) {
                 low_index -= 1;
                 stack_unwind_row_t* previous_row = bpf_map_lookup_elem(inner, &low_index);
                 if (previous_row != NULL && object_relative_pc > PREVIOUS_PAGE(object_relative_pc_high) + previous_row->pc_low) {
@@ -385,6 +385,8 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
             }
 
             if (!in_previous_page) {
+                bpf_printk("not in previous page low_index %d high index %d ip %llx object_relative_pc %llx", low_index, high_index, unwind_state->ip, object_relative_pc);
+
                 LOG("[error] binary search failed with %llx, pc: %llx", table_idx, unwind_state->ip);
                 if (table_idx == BINARY_SEARCH_EXHAUSTED_ITERATIONS) {
                     bump_unwind_error_binary_search_exhausted_iterations();

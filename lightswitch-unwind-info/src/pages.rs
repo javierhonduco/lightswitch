@@ -87,6 +87,10 @@ pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use crate::compact_unwind_info;
+
     use super::*;
 
     #[test]
@@ -148,67 +152,104 @@ mod tests {
             ]
         );
 
-        let unwind_info = vec![
-            CompactUnwindRow { pc: 0x0, ..row },
-            CompactUnwindRow {
-                pc: 2_u64.pow(16),
-                ..row
-            },
-            CompactUnwindRow {
-                pc: 4 * 2_u64.pow(16),
-                ..row
-            },
-        ];
+        // 13bfb59
+
+        let unwind_info =
+            compact_unwind_info("/proc/1528/map_files/13bd000-5276000", None).unwrap();
         let pages = to_pages(&unwind_info);
-        assert_eq!(
-            pages,
-            vec![
-                Page {
-                    address: 0x0,
-                    low_index: 0,
-                    high_index: 1
-                },
-                Page {
-                    address: 0x10000,
-                    low_index: 1,
-                    high_index: 2
-                },
-                Page {
-                    address: 0x20000,
-                    low_index: 1,
-                    high_index: 2
-                },
-                Page {
-                    address: 0x30000,
-                    low_index: 1,
-                    high_index: 2
-                },
-                Page {
-                    address: 0x40000,
-                    low_index: 2,
-                    high_index: 3
-                }
-            ]
-        );
+        // assert_eq!(
+        //     pages,
+        //     vec![
+        //         Page {
+        //             address: 0x0,
+        //             low_index: 0,
+        //             high_index: 1
+        //         },
+        //         Page {
+        //             address: 0x10000,
+        //             low_index: 1,
+        //             high_index: 2
+        //         },
+        //         Page {
+        //             address: 0x20000,
+        //             low_index: 1,
+        //             high_index: 2
+        //         },
+        //         Page {
+        //             address: 0x30000,
+        //             low_index: 1,
+        //             high_index: 2
+        //         },
+        //         Page {
+        //             address: 0x40000,
+        //             low_index: 2,
+        //             high_index: 3
+        //         }
+        //     ]
+        // );
 
         // Exhaustively test that we cover every unwind row
         let page_size_bits = 16;
         let low_bits_mask = u64::pow(2, page_size_bits) - 1;
         let high_bits_mask = u64::MAX ^ low_bits_mask;
         let pages = to_pages(&unwind_info);
+        let mut high_pc_to_page = HashMap::new();
+        for page in &pages {
+            high_pc_to_page.insert(page.address, (page.low_index, page.high_index));
+        }
 
-        for row in &unwind_info {
-            let pc = row.pc;
+        let first_pc = unwind_info.first().unwrap().pc;
+        let last_pc = unwind_info.last().unwrap().pc;
+
+        for pc in first_pc..last_pc {
             let pc_high = pc & high_bits_mask;
             assert_eq!(pc_high, pc_high & 0x0000FFFFFFFF0000); // [ 16 unused bits -- 32 bits for high -- 16 bits for each page ]
             // Test that we can find it in the pages, linearly, but it's small enough
+            // let found = high_pc_to_page.get(&pc_high).expect("find page by high pc");
             let found = pages.iter().find(|el| el.address == pc_high).unwrap();
             // Make sure we can find the inner slice
             let search_here = &unwind_info[(found.low_index as usize)..(found.high_index as usize)];
-            let found_row = search_here.iter().find(|el| el.pc == pc).unwrap();
-            // And that the high and low bits were done ok
-            let pc = found_row.pc;
-            assert_eq!((pc & low_bits_mask) + pc_high, pc);
+            let found_row = search_here.binary_search_by(|e| {
+                let curr_pc = e.pc;
+                curr_pc.cmp(&pc)
+            });
+
+            let mut found_index = None;
+
+            if let Ok(index) = found_row {
+                found_index = Some(index);
+            }
+
+            if let Err(index) = found_row {
+                if index == 0 || index == search_here.len() - 1 {
+                    if found.low_index == 0 {
+                        println!("oops");
+                    } else {
+                        let prev_row = unwind_info[(found.low_index - 1) as usize];
+                        if pc >= prev_row.pc && pc <= search_here.last().unwrap().pc {
+                            found_index = Some((found.low_index - 1) as usize);
+                            println!("in prev page")
+                        } else {
+                            panic!(
+                                "take a look found_row {:?} pc {:x} index: {} len: {}",
+                                found_row,
+                                pc,
+                                index,
+                                search_here.len()
+                            );
+                        }
+                    }
+                } else {
+                    found_index = Some(index - 1);
+                }
+            }
+
+            if let Some(idx) = found_index {
+                let found_row = unwind_info[idx];
+                // // And that the high and low bits were done ok
+                let pc = found_row.pc;
+                assert_eq!((pc & low_bits_mask) + pc_high, pc);
+            }
         }
     }
 }

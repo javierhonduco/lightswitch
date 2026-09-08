@@ -226,6 +226,11 @@ impl ObjectFile {
         r
     }
 
+    pub fn plt_address_ranges(&self) -> Option<(u64, u64)> {
+        let plt = self.object.section_by_name(".plt")?;
+        Some((plt.address(), plt.size()))
+    }
+
     /// Retrieves the executable load segments. These are used to convert
     /// virtual addresses to offsets in an executable during unwinding
     /// and symbolization.
