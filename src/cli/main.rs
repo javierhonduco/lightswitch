@@ -101,6 +101,24 @@ fn open_browser(url: &str) {
     let _ = Command::new("xdg-open").arg(url).output();
 }
 
+fn ensure_root() {
+    if !Uid::current().is_root() {
+        error!("root permissions are required to run lightswitch");
+        std::process::exit(1);
+    }
+}
+
+fn ensure_btf(btf_custom_path: &Option<String>) {
+    // Some distros, such as Raspberry Pi OS [0] don't ship with BTF type
+    // information. This is a hard requirement to load modern BPF applications.
+    //
+    // [0]: https://github.com/raspberrypi/linux/issues/6622.
+    if btf_custom_path.is_none() && !has_btf() {
+        error!("Could not find kernel BTF. One can be provided --btf-custom-path");
+        std::process::exit(1)
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     // kube-rs and reqwest both bring in rustls with different crypto providers
     // (ring and aws-lc-rs). When both are present, rustls cannot auto-detect
@@ -133,8 +151,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             .expect("setting default subscriber failed");
     }
 
-    let btf_custom_path = args.btf_custom_path;
-
     match args.command {
         None => {} // record profiles by default
         Some(Commands::ObjectInfo { path }) => {
@@ -146,16 +162,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             return Ok(());
         }
         Some(Commands::SystemInfo) => {
-            println!(
-                "- system info: {:#?}",
-                SystemInfo::new(btf_custom_path.clone())
-            );
-            println!("- kernel build id: {:?}", kernel_build_id());
-            if let Ok(aslr_offset) = kaslr_offset() {
-                println!("- kernel ASLR offset: 0x{aslr_offset:x}");
-            }
-            println!("- has kernel BTF: {}", has_btf());
-
+            ensure_root();
+            ensure_btf(&args.btf_custom_path);
+            show_system_info(&args.btf_custom_path);
             return Ok(());
         }
         Some(Commands::Server {
@@ -206,21 +215,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    if !Uid::current().is_root() {
-        error!("root permissions are required to run lightswitch");
-        std::process::exit(1);
-    }
+    ensure_root();
+    ensure_btf(&args.btf_custom_path);
 
-    // Some distros, such as Raspberry Pi OS [0] don't ship with BTF type
-    // information. This is a hard requirement to load modern BPF applications.
-    //
-    // [0]: https://github.com/raspberrypi/linux/issues/6622.
-    if btf_custom_path.is_none() && !has_btf() {
-        error!("Could not find kernel BTF. One can be provided --btf-custom-path");
-        std::process::exit(1)
-    }
-
-    let Ok(system_info) = SystemInfo::new(btf_custom_path.clone()) else {
+    let Ok(system_info) = SystemInfo::new(args.btf_custom_path.clone()) else {
         error!("Failed to detect system info!");
         std::process::exit(1)
     };
@@ -303,7 +301,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         use_ring_buffers,
         use_task_pt_regs_helper: system_info.available_bpf_features.has_task_pt_regs_helper
             && system_info.available_bpf_features.has_get_current_task_btf,
-        btf_custom_path,
+        btf_custom_path: args.btf_custom_path,
         no_prealloc_bpf_hash_maps: args.no_prealloc_bpf_hash_maps
             && system_info
                 .available_bpf_features
@@ -526,6 +524,18 @@ fn show_unwind_info(path: &str) -> Result<(), Box<dyn Error>> {
         );
     }
     Ok(())
+}
+
+fn show_system_info(btf_custom_path: &Option<String>) {
+    println!(
+        "- system info: {:#?}",
+        SystemInfo::new(btf_custom_path.clone())
+    );
+    println!("- kernel build id: {:?}", kernel_build_id());
+    if let Ok(aslr_offset) = kaslr_offset() {
+        println!("- kernel ASLR offset: 0x{aslr_offset:x}");
+    }
+    println!("- has kernel BTF: {}", has_btf());
 }
 
 fn show_object_file_info(path: &str) {
