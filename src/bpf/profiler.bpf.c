@@ -375,7 +375,7 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
             table_idx == BINARY_SEARCH_EXHAUSTED_ITERATIONS) {
             bool in_previous_page = false;
 
-            if (table_idx == BINARY_SEARCH_DEFAULT) {
+            if (table_idx == BINARY_SEARCH_DEFAULT && low_index > 0) {
                 low_index -= 1;
                 stack_unwind_row_t* previous_row = bpf_map_lookup_elem(inner, &low_index);
                 if (previous_row != NULL && object_relative_pc > PREVIOUS_PAGE(object_relative_pc_high) + previous_row->pc_low) {
