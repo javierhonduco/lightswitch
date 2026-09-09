@@ -477,10 +477,6 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
             LOG("CFA expression found with id %d", found_cfa_offset);
             u64 threshold = found_cfa_type == CFA_TYPE_PLT1 ? 11 : 10;
 
-            if (threshold == 0) {
-                bump_unwind_error_should_never_happen();
-                return 1;
-            }
             previous_rsp = unwind_state->sp + 8 +
                            ((((unwind_state->ip & 15) >= threshold)) << 3);
         } else {
