@@ -113,6 +113,8 @@
               cargo-shear
               ## Release to crates.io
               cargo-release
+              ## Ensure all the crates can be built independently
+              cargo-hack
               # Commented out because this is typically not cached and it's rarely used
               # ocamlPackages.magic-trace
               just
