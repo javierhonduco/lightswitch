@@ -60,8 +60,6 @@ impl Add for unwinder_stats_t {
             error_previous_rip_read: self.error_previous_rip_read + other.error_previous_rip_read,
             error_previous_rip_zero: self.error_previous_rip_zero + other.error_previous_rip_zero,
             error_previous_rbp_read: self.error_previous_rbp_read + other.error_previous_rbp_read,
-            error_should_never_happen: self.error_should_never_happen
-                + other.error_should_never_happen,
             error_binary_search_exhausted_iterations: self.error_binary_search_exhausted_iterations
                 + other.error_binary_search_exhausted_iterations,
             error_page_not_found: self.error_page_not_found + other.error_page_not_found,

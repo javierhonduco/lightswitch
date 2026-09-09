@@ -375,7 +375,7 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
             table_idx == BINARY_SEARCH_EXHAUSTED_ITERATIONS) {
             bool in_previous_page = false;
 
-            if (table_idx == BINARY_SEARCH_DEFAULT) {
+            if (table_idx == BINARY_SEARCH_DEFAULT && low_index > 0) {
                 low_index -= 1;
                 stack_unwind_row_t* previous_row = bpf_map_lookup_elem(inner, &low_index);
                 if (previous_row != NULL && object_relative_pc > PREVIOUS_PAGE(object_relative_pc_high) + previous_row->pc_low) {
@@ -477,10 +477,6 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
             LOG("CFA expression found with id %d", found_cfa_offset);
             u64 threshold = found_cfa_type == CFA_TYPE_PLT1 ? 11 : 10;
 
-            if (threshold == 0) {
-                bump_unwind_error_should_never_happen();
-                return 1;
-            }
             previous_rsp = unwind_state->sp + 8 +
                            ((((unwind_state->ip & 15) >= threshold)) << 3);
         } else {
