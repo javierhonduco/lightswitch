@@ -1,32 +1,32 @@
-use crate::bpf_objects::clear_map;
 use crate::bpf_objects::Bpf;
+use crate::bpf_objects::clear_map;
 use crate::bpf_poller::start_poll_thread;
 use crate::deletion_scheduler::DeletionScheduler;
 use crate::deletion_scheduler::ToDelete;
-use crate::native_unwind_state::unwind_info_size_bytes;
 use crate::native_unwind_state::KnownExecutableInfo;
 use crate::native_unwind_state::NativeUnwindState;
+use crate::native_unwind_state::unwind_info_size_bytes;
 use crate::perf_events::setup_perf_event;
 use crate::process::opened_exe_path;
-use crate::util::get_online_cpus;
 use crate::util::FileId;
+use crate::util::get_online_cpus;
 use anyhow::Context;
-use libbpf_rs::skel::Skel;
 use libbpf_rs::Link;
 use libbpf_rs::MapCore;
+use libbpf_rs::skel::Skel;
 use lightswitch_object::BuildId;
 use lightswitch_object::ElfLoad;
 use lightswitch_unwind_info::manager::FetchUnwindInfoError;
 use lru::LruCache;
 use parking_lot::RwLock;
 use std::any::Any;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::env::temp_dir;
 use std::ffi::CStr;
 use std::fs;
-use std::fs::read_link;
 use std::fs::File;
+use std::fs::read_link;
 use std::io::ErrorKind;
 use std::num::NonZeroUsize;
 
@@ -37,27 +37,27 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossbeam_channel::{bounded, select, tick, unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, bounded, select, tick, unbounded};
 use itertools::Itertools;
 use procfs;
-use tracing::{debug, error, info, span, warn, Level};
+use tracing::{Level, debug, error, info, span, warn};
 
 use crate::bpf::profiler_bindings::*;
 use crate::bpf::tracers_bindings::*;
 use crate::collector::*;
 use crate::debug_info::DebugInfoBackendNull;
 use crate::debug_info::DebugInfoManager;
-use crate::kernel::get_all_kernel_modules;
 use crate::kernel::KERNEL_PID;
+use crate::kernel::get_all_kernel_modules;
 use crate::process::{
     ExecutableMapping, ExecutableMappingType, ExecutableMappings, ObjectFileInfo, Pid, ProcessInfo,
     ProcessStatus,
 };
 use crate::profile::*;
+use crate::util::Architecture;
 use crate::util::architecture;
 use crate::util::executable_path;
 use crate::util::page_size;
-use crate::util::Architecture;
 use lightswitch_metadata::metadata_provider::{
     GlobalMetadataProvider, ThreadSafeGlobalMetadataProvider,
 };
@@ -260,24 +260,24 @@ impl Profiler {
             profiler_config.cache_dir_base.display()
         );
         let cache_dir = profiler_config.cache_dir_base.join("lightswitch");
-        if let Err(e) = fs::create_dir(&cache_dir) {
-            if e.kind() != ErrorKind::AlreadyExists {
-                panic!(
-                    "could not create cache dir at {} with: {:?}",
-                    cache_dir.display(),
-                    e
-                );
-            }
+        if let Err(e) = fs::create_dir(&cache_dir)
+            && e.kind() != ErrorKind::AlreadyExists
+        {
+            panic!(
+                "could not create cache dir at {} with: {:?}",
+                cache_dir.display(),
+                e
+            );
         }
         let unwind_cache_dir = cache_dir.join("unwind-info").to_path_buf();
-        if let Err(e) = fs::create_dir(&unwind_cache_dir) {
-            if e.kind() != ErrorKind::AlreadyExists {
-                panic!(
-                    "could not create cache dir at {} with: {:?}",
-                    unwind_cache_dir.display(),
-                    e
-                );
-            }
+        if let Err(e) = fs::create_dir(&unwind_cache_dir)
+            && e.kind() != ErrorKind::AlreadyExists
+        {
+            panic!(
+                "could not create cache dir at {} with: {:?}",
+                unwind_cache_dir.display(),
+                e
+            );
         }
 
         let (sender, receiver) = unbounded();
@@ -434,9 +434,9 @@ impl Profiler {
 
     pub fn run(mut self, collector: ThreadSafeCollector) -> Duration {
         // This is a heuristic since some collectors do symbolization and others
-        // do not deal with it but typically shipping the profiles to a backend in
-        // in a production like environment is done unsymbolized to minimise resource
-        // usage.
+        // do not deal with it but typically shipping the profiles to a backend
+        // in in a production like environment is done unsymbolized to
+        // minimise resource usage.
         let requires_correct_kaslr = (&collector as &dyn Any)
             .downcast_ref::<StreamingCollector>()
             .is_some();
@@ -503,16 +503,19 @@ impl Profiler {
         let object_files = self.object_files.clone();
         let collector = collector.clone();
 
-        thread::spawn(move || loop {
-            match profile_receive.recv() {
-                Ok(profile) => {
-                    collector
-                        .lock()
-                        .unwrap()
-                        .collect(profile, &procs.read(), &object_files.read());
-                }
-                Err(_e) => {
-                    // println!("failed to receive event {:?}", e);
+        thread::spawn(move || {
+            loop {
+                match profile_receive.recv() {
+                    Ok(profile) => {
+                        collector.lock().unwrap().collect(
+                            profile,
+                            &procs.read(),
+                            &object_files.read(),
+                        );
+                    }
+                    Err(_e) => {
+                        // println!("failed to receive event {:?}", e);
+                    }
                 }
             }
         });
@@ -602,13 +605,15 @@ impl Profiler {
         for to_delete in &items_to_delete {
             match to_delete {
                 ToDelete::Process(_, pid) => {
-                    // Assumes that the PID hasn't been recycled, which can happen in the wild.
-                    // remove from afficted
+                    // Assumes that the PID hasn't been recycled, which can
+                    // happen in the wild. remove from
+                    // afficted
                     let _ = procs.remove(pid);
                 }
                 ToDelete::ObjectFile(_, executable_id) => {
                     if let Entry::Occupied(entry) = object_files.entry(*executable_id) {
-                        // It could have references since it was enqueued for deletion
+                        // It could have references since it was enqueued for
+                        // deletion
                         if entry.get().references == 0 {
                             debug!("removing object file {}", entry.get().path.display());
                             let _ = entry.remove();
@@ -702,7 +707,10 @@ impl Profiler {
                         }
                     }
                     None => {
-                        debug!("could not find memory mapping starting at {:x} for pid {} while handling munmap", start_address, pid);
+                        debug!(
+                            "could not find memory mapping starting at {:x} for pid {} while handling munmap",
+                            start_address, pid
+                        );
                     }
                 }
             }
@@ -774,8 +782,8 @@ impl Profiler {
             panic!("add_unwind_info -- expected process to be known");
         }
 
-        // Do not attempt to profile processes we can't extract or generate unwind
-        // information for.
+        // Do not attempt to profile processes we can't extract or generate
+        // unwind information for.
         if self.afflicted_processes.contains(&pid) {
             debug!(
                 "could not extract or generate unwind information before, skipping process {pid}"
@@ -796,9 +804,9 @@ impl Profiler {
             .0
             .iter()
         {
-            // There is no unwind information for anonymous (JIT) mappings, so let's skip
-            // them. In the future we could either try to synthesise the unwind
-            // information.
+            // There is no unwind information for anonymous (JIT) mappings, so
+            // let's skip them. In the future we could either try to
+            // synthesise the unwind information.
             if mapping.kind == ExecutableMappingType::Anonymous {
                 bpf_mappings.push(mapping_t {
                     load_address: 0,
@@ -811,7 +819,8 @@ impl Profiler {
             }
 
             let object_file = self.object_files.read();
-            // We might know about a mapping that failed to open for some reason.
+            // We might know about a mapping that failed to open for some
+            // reason.
             let object_file_info = object_file.get(&mapping.executable_id);
             if object_file_info.is_none() {
                 warn!("mapping not found");
@@ -843,7 +852,10 @@ impl Profiler {
                 Err(AddUnwindInformationError::FetchUnwind(FetchUnwindInfoError::Io(e)))
                     if e.kind() == ErrorKind::NotFound => {}
                 Err(e) => {
-                    warn!("error adding unwind information for process {pid}, executable 0x{} due to {:?}", mapping.executable_id, e );
+                    warn!(
+                        "error adding unwind information for process {pid}, executable 0x{} due to {:?}",
+                        mapping.executable_id, e
+                    );
                 }
             }
 
@@ -859,7 +871,8 @@ impl Profiler {
             errored = true;
             debug!("failed to add BPF mappings due to {:?}", e);
         }
-        // Add entry just with the pid to signal processes that we already know about.
+        // Add entry just with the pid to signal processes that we already know
+        // about.
         if let Err(e) = self.bpf.add_process(pid) {
             errored = true;
             debug!("failed to add BPF process due to {:?}", e);
@@ -905,8 +918,9 @@ impl Profiler {
                 }
                 let mut unwind_info = Vec::new();
 
-                // For each bottom frame, add a end of function marker to stop unwinding
-                // covering the exact size of the function, assuming the function after it
+                // For each bottom frame, add a end of function marker to stop
+                // unwinding covering the exact size of the
+                // function, assuming the function after it
                 // has frame pointers.
                 for stop_frame in stop_frames {
                     unwind_info.push(CompactUnwindRow::stop_unwinding(stop_frame.start_address));
@@ -916,7 +930,8 @@ impl Profiler {
                     ));
                 }
 
-                // Go since pretty early on compiles with frame pointers by default.
+                // Go since pretty early on compiles with frame pointers by
+                // default.
                 elf_loads.sort_by_key(|e| e.p_vaddr);
                 if let Some(code_elf_load) = elf_loads.first() {
                     unwind_info.push(CompactUnwindRow::frame_pointer(
@@ -1053,8 +1068,8 @@ impl Profiler {
             executables_to_evict.push(*last_used_id);
         }
 
-        // Check if this executable unwind info would exceed the approximate memory
-        // limit.
+        // Check if this executable unwind info would exceed the approximate
+        // memory limit.
         const MB_TO_BYTES: u64 = 1_000_000;
         let max_memory_bytes = max_memory_mb as u64 * MB_TO_BYTES;
         let total_memory_used_bytes = self.native_unwind_state.unwind_info_memory_usage();
@@ -1071,16 +1086,16 @@ impl Profiler {
         // We should print info log if we're going to need to evict for now
         if to_free_bytes > 0 {
             info!(
-            "want to add {:.2} MB of unwind information, need to free at least {:.2} MB (used {:.2} MB / {} MB)",
-            this_unwind_info_bytes as f64 / MB_TO_BYTES as f64,
-            to_free_bytes as f64 / MB_TO_BYTES as f64,
-            total_memory_used_bytes as f64 / MB_TO_BYTES as f64,
-            max_memory_mb
-        );
+                "want to add {:.2} MB of unwind information, need to free at least {:.2} MB (used {:.2} MB / {} MB)",
+                this_unwind_info_bytes as f64 / MB_TO_BYTES as f64,
+                to_free_bytes as f64 / MB_TO_BYTES as f64,
+                total_memory_used_bytes as f64 / MB_TO_BYTES as f64,
+                max_memory_mb
+            );
         }
 
-        // Figure out what are the unwind info we should evict to stay below the memory
-        // limit.
+        // Figure out what are the unwind info we should evict to stay below the
+        // memory limit.
         let mut could_be_freed_bytes = 0;
         for (executable_id, executable_info) in self.native_unwind_state.last_used_executables() {
             let unwind_size_bytes = unwind_info_size_bytes(executable_info.unwind_info_len);
@@ -1143,8 +1158,8 @@ impl Profiler {
         }
 
         if self.process_is_known(pid) {
-            // We hit this when we had to reset the state of the BPF maps but we know about
-            // this process.
+            // We hit this when we had to reset the state of the BPF maps but we
+            // know about this process.
             self.add_unwind_info_for_process(pid);
             return;
         }
@@ -1183,7 +1198,10 @@ impl Profiler {
                 Err(AddUnwindInformationError::FetchUnwind(FetchUnwindInfoError::Io(e)))
                     if e.kind() == ErrorKind::NotFound => {}
                 Err(e) => {
-                    warn!("error adding unwind information for process {pid}, executable 0x{} due to {:?}", executable_id, e );
+                    warn!(
+                        "error adding unwind information for process {pid}, executable 0x{} due to {:?}",
+                        executable_id, e
+                    );
                 }
             }
         }
@@ -1365,7 +1383,8 @@ impl Profiler {
             }
             match &map.pathname {
                 procfs::process::MMapPath::Path(mapping_path) => {
-                    // These libraries don't have unwind information, they contain data.
+                    // These libraries don't have unwind information, they
+                    // contain data.
                     let path_str = mapping_path.to_string_lossy();
                     if path_str.contains("libicudata.so") || path_str.contains("libnss_dns.so") {
                         continue;
@@ -1383,15 +1402,16 @@ impl Profiler {
                         pid
                     );
 
-                    // mmap'ed data is always page aligned but the load segment information
-                    // might not be. As we need to account for
-                    // any randomisation added by ASLR, by
-                    // subtracting the virtual address from the
-                    // first load segment once it's been page aligned we'll get the offset
+                    // mmap'ed data is always page aligned but the load segment
+                    // information might not be. As we need
+                    // to account for any randomisation
+                    // added by ASLR, by subtracting the
+                    // virtual address from the first load
+                    // segment once it's been page aligned we'll get the offset
                     // at which the executable has been loaded.
                     //
-                    // Note: this doesn't take into consideration the mmap'ed or load
-                    // offsets.
+                    // Note: this doesn't take into consideration the mmap'ed or
+                    // load offsets.
                     let load_address = |map_start: u64, first_elf_load: &ElfLoad| {
                         let page_mask = !(page_size() - 1) as u64;
                         map_start.saturating_sub(first_elf_load.p_vaddr & page_mask)

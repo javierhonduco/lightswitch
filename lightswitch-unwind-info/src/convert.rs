@@ -96,9 +96,11 @@ where
                             if let Some(addition) = addition {
                                 debug!("*(rsp+{offset})+{addition}");
                                 compact_row.cfa_type = CfaType::DerefAndAdd;
-                                // Assumes that both the offset and addition will
-                                // fit in 2 bytes, which seems to be
-                                // the case for many binaries I've tried but would be good to
+                                // Assumes that both the offset and addition
+                                // will fit in 2
+                                // bytes, which seems to be
+                                // the case for many binaries I've tried but
+                                // would be good to
                                 // test against larger ones.
                                 compact_row.cfa_offset = ((offset as u16) << 8) | (addition as u16);
                             }

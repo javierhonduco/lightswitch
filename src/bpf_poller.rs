@@ -33,13 +33,15 @@ pub(crate) fn start_poll_thread<Callback: Fn(&[u8]) + 'static, Lost: FnMut(i32, 
         let thread_name = format!("ring-poll-{name}");
         let _poll_thread = thread::Builder::new()
             .name(thread_name)
-            .spawn(move || loop {
-                match ring_buf.poll(timeout) {
-                    Ok(_) => {}
-                    Err(err) => {
-                        if err.kind() != libbpf_rs::ErrorKind::Interrupted {
-                            error!("polling {} ring buffer failed with {:?}", name, err);
-                            break;
+            .spawn(move || {
+                loop {
+                    match ring_buf.poll(timeout) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            if err.kind() != libbpf_rs::ErrorKind::Interrupted {
+                                error!("polling {} ring buffer failed with {:?}", name, err);
+                                break;
+                            }
                         }
                     }
                 }
@@ -58,13 +60,15 @@ pub(crate) fn start_poll_thread<Callback: Fn(&[u8]) + 'static, Lost: FnMut(i32, 
         let thread_name = format!("perf-poll-{name}");
         let _poll_thread = thread::Builder::new()
             .name(thread_name)
-            .spawn(move || loop {
-                match perf_buffer.poll(timeout) {
-                    Ok(_) => {}
-                    Err(err) => {
-                        if err.kind() != libbpf_rs::ErrorKind::Interrupted {
-                            error!("polling {} perf buffer failed with {:?}", name, err);
-                            break;
+            .spawn(move || {
+                loop {
+                    match perf_buffer.poll(timeout) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            if err.kind() != libbpf_rs::ErrorKind::Interrupted {
+                                error!("polling {} perf buffer failed with {:?}", name, err);
+                                break;
+                            }
                         }
                     }
                 }

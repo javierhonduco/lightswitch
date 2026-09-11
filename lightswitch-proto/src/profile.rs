@@ -4,8 +4,8 @@ pub mod pprof {
 }
 
 use prost::bytes;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::time::{Duration, SystemTime};
 use thiserror;
 

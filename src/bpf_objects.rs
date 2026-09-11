@@ -8,9 +8,9 @@ use std::{
 use crate::{
     bpf::{
         profiler_bindings::{
-            exec_mappings_key, mapping_t, page_key_t, page_value_t,
-            program_PROGRAM_NATIVE_UNWINDER, sample_t, stack_unwind_row_t, unwinder_stats_t,
-            HIGH_PC_MASK, UNWIND_INFO_PAGE_SIZE,
+            HIGH_PC_MASK, UNWIND_INFO_PAGE_SIZE, exec_mappings_key, mapping_t, page_key_t,
+            page_value_t, program_PROGRAM_NATIVE_UNWINDER, sample_t, stack_unwind_row_t,
+            unwinder_stats_t,
         },
         profiler_skel::{OpenProfilerSkel, ProfilerSkel, ProfilerSkelBuilder},
         tracers_skel::{OpenTracersSkel, TracersSkel, TracersSkelBuilder},
@@ -20,11 +20,11 @@ use crate::{
     profiler::ProfilerConfig,
     util::{get_online_cpus, roundup_page, summarize_address_range},
 };
-use libbpf_rs::{skel::Skel, Map, OpenObject};
 use libbpf_rs::{
-    skel::{OpenSkel, SkelBuilder},
     Link,
+    skel::{OpenSkel, SkelBuilder},
 };
+use libbpf_rs::{Map, OpenObject, skel::Skel};
 use libbpf_rs::{MapCore, MapFlags, MapHandle, MapType};
 use lightswitch_object::ExecutableId;
 use lightswitch_unwind_info::types::CompactUnwindRow;
@@ -80,8 +80,9 @@ impl Bpf {
         Self::set_programs_map(&native_unwinder);
         let native_unwinder_maps = &native_unwinder.maps;
         let exec_mappings_fd = native_unwinder_maps.exec_mappings.as_fd();
-        // BPF map sizes can be overridden, this is a debugging option to print the
-        // actual size once the maps are created and the BPF program is loaded.
+        // BPF map sizes can be overridden, this is a debugging option to print
+        // the actual size once the maps are created and the BPF program
+        // is loaded.
         if profiler_config.mapsize_info {
             let _ = Self::show_actual_profiler_map_sizes(&native_unwinder);
         }
@@ -175,8 +176,8 @@ impl Bpf {
         let sample_size_bytes = std::mem::size_of::<sample_t>().saturating_div(2);
         let max_entries_bytes = num_max_samples.saturating_mul(sample_size_bytes);
 
-        // It is required that this is page-aligned and a multiple of two. libbpf
-        // takes care of rounding up to the next multiple of two.
+        // It is required that this is page-aligned and a multiple of two.
+        // libbpf takes care of rounding up to the next multiple of two.
         roundup_page(max_entries_bytes as usize) as u32
     }
 
@@ -430,8 +431,9 @@ impl Bpf {
             }
         }
 
-        // Some might fail as we prefer to not have to re-read the unwind information
-        // and we might attempt deleting entries that are not present.
+        // Some might fail as we prefer to not have to re-read the unwind
+        // information and we might attempt deleting entries that are
+        // not present.
         if success_count == 0 && !partial_write {
             let total = success_count + failure_count;
             error!(
@@ -503,13 +505,13 @@ impl Bpf {
                 .maps
                 .exec_mappings
                 .delete(unsafe { plain::as_bytes(&key) });
-            if let Err(e) = res {
-                if !partial_write {
-                    error!(
-                        "failed to delete bpf mappings for process {} with {:?}",
-                        pid, e
-                    );
-                }
+            if let Err(e) = res
+                && !partial_write
+            {
+                error!(
+                    "failed to delete bpf mappings for process {} with {:?}",
+                    pid, e
+                );
             }
         }
     }
@@ -554,8 +556,8 @@ impl Bpf {
             error!("deleting the BPF unwind info array failed with {:?}", res);
         }
 
-        // The object file (`object_files`) is not removed here as we still need it for
-        // normalization before sending the profiles.
+        // The object file (`object_files`) is not removed here as we still need
+        // it for normalization before sending the profiles.
         entry.remove_entry();
     }
 
@@ -635,10 +637,10 @@ pub(crate) fn clear_map(map: &Map) {
     let mut previous_key: Option<Vec<u8>> = None;
 
     let mut delete_entry = |previous_key: Option<Vec<u8>>| {
-        if let Some(previous_key) = previous_key {
-            if map.delete(&previous_key).is_err() {
-                failures += 1;
-            }
+        if let Some(previous_key) = previous_key
+            && map.delete(&previous_key).is_err()
+        {
+            failures += 1;
         }
     };
 

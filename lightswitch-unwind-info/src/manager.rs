@@ -203,7 +203,8 @@ mod tests {
             instant: now + Duration::from_secs(10),
         };
 
-        // `BinaryHeap::pop()` returns the max element so the ordering is switched.
+        // `BinaryHeap::pop()` returns the max element so the ordering is
+        // switched.
         assert_eq!(
             [&before, &after].iter().max().unwrap().executable_id,
             ExecutableId(0xBAD)
