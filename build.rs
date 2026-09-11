@@ -6,15 +6,14 @@ use std::path::PathBuf;
 use bindgen::callbacks::{DeriveInfo, ParseCallbacks};
 use glob::glob;
 use libbpf_cargo::SkeletonBuilder;
-use std::path::Path;
 
-const PROFILER_BPF_HEADER: &str = "./src/bpf/profiler.h";
-const PROFILER_BPF_SOURCE: &str = "./src/bpf/profiler.bpf.c";
-const PROFILER_SKELETON: &str = "./src/bpf/profiler_skel.rs";
+const PROFILER_BPF_HEADER: &str = "src/bpf/profiler.h";
+const PROFILER_BPF_SOURCE: &str = "src/bpf/profiler.bpf.c";
+const PROFILER_SKELETON: &str = "profiler_skel.rs";
 
-const TRACERS_BPF_HEADER: &str = "./src/bpf/tracers.h";
-const TRACERS_BPF_SOURCE: &str = "./src/bpf/tracers.bpf.c";
-const TRACERS_SKELETON: &str = "./src/bpf/tracers_skel.rs";
+const TRACERS_BPF_HEADER: &str = "src/bpf/tracers.h";
+const TRACERS_BPF_SOURCE: &str = "src/bpf/tracers.bpf.c";
+const TRACERS_SKELETON: &str = "tracers_skel.rs";
 
 #[derive(Debug)]
 struct CustomParseCallbacks;
@@ -56,25 +55,22 @@ fn main() {
         .generate()
         .expect("Unable to generate bindings");
 
-    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     let bindings_out_file = out_path.join("tracers_bindings.rs");
     bindings
         .write_to_file(bindings_out_file)
         .expect("Couldn't write bindings!");
 
-    let skel = Path::new(PROFILER_SKELETON);
     SkeletonBuilder::new()
         .source(PROFILER_BPF_SOURCE)
         // Older kernels reject the current code if compiled with v3 of the ISA (the default in
         // LLVM 20+). Select the previous default BPF instruction set.
         .clang_args(["-mcpu=v1", "-Wextra", "-Wall", "-Werror"])
-        .build_and_generate(skel)
+        .build_and_generate(out_path.join(PROFILER_SKELETON))
         .expect("run skeleton builder");
 
-    let skel = Path::new(TRACERS_SKELETON);
     SkeletonBuilder::new()
         .source(TRACERS_BPF_SOURCE)
         .clang_args(["-Wextra", "-Wall", "-Werror", "-Wno-unused-function"])
-        .build_and_generate(skel)
+        .build_and_generate(out_path.join(TRACERS_SKELETON))
         .expect("run skeleton builder");
 }

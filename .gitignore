@@ -3,7 +3,6 @@ flame.svg
 profile.pb
 firefox-profiler.json
 profile.pftrace
-**/bpf/*_skel.rs
 .vmtest.log
 result
 .vscode/
