@@ -1111,6 +1111,11 @@ impl Profiler {
                     entry.get().last_used.elapsed()
                 );
 
+                let ret = self.bpf.delete_unwind_info_map(executable_id.into());
+                if ret.is_err() {
+                    error!("failed to evict unwind info map with {:?}", ret);
+                }
+
                 self.bpf.delete_pages(
                     entry.get().unwind_info_start_address,
                     entry.get().unwind_info_end_address,
@@ -1118,10 +1123,6 @@ impl Profiler {
                     false,
                 );
 
-                let ret = self.bpf.delete_unwind_info_map(executable_id.into());
-                if ret.is_err() {
-                    error!("failed to evict unwind info map with {:?}", ret);
-                }
                 entry.remove_entry();
             }
 
