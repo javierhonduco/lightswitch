@@ -1070,13 +1070,12 @@ impl Profiler {
 
         // We should print info log if we're going to need to evict for now
         if to_free_bytes > 0 {
-            info!(
-            "want to add {:.2} MB of unwind information, need to free at least {:.2} MB (used {:.2} MB / {} MB)",
-            this_unwind_info_bytes as f64 / MB_TO_BYTES as f64,
-            to_free_bytes as f64 / MB_TO_BYTES as f64,
-            total_memory_used_bytes as f64 / MB_TO_BYTES as f64,
-            max_memory_mb
-        );
+            info!("want to add {:.2} MB of unwind information, need to free at least {:.2} MB (used {:.2} MB / {} MB)",
+                this_unwind_info_bytes as f64 / MB_TO_BYTES as f64,
+                to_free_bytes as f64 / MB_TO_BYTES as f64,
+                total_memory_used_bytes as f64 / MB_TO_BYTES as f64,
+                max_memory_mb
+            );
         }
 
         // Figure out what are the unwind info we should evict to stay below the memory
@@ -1105,6 +1104,11 @@ impl Profiler {
                     entry.get().last_used.elapsed()
                 );
 
+                let ret = self.bpf.delete_unwind_info_map(executable_id.into());
+                if ret.is_err() {
+                    error!("failed to evict unwind info map with {:?}", ret);
+                }
+
                 self.bpf.delete_pages(
                     entry.get().unwind_info_start_address,
                     entry.get().unwind_info_end_address,
@@ -1112,10 +1116,6 @@ impl Profiler {
                     false,
                 );
 
-                let ret = self.bpf.delete_unwind_info_map(executable_id.into());
-                if ret.is_err() {
-                    error!("failed to evict unwind info map with {:?}", ret);
-                }
                 entry.remove_entry();
             }
 

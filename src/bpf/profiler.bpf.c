@@ -113,26 +113,31 @@ static __always_inline u64 find_offset_for_pc(void* inner_map, u16 pc_low, u64 l
 // an offset can be passed that will be filled in with the mapping's load
 // address.
 static __always_inline void*
-find_page(mapping_t* mapping, u64 object_relative_pc, u64* low_index, u64* high_index) {
+find_page(mapping_t* mapping, u64 object_relative_pc, u64* low_index, u64* high_index, enum sample_result * sample_result) {
     page_key_t page_key = {
         .executable_id = mapping->executable_id,
         .file_offset = object_relative_pc,
     };
 
-    page_value_t* found_page = bpf_map_lookup_elem(&executable_to_page, &page_key);
-
-    if (found_page != NULL) {
-        void* inner_map = bpf_map_lookup_elem(&outer_map, &mapping->executable_id);
-        if (inner_map != NULL) {
-            *low_index = found_page->low_index;
-            *high_index = found_page->high_index;
-            return inner_map;
-        }
+    void* inner_map = bpf_map_lookup_elem(&outer_map, &mapping->executable_id);
+    if (inner_map == NULL) {
+        bpf_printk("[warn] outer map not found, most likely it was evicted due to memory pressure");
+        *sample_result = SAMPLE_UNWIND_INFO_NOT_FOUND;
+        bump_unwind_error_unwind_info_not_found();
+        return NULL;
     }
 
-    LOG("[error] could not find page for executable_id: %llx at file_offset: %llx", mapping->executable_id, object_relative_pc);
-    bump_unwind_error_page_not_found();
-    return NULL;
+    page_value_t* found_page = bpf_map_lookup_elem(&executable_to_page, &page_key);
+    if (found_page == NULL) {
+        LOG("[error] could not find page for executable_id: %llx at file_offset: %llx", mapping->executable_id, object_relative_pc);
+        *sample_result = SAMPLE_PAGE_NOT_FOUND;
+        bump_unwind_error_page_not_found();
+        return NULL;
+    }
+
+    *low_index = found_page->low_index;
+    *high_index = found_page->high_index;
+    return inner_map;
 }
 
 static __always_inline void send_event(Event* event, struct bpf_perf_event_data* ctx) {
@@ -352,7 +357,7 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
 
         u64 low_index = 0;
         u64 high_index = 0;
-        void* inner = find_page(mapping, object_relative_pc_high, &low_index, &high_index);
+        void* inner = find_page(mapping, object_relative_pc_high, &low_index, &high_index, &unwind_state->sample.result);
         if (inner == NULL) {
             Event event = {
                 .type = EVENT_NEED_UNWIND_INFO,
@@ -364,7 +369,6 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
                 .address = unwind_state->ip & PAGE_MASK,
             };
             send_event(&event, ctx);
-            unwind_state->sample.result = SAMPLE_MAPPING_MISSING_UNWIND_INFO;
             break;
         }
 
@@ -448,7 +452,6 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
                 found_rbp_type);
             bump_unwind_error_unsupported_frame_pointer_action();
             unwind_state->sample.result = SAMPLE_UNSUPPORTED_UNWIND_RULE;
-            ;
             break;
         }
 

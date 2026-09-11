@@ -98,6 +98,7 @@ struct unwinder_stats_t {
     u64 error_mapping_not_found;
     u64 error_mapping_does_not_contain_pc;
     u64 error_page_not_found;
+    u64 error_unwind_info_not_found;
     u64 error_binary_search_exhausted_iterations;
     u64 error_sending_new_process_event;
     u64 error_sending_need_unwind_info_event;
@@ -176,10 +177,11 @@ enum sample_result {
     SAMPLE_MAPPING_NOT_FOUND = 6,
     SAMPLE_MAPPING_DOES_NOT_CONTAIN_PC = 7,
     SAMPLE_MAPPING_JIT = 8,
-    SAMPLE_MAPPING_MISSING_UNWIND_INFO = 9,
+    SAMPLE_UNWIND_INFO_NOT_FOUND = 9,
     SAMPLE_MEM_READ_FAULT_ERROR = 10,
     SAMPLE_MEM_READ_GENERIC_ERROR = 11,
     SAMPLE_UNSUPPORTED_UNWIND_RULE = 12,
+    SAMPLE_PAGE_NOT_FOUND = 13,
 };
 
 typedef struct {

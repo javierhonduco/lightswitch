@@ -63,6 +63,8 @@ impl Add for unwinder_stats_t {
             error_binary_search_exhausted_iterations: self.error_binary_search_exhausted_iterations
                 + other.error_binary_search_exhausted_iterations,
             error_page_not_found: self.error_page_not_found + other.error_page_not_found,
+            error_unwind_info_not_found: self.error_unwind_info_not_found
+                + other.error_unwind_info_not_found,
             error_mapping_does_not_contain_pc: self.error_mapping_does_not_contain_pc
                 + other.error_mapping_does_not_contain_pc,
             error_mapping_not_found: self.error_mapping_not_found + other.error_mapping_not_found,

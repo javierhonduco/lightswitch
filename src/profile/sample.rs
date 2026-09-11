@@ -25,10 +25,11 @@ pub enum SampleResult {
     MappingNotFound,
     MappingDoesNotContainPC,
     MappingJIT,
-    MappingMissingUnwindInfo,
+    UnwindInfoNotFound,
     MemReadFaultError,
     MemReadGenericError,
     UnsupportedUnwindRule,
+    PageNotFound,
 }
 
 impl From<sample_result> for SampleResult {
@@ -49,12 +50,11 @@ impl From<sample_result> for SampleResult {
                 SampleResult::MappingDoesNotContainPC
             }
             sample_result_SAMPLE_MAPPING_JIT => SampleResult::MappingJIT,
-            sample_result_SAMPLE_MAPPING_MISSING_UNWIND_INFO => {
-                SampleResult::MappingMissingUnwindInfo
-            }
+            sample_result_SAMPLE_UNWIND_INFO_NOT_FOUND => SampleResult::UnwindInfoNotFound,
             sample_result_SAMPLE_MEM_READ_FAULT_ERROR => SampleResult::MemReadFaultError,
             sample_result_SAMPLE_MEM_READ_GENERIC_ERROR => SampleResult::MemReadGenericError,
             sample_result_SAMPLE_UNSUPPORTED_UNWIND_RULE => SampleResult::UnsupportedUnwindRule,
+            sample_result_SAMPLE_PAGE_NOT_FOUND => SampleResult::PageNotFound,
             _ => {
                 todo!("sample result type {sample} not valid")
             }
