@@ -20,7 +20,7 @@ tracing = "0.1.44"
 thiserror = "2.0.18"
 perf-event-open-sys = "6.0.0"
 procfs = "0.18.0"
-nix = { version = "0.31.2" }
+nix = { version = "0.31.2", features = ["user"] }
 # workspace dev dependencies below
 tempfile = "3.27.0"
 # workspace build dependencies below
@@ -65,7 +65,7 @@ tracing = { workspace = true }
 perf-event-open-sys = { workspace = true }
 thiserror = { workspace = true }
 procfs = { workspace = true }
-nix = { workspace = true, features = ["user"] }
+nix = { workspace = true }
 parking_lot = { version = "0.12.5", features = ["deadlock_detection"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "aws_lc_rs"] }
 flamelens = { version = "0.4.0", default-features = false }

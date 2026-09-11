@@ -10,10 +10,13 @@ clippy:
 test:
     cargo test --all
 
-ci: test
-    cargo shear
+hack:
+    cargo hack check --each-feature --all
+    cargo hack check --feature-powerset --all
+
+ci: clippy test hack
     cargo fmt --check --all
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo shear
     cargo rustdoc --all-features -- -Zunstable-options --check -Dwarnings
 
 cov:
