@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use reqwest::header::RETRY_AFTER;
 use reqwest::StatusCode;
 use tracing::{debug, instrument, warn};
 
@@ -87,10 +86,6 @@ impl DebugInfoBackendFilesystem {
     }
 }
 
-/// Upper bound on a server-provided `Retry-After`, so a bad value cannot stay
-/// in the cache for a build ID for the rest of the agent's life.
-const MAX_RETRY_AFTER_SECS: u32 = 3600;
-
 /// What the backend told us about a build ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BackendQuery {
@@ -101,7 +96,7 @@ enum BackendQuery {
     /// We do not know: the backend is shedding load, broken, or unreachable.
     /// Do *not* upload — a multi-megabyte POST chasing every failed query is
     /// how a slow backend can turn into a dead one.
-    Unavailable { retry_after_secs: Option<u32> },
+    Unavailable,
 }
 
 /// Map the response status of a debuginfo query onto what it tells us.
@@ -109,26 +104,17 @@ enum BackendQuery {
 /// Only 404 is taken as a definitive "absent". A 401/403 would reject the
 /// upload too, and an unrecognised status is not evidence of anything, so both
 /// back off rather than uploading.
+///
+/// A `Retry-After` header, where the backend sends one, is deliberately
+/// ignored: nothing here acts on a delay yet, so parsing it would be dead code.
 fn classify(status: StatusCode) -> BackendQuery {
     if status.is_success() {
         BackendQuery::Present
     } else if status == StatusCode::NOT_FOUND {
         BackendQuery::Absent
     } else {
-        BackendQuery::Unavailable {
-            retry_after_secs: None,
-        }
+        BackendQuery::Unavailable
     }
-}
-
-/// Parse a `Retry-After` header in delta-seconds form.
-///
-/// The HTTP-date form is not supported: it would need a date parser we do not
-/// need anywhere else. An unparseable value simply means "no hint from the
-/// server".
-fn parse_retry_after(header: Option<&str>) -> Option<u32> {
-    let secs = header?.trim().parse::<u32>().ok()?;
-    Some(secs.min(MAX_RETRY_AFTER_SECS))
 }
 
 #[derive(Debug)]
@@ -173,10 +159,13 @@ impl DebugInfoManager for DebugInfoBackendRemote {
         // unnecessarily.
         match self.find_in_backend(build_id) {
             BackendQuery::Present => Ok(()),
-            BackendQuery::Unavailable { retry_after_secs } => {
+            BackendQuery::Unavailable => {
+                // Skipping the upload is not the same as giving up: there is no
+                // cache yet, so the next process that maps this executable asks
+                // the backend again.
                 warn!(
-                    "debuginfo backend did not answer for {}, skipping upload (retry-after: {:?})",
-                    build_id, retry_after_secs
+                    "debuginfo backend did not answer for {}, skipping upload",
+                    build_id
                 );
                 Ok(())
             }
@@ -211,23 +200,11 @@ impl DebugInfoBackendRemote {
             Ok(response) => response,
             Err(e) => {
                 debug!("debuginfo query for {} failed: {}", build_id, e);
-                return BackendQuery::Unavailable {
-                    retry_after_secs: None,
-                };
+                return BackendQuery::Unavailable;
             }
         };
 
-        match classify(response.status()) {
-            BackendQuery::Unavailable { .. } => BackendQuery::Unavailable {
-                retry_after_secs: parse_retry_after(
-                    response
-                        .headers()
-                        .get(RETRY_AFTER)
-                        .and_then(|value| value.to_str().ok()),
-                ),
-            },
-            settled => settled,
-        }
+        classify(response.status())
     }
 
     /// Send the debug information to the backend.
@@ -267,42 +244,32 @@ mod tests {
 
     use rstest::rstest;
 
-    const UNAVAILABLE: BackendQuery = BackendQuery::Unavailable {
-        retry_after_secs: None,
-    };
+    use BackendQuery::Unavailable;
 
     #[rstest]
     #[case(StatusCode::OK, BackendQuery::Present)]
     #[case(StatusCode::NO_CONTENT, BackendQuery::Present)]
     #[case(StatusCode::NOT_FOUND, BackendQuery::Absent)]
     // Not evidence of absence: uploading would fail too, or tell us nothing.
-    #[case(StatusCode::BAD_REQUEST, UNAVAILABLE)]
-    #[case(StatusCode::UNAUTHORIZED, UNAVAILABLE)]
-    #[case(StatusCode::FORBIDDEN, UNAVAILABLE)]
-    #[case(StatusCode::TOO_MANY_REQUESTS, UNAVAILABLE)]
-    #[case(StatusCode::INTERNAL_SERVER_ERROR, UNAVAILABLE)]
-    #[case(StatusCode::BAD_GATEWAY, UNAVAILABLE)]
-    #[case(StatusCode::SERVICE_UNAVAILABLE, UNAVAILABLE)]
+    #[case(StatusCode::BAD_REQUEST, Unavailable)]
+    #[case(StatusCode::UNAUTHORIZED, Unavailable)]
+    #[case(StatusCode::FORBIDDEN, Unavailable)]
+    #[case(StatusCode::TOO_MANY_REQUESTS, Unavailable)]
+    #[case(StatusCode::INTERNAL_SERVER_ERROR, Unavailable)]
+    #[case(StatusCode::BAD_GATEWAY, Unavailable)]
+    #[case(StatusCode::SERVICE_UNAVAILABLE, Unavailable)]
     fn classify_maps_status_to_query(#[case] status: StatusCode, #[case] expected: BackendQuery) {
         assert_eq!(classify(status), expected);
     }
 
+    /// The whole point of the tri-state: a status we cannot interpret must not
+    /// be treated as "the backend does not have it", because only `Absent`
+    /// uploads.
     #[rstest]
-    #[case(None, None)]
-    #[case(Some("30"), Some(30))]
-    #[case(Some("  30  "), Some(30))]
-    #[case(Some("0"), Some(0))]
-    #[case(Some(""), None)]
-    #[case(Some("garbage"), None)]
-    #[case(Some("-5"), None)]
-    #[case(Some("1.5"), None)]
-    // The HTTP-date form is deliberately unsupported.
-    #[case(Some("Wed, 21 Oct 2015 07:28:00 GMT"), None)]
-    #[case(Some("99999999"), Some(MAX_RETRY_AFTER_SECS))]
-    fn parse_retry_after_accepts_only_delta_seconds(
-        #[case] header: Option<&str>,
-        #[case] expected: Option<u32>,
-    ) {
-        assert_eq!(parse_retry_after(header), expected);
+    #[case(StatusCode::TOO_MANY_REQUESTS)]
+    #[case(StatusCode::INTERNAL_SERVER_ERROR)]
+    #[case(StatusCode::SERVICE_UNAVAILABLE)]
+    fn an_unanswerable_query_is_never_absent(#[case] status: StatusCode) {
+        assert_ne!(classify(status), BackendQuery::Absent);
     }
 }
