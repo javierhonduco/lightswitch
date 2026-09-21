@@ -6,8 +6,8 @@ use anyhow::anyhow;
 use procfs;
 
 use crate::ksym::KsymIter;
-use lightswitch_object::kernel::parse_gnu_build_id_from_notes;
 use lightswitch_object::BuildId;
+use lightswitch_object::kernel::parse_gnu_build_id_from_notes;
 
 pub const KERNEL_PID: i32 = 0;
 

@@ -91,8 +91,8 @@ impl ObjectFile {
         // is modified or unmapped.
         let mmap = Box::new(unsafe { Mmap::map(file) }?);
         let object = object::File::parse(&**mmap)?;
-        // Safety: The lifetime of `object` will outlive `mmap`'s. We ensure `mmap`
-        // lives as long as `object` by defining `object` before.
+        // Safety: The lifetime of `object` will outlive `mmap`'s. We ensure
+        // `mmap` lives as long as `object` by defining `object` before.
         let object =
             unsafe { std::mem::transmute::<object::File<'_>, object::File<'static>>(object) };
         let build_id = Self::read_build_id(&object)?;
@@ -169,11 +169,13 @@ impl ObjectFile {
                     zig_first_frame = Some((symbol.address(), symbol.address() + symbol.size()));
                 }
 
-                // Once we've found both Zig markers we are done. Note that this is a heuristic
-                // and it's possible that a Zig library is linked against code
-                // written in a C-like language. In this case we might be
-                // rewriting unwind information that's correct. This won't have a negative
-                // effect as `_start` is always the first function.
+                // Once we've found both Zig markers we are done. Note that this
+                // is a heuristic and it's possible that a Zig
+                // library is linked against code written in a
+                // C-like language. In this case we might be
+                // rewriting unwind information that's correct. This won't have
+                // a negative effect as `_start` is always the
+                // first function.
                 if is_zig && let Some((low_address, high_address)) = zig_first_frame {
                     return Runtime::Zig {
                         start_low_address: low_address,
@@ -211,8 +213,8 @@ impl ObjectFile {
                 b"runtime.mstart".as_slice(),
                 b"runtime.systemstack".as_slice(),
             ] {
-                // In some occasions functions might get some suffixes added to them like
-                // `runtime.mcall0`.
+                // In some occasions functions might get some suffixes added to
+                // them like `runtime.mcall0`.
                 if name.starts_with(func) {
                     r.push(StopUnwindingFrames {
                         name: String::from_utf8_lossy(name).into_owned(),

@@ -43,8 +43,8 @@ impl FileId {
 /// other mounts and it can help reduce the chances of race conditions to not
 /// rely on the procfs mount path unless we must.
 pub fn executable_path(pid: Pid, path: &Path) -> PathBuf {
-    // Not using Path join as appending absolute paths will replace the whole path
-    // with it, see https://github.com/rust-lang/rust/issues/16507
+    // Not using Path join as appending absolute paths will replace the whole
+    // path with it, see https://github.com/rust-lang/rust/issues/16507
     debug_assert!(
         path.is_absolute(),
         "paths from procfs /maps are expected to be absolute but was {}",
@@ -53,10 +53,10 @@ pub fn executable_path(pid: Pid, path: &Path) -> PathBuf {
 
     let procfs_path = format!("/proc/{}/root{}", pid, path.to_string_lossy());
     let procfs_path = PathBuf::from(procfs_path);
-    if let (Ok(file_id_left), Ok(file_id_right)) = (FileId::new(&procfs_path), FileId::new(path)) {
-        if file_id_left == file_id_right {
-            return path.to_path_buf();
-        }
+    if let (Ok(file_id_left), Ok(file_id_right)) = (FileId::new(&procfs_path), FileId::new(path))
+        && file_id_left == file_id_right
+    {
+        return path.to_path_buf();
     }
 
     procfs_path

@@ -104,8 +104,8 @@ impl BuildId {
     /// Returns an identifier for the executable using the first 8 bytes of the
     /// build id.
     pub fn id(&self) -> Result<ExecutableId> {
-        // We want to interpret these bytes as big endian to have its hexadecimal
-        // representation match.
+        // We want to interpret these bytes as big endian to have its
+        // hexadecimal representation match.
         Ok(ExecutableId(u64::from_be_bytes(self.data[..8].try_into()?)))
     }
 

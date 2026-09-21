@@ -48,17 +48,16 @@ impl<R: Read> Iterator for KsymIter<R> {
                         (iter.next(), iter.next(), iter.next())
                     {
                         // See `man nm` for the meaning of the symbol types.
-                        if symbol_type == "T"
+                        if (symbol_type == "T"
                             || symbol_type == "t"
                             || symbol_type == "W"
-                            || symbol_type == "D"
+                            || symbol_type == "D")
+                            && let Ok(start_addr) = u64::from_str_radix(addr_str, 16)
                         {
-                            if let Ok(start_addr) = u64::from_str_radix(addr_str, 16) {
-                                return Some(Ksym {
-                                    start_addr,
-                                    symbol_name: symbol_name.trim().to_string(),
-                                });
-                            }
+                            return Some(Ksym {
+                                start_addr,
+                                symbol_name: symbol_name.trim().to_string(),
+                            });
                         }
                     }
                 }

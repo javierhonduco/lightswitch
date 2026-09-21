@@ -71,17 +71,17 @@ impl ExecutableMapping {
         &mut self,
         object_files: &mut HashMap<ExecutableId, ObjectFileInfo>,
     ) -> bool {
-        // The executable mapping can be removed at a later time, and function might be
-        // called multiple times. To avoid this, we keep track of whether this
-        // mapping has been soft deleted.
+        // The executable mapping can be removed at a later time, and function
+        // might be called multiple times. To avoid this, we keep track
+        // of whether this mapping has been soft deleted.
         if self.soft_delete {
             return false;
         }
         self.soft_delete = true;
 
         if let Some(object_file) = object_files.get_mut(&self.executable_id) {
-            // Object files are also soft deleted, so do not try to decrease the reference
-            // count if it's already zero.
+            // Object files are also soft deleted, so do not try to decrease the
+            // reference count if it's already zero.
             if object_file.references == 0 {
                 return false;
             }
@@ -197,9 +197,11 @@ mod tests {
         };
 
         // no elf segments
-        assert!(object_file_info
-            .normalized_address(0x110, &mapping)
-            .is_none());
+        assert!(
+            object_file_info
+                .normalized_address(0x110, &mapping)
+                .is_none()
+        );
 
         // matches an elf segment
         object_file_info.elf_load_segments = vec![ElfLoad {
@@ -217,8 +219,10 @@ mod tests {
             p_vaddr: 0x0,
             p_filesz: 0x5,
         }];
-        assert!(object_file_info
-            .normalized_address(0x110, &mapping)
-            .is_none());
+        assert!(
+            object_file_info
+                .normalized_address(0x110, &mapping)
+                .is_none()
+        );
     }
 }

@@ -1,10 +1,10 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use axum::Router;
 use axum::http::HeaderValue;
 use axum::response::Html;
 use axum::routing::get;
-use axum::Router;
 use reqwest::Method;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeFile;

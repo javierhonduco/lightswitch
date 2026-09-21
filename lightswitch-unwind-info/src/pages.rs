@@ -46,8 +46,9 @@ pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
                 prev_high_pc = Some(high_pc);
             }
             Some(prev_pc_high) => {
-                // There's a gap larger than the page size, we need to insert pages that map
-                // to the same range of unwind information rows.
+                // There's a gap larger than the page size, we need to insert
+                // pages that map to the same range of unwind
+                // information rows.
                 if prev_pc_high + page_size < high_pc {
                     for address in (prev_pc_high..high_pc).step_by(page_size as usize) {
                         pages.push(Page {
@@ -201,7 +202,8 @@ mod tests {
             let pc = row.pc;
             let pc_high = pc & high_bits_mask;
             assert_eq!(pc_high, pc_high & 0x0000FFFFFFFF0000); // [ 16 unused bits -- 32 bits for high -- 16 bits for each page ]
-            // Test that we can find it in the pages, linearly, but it's small enough
+            // Test that we can find it in the pages, linearly, but it's small
+            // enough
             let found = pages.iter().find(|el| el.address == pc_high).unwrap();
             // Make sure we can find the inner slice
             let search_here = &unwind_info[(found.low_index as usize)..(found.high_index as usize)];

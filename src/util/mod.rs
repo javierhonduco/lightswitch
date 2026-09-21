@@ -4,8 +4,8 @@ mod file;
 mod lpm;
 mod page;
 
-pub use arch::{architecture, Architecture};
+pub use arch::{Architecture, architecture};
 pub use cpu::get_online_cpus;
-pub use file::{executable_path, FileId};
-pub use lpm::{summarize_address_range, AddressBlockRange};
+pub use file::{FileId, executable_path};
+pub use lpm::{AddressBlockRange, summarize_address_range};
 pub use page::{page_size, roundup_page};

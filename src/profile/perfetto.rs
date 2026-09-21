@@ -483,9 +483,11 @@ mod tests {
         let mut interner = Interner::default();
         interner.sample(&sample.sample);
         assert!(interner.function_names.contains_key("0x123"));
-        assert!(interner
-            .function_names
-            .contains_key("Symbolization error missing symbols"));
+        assert!(
+            interner
+                .function_names
+                .contains_key("Symbolization error missing symbols")
+        );
     }
 
     #[test]
