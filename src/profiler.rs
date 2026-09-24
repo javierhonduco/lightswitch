@@ -12,8 +12,6 @@ use crate::util::FileId;
 use crate::util::get_online_cpus;
 use anyhow::Context;
 use libbpf_rs::Link;
-use libbpf_rs::MapCore;
-use libbpf_rs::skel::Skel;
 use lightswitch_object::BuildId;
 use lightswitch_object::ElfLoad;
 use lightswitch_unwind_info::manager::FetchUnwindInfoError;
@@ -239,10 +237,12 @@ enum AddUnwindInformationError {
     Generic(String, String),
     #[error("unwind information contains no entries")]
     Empty,
-    #[error("failed to write to BPF map that stores unwind information: {0}")]
-    BpfUnwindInfo(String),
-    #[error("failed to write to BPF map that stores pages: {0}")]
-    BpfPages(String),
+    #[error("failed to create BPF map that stores unwind information")]
+    BpfUnwindCreate { source: libbpf_rs::Error },
+    #[error("failed to write to BPF map that stores unwind information")]
+    BpfUnwindWrite { source: anyhow::Error },
+    #[error("failed to write to BPF map that stores pages")]
+    BpfPages { source: libbpf_rs::Error },
     #[error("stripped Go binaries aren't supported yet")]
     StrippedGo,
     #[error("failed to fetch unwind info")]
@@ -752,16 +752,7 @@ impl Profiler {
     /// Clear the `percpu_stats` maps one entry at a time.
     pub fn clear_maps(&mut self) {
         let _span = span!(Level::DEBUG, "clear_maps").entered();
-
-        let rate_limits_map = self
-            .bpf
-            .native_unwinder
-            .object()
-            .maps()
-            .find(|map| map.name().to_string_lossy() == "rate_limits")
-            .expect("map exists");
-
-        clear_map(&rate_limits_map);
+        clear_map(&self.bpf.native_unwinder.maps.rate_limits);
     }
 
     pub fn collect_profile(&mut self) -> Vec<RawSample> {
@@ -1016,14 +1007,14 @@ impl Profiler {
         let inner_map = self
             .bpf
             .create_and_insert_unwind_info_map(executable_id.into(), unwind_info.len())
-            .expect("create inner map");
+            .map_err(|e| AddUnwindInformationError::BpfUnwindCreate { source: e })?;
 
         // Add all unwind information and its pages.
         Bpf::add_unwind_info(&inner_map, &unwind_info)
-            .map_err(|e| AddUnwindInformationError::BpfUnwindInfo(e.to_string()))?;
+            .map_err(|e| AddUnwindInformationError::BpfUnwindWrite { source: e })?;
         self.bpf
             .add_pages(&unwind_info, executable_id.into())
-            .map_err(|e| AddUnwindInformationError::BpfPages(e.to_string()))?;
+            .map_err(|e| AddUnwindInformationError::BpfPages { source: e })?;
         let unwind_info_start_address = unwind_info.first().unwrap().pc;
         let unwind_info_end_address = unwind_info.last().unwrap().pc;
         self.native_unwind_state.insert(
