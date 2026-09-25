@@ -773,12 +773,16 @@ impl Profiler {
         raw_samples
     }
 
-    fn process_is_known(&self, pid: Pid) -> bool {
-        self.procs.read().get(&pid).is_some()
+    fn process_is_known_and_running(&self, pid: Pid) -> bool {
+        if let Some(proc) = self.procs.read().get(&pid) {
+            return proc.status == ProcessStatus::Running;
+        }
+
+        false
     }
 
     fn add_unwind_info_for_process(&mut self, pid: Pid) {
-        if !self.process_is_known(pid) {
+        if !self.process_is_known_and_running(pid) {
             panic!("add_unwind_info -- expected process to be known");
         }
 
@@ -1157,7 +1161,7 @@ impl Profiler {
             return;
         }
 
-        if self.process_is_known(pid) {
+        if self.process_is_known_and_running(pid) {
             // We hit this when we had to reset the state of the BPF maps but we
             // know about this process.
             self.add_unwind_info_for_process(pid);
@@ -1279,6 +1283,7 @@ impl Profiler {
                 Some(os_name) => os_name.to_string_lossy().to_string(),
                 None => "error".to_string(),
             };
+
             let res = self
                 .debug_info_manager
                 .add_if_not_present(&name, build_id, exe_path);
@@ -1595,6 +1600,35 @@ mod tests {
     use libbpf_rs::MapCore;
 
     use crate::{bpf::profiler_skel::ProfilerMaps, profiler::*};
+
+    #[test]
+    fn test_process_eviction_and_added_again() {
+        let (_stop_signal_send, stop_signal_receive) = crossbeam_channel::bounded(1);
+        let metadata_provider = std::sync::Arc::new(std::sync::Mutex::new(
+            lightswitch_metadata::metadata_provider::GlobalMetadataProvider::default(),
+        ));
+        let mut profiler = Profiler::new(
+            ProfilerConfig {
+                use_task_pt_regs_helper: false,
+                ..ProfilerConfig::default()
+            },
+            stop_signal_receive,
+            metadata_provider,
+        );
+
+        let pid = std::process::id() as i32;
+        profiler.event_new_proc(pid, "test-proc".into());
+        profiler.handle_process_exit(pid, false);
+        // At this point no object file should be referenced
+        for object_file in profiler.object_files.read().values() {
+            assert_eq!(object_file.references, 0)
+        }
+        profiler.event_new_proc(pid, "test-proc".into());
+        // The ref count should be the same
+        for object_file in profiler.object_files.read().values() {
+            assert!(object_file.references > 0)
+        }
+    }
 
     #[test]
     fn test_bpf_cleanup() {
