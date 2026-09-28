@@ -558,7 +558,7 @@ impl Profiler {
                                 self.handle_munmap(pid, start_address, end_address);
                         },
                         Ok(TracerEvent::ProcessExit(pid)) => {
-                                self.handle_process_exit(pid, false);
+                                self.handle_process_unload(pid, false, true);
                         },
                         Err(_) => {}
                     }
@@ -624,16 +624,19 @@ impl Profiler {
         }
     }
 
-    pub fn handle_process_exit(&mut self, pid: Pid, partial_write: bool) {
-        // TODO: remove BPF ratelimits for this process.
-        let _ = self.afflicted_processes.pop(&pid);
+    pub fn handle_process_unload(&mut self, pid: Pid, partial_write: bool, exit: bool) {
+        if exit {
+            // TODO: remove BPF ratelimits for this process.
+            let _ = self.afflicted_processes.pop(&pid);
+        }
         let mut procs = self.procs.write();
         match procs.get_mut(&pid) {
             Some(proc_info) => {
-                proc_info.status = ProcessStatus::Exited;
-                self.deletion_scheduler
-                    .add(ToDelete::Process(Instant::now(), pid));
-
+                if exit {
+                    proc_info.status = ProcessStatus::Exited;
+                    self.deletion_scheduler
+                        .add(ToDelete::Process(Instant::now(), pid));
+                }
                 let err = self.bpf.delete_process(pid);
                 if let Err(e) = err {
                     debug!("could not remove bpf process due to {:?}", e);
@@ -647,22 +650,24 @@ impl Profiler {
                         partial_write,
                     );
 
-                    let mut object_files = self.object_files.write();
-                    if mapping.mark_as_deleted(&mut object_files) {
-                        self.deletion_scheduler
-                            .add(ToDelete::ObjectFile(Instant::now(), mapping.executable_id));
+                    if exit {
+                        let mut object_files = self.object_files.write();
+                        if mapping.mark_as_deleted(&mut object_files) {
+                            self.deletion_scheduler
+                                .add(ToDelete::ObjectFile(Instant::now(), mapping.executable_id));
 
-                        if let Entry::Occupied(entry) =
-                            self.native_unwind_state.get(mapping.executable_id)
-                        {
-                            self.bpf
-                                .delete_native_unwind_all(mapping, entry, partial_write);
+                            if let Entry::Occupied(entry) =
+                                self.native_unwind_state.get(mapping.executable_id)
+                            {
+                                self.bpf
+                                    .delete_native_unwind_all(mapping, entry, partial_write);
+                            }
                         }
                     }
                 }
             }
             None => {
-                debug!("could not find process {} while marking as exited", pid);
+                debug!("could not find process {} while unloading", pid);
             }
         }
     }
@@ -871,7 +876,9 @@ impl Profiler {
 
         if errored {
             // Remove partially written data.
-            self.handle_process_exit(pid, true);
+            self.handle_process_unload(pid, true, false);
+            // If it failed now it's highly likely it'll fail again
+            // self.afflicted_processes.put(pid, ());
             // Evict a process to make room for more.
             debug!("eviction result {}", self.maybe_evict_process(false));
         }
@@ -1238,7 +1245,7 @@ impl Profiler {
 
         if let Some(pid) = to_evict {
             debug!("evicting pid {}", pid);
-            self.handle_process_exit(pid, false);
+            self.handle_process_unload(pid, true, false);
             self.native_unwind_state.process_eviction();
         }
 
@@ -1633,7 +1640,7 @@ mod tests {
         assert!(all_known_executables_count > self_known_executables_count);
 
         // init process exits
-        profiler.handle_process_exit(1, false);
+        profiler.handle_process_unload(1, false, true);
 
         // At this point all the BPF maps should be at how they were
         // before the init process got added.
@@ -1658,7 +1665,7 @@ mod tests {
         );
 
         // Our own process exits.
-        profiler.handle_process_exit(std::process::id() as i32, false);
+        profiler.handle_process_unload(std::process::id() as i32, false, true);
 
         // All BPF maps must be empty, since all process have exited.
         assert_eq!(maps(&profiler).exec_mappings.keys().count(), 0);
