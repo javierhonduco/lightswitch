@@ -1,9 +1,9 @@
-{
-  pkgs,
-  lightswitch,
-  enableKasan ? false,
-  enableExtraAssertions ? false,
-  requireKvm ? true,
+{ pkgs
+, lightswitch
+, enableKasan ? false
+, enableExtraAssertions ? false
+, requireKvm ? true
+,
 }:
 
 let
