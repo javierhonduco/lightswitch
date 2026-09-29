@@ -7,7 +7,6 @@ use std::io::Write;
 use std::panic;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -16,13 +15,18 @@ use clap::Parser;
 use crossbeam_channel::bounded;
 use crossbeam_channel::tick;
 use inferno::flamegraph;
+#[cfg(feature = "live-tui")]
+use lightswitch::collector::LiveCollector;
 use lightswitch::collector::{
-    AggregatorCollector, Collector, FirefoxProfilerCollector, LiveCollector, NullCollector,
-    PerfettoCollector, PyroscopeCollector, StreamingCollector,
+    AggregatorCollector, Collector, FirefoxProfilerCollector, NullCollector, PerfettoCollector,
+    PyroscopeCollector, StreamingCollector,
 };
 use lightswitch::debug_info::DebugInfoManager;
 use lightswitch::profile::symbolize_profile;
-use nix::unistd::{Gid, Uid};
+use nix::unistd::Gid;
+use nix::unistd::Uid;
+#[cfg(feature = "live-tui")]
+use std::sync::mpsc;
 use tracing::{Level, debug, error, info};
 use tracing_subscriber::FmtSubscriber;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -74,6 +78,7 @@ fn panic_thread_hook() {
 }
 
 /// Starts `parking_lot`'s deadlock detector.
+#[cfg(feature = "deadlock-detector")]
 fn start_deadlock_detector() {
     std::thread::spawn(move || {
         loop {
@@ -121,15 +126,19 @@ fn ensure_btf(btf_custom_path: &Option<String>) {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    // kube-rs and reqwest both bring in rustls with different crypto providers
-    // (ring and aws-lc-rs). When both are present, rustls cannot auto-detect
-    // which to use. Explicitly install aws-lc-rs as the process-wide default
-    // to match what reqwest was using before kube-rs was added.
-    rustls::crypto::aws_lc_rs::default_provider()
-        .install_default()
-        .expect("failed to install rustls crypto provider");
+    #[cfg(feature = "kubernetes")]
+    {
+        // kube-rs and reqwest both bring in rustls with different crypto providers
+        // (ring and aws-lc-rs). When both are present, rustls cannot auto-detect
+        // which to use. Explicitly install aws-lc-rs as the process-wide default
+        // to match what reqwest was using before kube-rs was added.
+        rustls::crypto::aws_lc_rs::default_provider()
+            .install_default()
+            .expect("failed to install rustls crypto provider");
+    }
     panic_thread_hook();
     let args = CliArgs::parse();
+    #[cfg(feature = "deadlock-detector")]
     if args.enable_deadlock_detector {
         start_deadlock_detector();
     }
@@ -142,7 +151,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         LoggingLevel::Error => Level::ERROR,
     };
 
-    if !args.live {
+    #[cfg(feature = "live-tui")]
+    let live = args.live;
+    #[cfg(not(feature = "live-tui"))]
+    let live = false;
+
+    if !live {
         let subscriber = FmtSubscriber::builder()
             .with_max_level(level_filter)
             .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE)
@@ -246,6 +260,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let metadata_provider: ThreadSafeGlobalMetadataProvider =
         Arc::new(Mutex::new(GlobalMetadataProvider::default()));
 
+    #[cfg(feature = "kubernetes")]
     if args.kubernetes {
         let node_name = args
             .node_name
@@ -311,7 +326,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         ..Default::default()
     };
 
-    if args.live {
+    #[cfg(feature = "live-tui")]
+    if live {
         let (tx, rx) = mpsc::channel::<String>();
         let collector: Arc<Mutex<Box<dyn Collector + Send>>> =
             Arc::new(Mutex::new(Box::new(LiveCollector::new(tx))));
@@ -418,7 +434,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 ProfilerConfig::default().session_duration,
                 args.sample_freq,
                 metadata_provider.clone(),
+                #[cfg(feature = "kubernetes")]
                 args.node_name.clone().unwrap_or_default(),
+                #[cfg(not(feature = "kubernetes"))]
+                String::new(),
             )),
         }));
 
