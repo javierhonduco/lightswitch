@@ -27,3 +27,6 @@ jobs:
 
     - name: Run kernel tests
       run: nix run .#vmtest
+
+    - name: Run NixOS VM tests
+      run: nix run .#nixos-vmtest-driver
