@@ -19,3 +19,7 @@ nix = { workspace = true }
 [build-dependencies]
 libbpf-cargo = { workspace = true}
 glob = { workspace = true}
+
+# TODO: enable
+# [lints]
+# workspace = true

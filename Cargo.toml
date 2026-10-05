@@ -107,3 +107,18 @@ harness = false
 [[bin]]
 name = "lightswitch"
 path = "src/cli/main.rs"
+
+
+[workspace.lints.rust]
+trivial-numeric-casts = "warn"
+unsafe-op-in-unsafe-fn = "warn"
+unused = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+join-absolute-paths = "warn"
+clone-on-ref-ptr = "warn"
+
+# TODO: enable
+# [lints]
+# workspace = true

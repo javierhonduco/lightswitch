@@ -77,9 +77,10 @@ pub fn kaslr_offset() -> anyhow::Result<u64> {
                     };
 
                     if note.name() == VMCORE_INFO_NAME {
-                        let found = _parse_vm_core_info_line(note.desc())
+                        let value = _parse_vm_core_info_line(note.desc())
                             .find(|(key, _val)| key == &KERNEL_OFFSET)
-                            .map(|(_key, val)| val);
+                            .map(|(_key, val)| val)
+                            .ok_or(anyhow!("kernel offset not present in vmcore"))?;
 
                         return Ok(
                             // This entry is stored in hex-encoded ascii. It could be converted in
@@ -87,7 +88,7 @@ pub fn kaslr_offset() -> anyhow::Result<u64> {
                             // sensitive as it runs once. It's ok to take 2 hops
                             // to convert it rather than hand rolling it or bringing another
                             // dependency.
-                            u64::from_str_radix(std::str::from_utf8(found.unwrap())?, 16)?,
+                            u64::from_str_radix(std::str::from_utf8(value)?, 16)?,
                         );
                     }
                 }

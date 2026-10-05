@@ -10,11 +10,11 @@ const NOPREALLOC_TEST_SKELETON: &str = "noprealloc_test_skel.rs";
 
 fn main() {
     // Inform cargo of when to rebuild
-    for path in glob("src/bpf/*[hc]").unwrap().flatten() {
+    for path in glob("src/bpf/*[hc]").expect("find BPF files").flatten() {
         println!("cargo:rerun-if-changed={}", path.display());
     }
 
-    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let out_path = PathBuf::from(env::var("OUT_DIR").expect("out dir env var"));
 
     SkeletonBuilder::new()
         .source(FEATURES_BPF_SOURCE)
