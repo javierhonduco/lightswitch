@@ -326,6 +326,29 @@ fn main() -> Result<(), Box<dyn Error>> {
         ..Default::default()
     };
 
+    let (stop_signal_sender, stop_signal_receive) = bounded(1);
+    let profiler_stop_signal_sender = stop_signal_sender.clone();
+    ctrlc::set_handler(move || {
+        info!("received Ctrl+C, stopping...");
+        let _ = profiler_stop_signal_sender.send(());
+    })
+    .expect("Error setting Ctrl-C handler");
+    // Start a thread to stop the profiler if the killswitch is enabled
+    let killswitch_ticker = tick(KILLSWITCH_POLL_INTERVAL);
+    let killswitch_poll_thread = thread::Builder::new().name("killswitch-poll-thread".to_string());
+    let _ = killswitch_poll_thread.spawn({
+        let stop_signal_sender = stop_signal_sender.clone();
+        move || {
+            loop {
+                if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
+                    info!("killswitch detected. Sending stop signal to profiler.");
+                    let _ = stop_signal_sender.send(());
+                    break;
+                }
+            }
+        }
+    });
+
     #[cfg(feature = "live-tui")]
     if live {
         let (tx, rx) = mpsc::channel::<String>();
@@ -337,25 +360,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             ..profiler_config
         };
 
-        let (stop_signal_sender, stop_signal_receive) = bounded(1);
-        let profiler_stop_signal_sender = stop_signal_sender.clone();
         let tui_stop_signal_sender = stop_signal_sender.clone();
-        ctrlc::set_handler(move || {
-            let _ = profiler_stop_signal_sender.send(());
-        })
-        .expect("Error setting Ctrl-C handler");
-
-        let killswitch_ticker = tick(KILLSWITCH_POLL_INTERVAL);
-        let killswitch_poll_thread =
-            thread::Builder::new().name("killswitch-poll-thread".to_string());
-        let _ = killswitch_poll_thread.spawn(move || {
-            loop {
-                if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
-                    let _ = stop_signal_sender.send(());
-                    break;
-                }
-            }
-        });
 
         let mut p = Profiler::new(profiler_config, stop_signal_receive, metadata_provider);
         p.profile_pids(args.pids);
@@ -373,27 +378,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         let _ = profiler_thread.join();
         return Ok(());
     }
-
-    let (stop_signal_sender, stop_signal_receive) = bounded(1);
-    let profiler_stop_signal_sender = stop_signal_sender.clone();
-    ctrlc::set_handler(move || {
-        info!("received Ctrl+C, stopping...");
-        let _ = profiler_stop_signal_sender.send(());
-    })
-    .expect("Error setting Ctrl-C handler");
-
-    // Start a thread to stop the profiler if the killswitch is enabled
-    let killswitch_ticker = tick(KILLSWITCH_POLL_INTERVAL);
-    let killswitch_poll_thread = thread::Builder::new().name("killswitch-poll-thread".to_string());
-    let _ = killswitch_poll_thread.spawn(move || {
-        loop {
-            if killswitch_ticker.recv().is_ok() && killswitch.enabled() {
-                info!("killswitch detected. Sending stop signal to profiler.");
-                let _ = stop_signal_sender.send(());
-                break;
-            }
-        }
-    });
 
     let profile_path = |default_name: &str| {
         args.profile_path.clone().unwrap_or_default().join(
