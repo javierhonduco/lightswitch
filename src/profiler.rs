@@ -24,6 +24,7 @@ use std::env::temp_dir;
 use std::ffi::CStr;
 use std::fs;
 use std::fs::File;
+use std::fs::create_dir;
 use std::fs::read_link;
 use std::io::ErrorKind;
 use std::num::NonZeroUsize;
@@ -123,7 +124,6 @@ pub struct Profiler {
     preload_thread_metadata: bool,
     file_id_to_info: LruCache<FileId, ExecutableId>,
     afflicted_processes: LruCache<Pid, ()>,
-    vdso_extraction: Option<(Instant, ExecutableId)>,
     deletion_scheduler: DeletionScheduler,
     /// Prevent the BPF attached programs from being removed.
     _links: Vec<Link>,
@@ -336,7 +336,6 @@ impl Profiler {
             afflicted_processes: LruCache::new(
                 NonZeroUsize::new(100).expect("invalid non zero usize"),
             ),
-            vdso_extraction: None,
             deletion_scheduler: DeletionScheduler::new(),
             _links: Vec::new(),
         }
@@ -1435,48 +1434,52 @@ impl Profiler {
                     });
                 }
                 procfs::process::MMapPath::Vdso | procfs::process::MMapPath::Vsyscall => {
-                    let needs_fetch = match self.vdso_extraction {
-                        None => true,
-                        Some((instant, _)) if instant.elapsed() >= Duration::from_mins(15) => true,
-                        Some((_, _)) => {
-                            debug!("using cached vDSO");
-                            false
+                    let temp_vdso_path = match tempfile::NamedTempFile::new() {
+                        Ok(temp_vdso_path) => temp_vdso_path,
+                        Err(e) => {
+                            error!("failed to create temporary vDSO file due to {:?}", e);
+                            continue;
+                        }
+                    };
+                    debug!("fetching vDSO");
+                    let vdso_object = match fetch_vdso_info(
+                        pid,
+                        map.address.0,
+                        map.address.1,
+                        map.offset,
+                        temp_vdso_path.path(),
+                    ) {
+                        Ok(vdso_object) => vdso_object,
+                        Err(e) => {
+                            debug!("skipping vDSO fetch due to procfs race: {:?}", e);
+                            continue;
                         }
                     };
 
+                    let Ok(executable_id) = vdso_object.build_id().id() else {
+                        error!("failed to get executable_id from vDSO");
+                        continue;
+                    };
+
+                    // Previously there was a single vDSO file that was written to disk. If further
+                    // vDSO executables would show up (i.e. 32 bit binaries running in compatibility
+                    // mode) they would be overriden. Process every vDSO mapping and store it a file
+                    // indexed by its executable id.
                     let vdso_path = self.cache_dir.join("dumped-vdso");
-                    if needs_fetch {
-                        debug!("fetching vDSO");
-                        match fetch_vdso_info(
-                            pid,
-                            map.address.0,
-                            map.address.1,
-                            map.offset,
-                            &vdso_path,
-                        ) {
-                            Ok(object) => {
-                                let Ok(executable_id) = object.build_id().id() else {
-                                    error!("failed to get executable_id from vDSO");
-                                    continue;
-                                };
-                                self.vdso_extraction = Some((Instant::now(), executable_id));
-                            }
-                            Err(e) => {
-                                error!("failed to fetch vDSO due to {:?}", e);
-                                self.vdso_extraction = None;
-                                continue;
-                            }
-                        };
+                    if vdso_path.is_file() {
+                        let _ = std::fs::remove_file(&vdso_path);
+                    }
+                    let _ = create_dir(&vdso_path);
+
+                    let vdso_path = vdso_path.join(format!("{:x}", executable_id.0));
+                    if let Err(e) = std::fs::copy(&temp_vdso_path, &vdso_path) {
+                        warn!("copying temp vDSO to final destination failed with {:?}", e);
+                        continue;
                     }
 
                     let info = self.get_or_insert_object_file(&vdso_path, &vdso_path, true);
                     let Ok((Some(_build_id), _elf_load)) = info else {
                         error!("could not insert vDSO object file due to {:?}", info);
-                        continue;
-                    };
-
-                    let Some((_, executable_id)) = self.vdso_extraction else {
-                        error!("vdso_extraction should have an executable_id set");
                         continue;
                     };
 
