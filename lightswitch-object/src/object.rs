@@ -151,6 +151,10 @@ impl ObjectFile {
         self.object.kind() == ObjectKind::Dynamic
     }
 
+    pub fn is_64(&self) -> bool {
+        self.object.is_64()
+    }
+
     pub fn runtime(&self) -> Runtime {
         if self.is_go() {
             Runtime::Go(self.go_stop_unwinding_frames())
