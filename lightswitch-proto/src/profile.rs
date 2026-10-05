@@ -62,7 +62,7 @@ impl PprofBuilder {
         Self {
             time_nanos: profile_start
                 .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
+                .expect("start time must be in the past")
                 .as_nanos() as i64,
             duration,
             freq_in_hz: freq_in_hz as i64,

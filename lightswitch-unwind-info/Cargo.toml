@@ -20,3 +20,7 @@ ring = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+# TODO: enable
+# [lints]
+# workspace = true

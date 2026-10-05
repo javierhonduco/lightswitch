@@ -13,3 +13,6 @@ memmap2 = { workspace = true }
 object = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+
+[lints]
+workspace = true
