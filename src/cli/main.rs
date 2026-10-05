@@ -561,6 +561,7 @@ fn show_object_file_info(path: &str) {
         object_file.go_stop_unwinding_frames()
     );
     println!("- dynamic: {:?}", object_file.is_dynamic());
+    println!("- 64 bits: {:?}", object_file.is_64());
     println!("- load segments: {:?}", object_file.elf_load_segments());
 }
 
