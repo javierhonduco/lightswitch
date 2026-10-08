@@ -145,6 +145,62 @@ fn stack_strings_for_pid(symbolized_profile: &AggregatedProfile, expected_pid: i
 }
 
 #[test]
+fn test_integration_cpp_i686_compatibility_mode() {
+    if std::env::consts::ARCH != "x86_64" {
+        eprintln!(
+            "Skipping test_integration_cpp_i686_compatibility_mode: only supported on x86_64"
+        );
+        return;
+    }
+
+    build_test_binary("integration-tests-progs-i686");
+    let cpp_proc = TestProcess::new("main_cpp_gcc_i686_O2", false);
+
+    let bpf_test_debug = std::env::var("TEST_LIBBPF_DEBUG").is_ok();
+    let system_info = SystemInfo::new(None).expect("failed to detect system info");
+    let collector = Arc::new(Mutex::new(
+        Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
+    ));
+
+    let profiler_config = ProfilerConfig {
+        libbpf_debug: bpf_test_debug,
+        bpf_logging: bpf_test_debug,
+        duration: Duration::from_secs(5),
+        sample_freq: 999,
+        userspace_pid_ns_level: system_info.available_bpf_features.userspace_pid_ns_level,
+        use_task_pt_regs_helper: system_info.available_bpf_features.has_task_pt_regs_helper
+            && system_info.available_bpf_features.has_get_current_task_btf,
+        ..Default::default()
+    };
+    let (_stop_signal_send, stop_signal_receive) = bounded(1);
+    let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+    let mut p = Profiler::new(profiler_config, stop_signal_receive, metadata_provider);
+    p.profile_pids(vec![cpp_proc.pid()]);
+    p.run(collector.clone());
+    let collector = collector.lock().unwrap();
+    let (raw_profile, procs, objs) = collector.finish();
+    let symbolized_profile = symbolize_profile(&raw_profile, procs, objs);
+
+    let observed_stacks = stack_strings_for_pid(&symbolized_profile, cpp_proc.pid());
+    assert!(
+        assert_any_stack_contains(
+            &symbolized_profile,
+            &[
+                "top2()",
+                "c2()",
+                "b2()",
+                "a2()",
+                "main",
+                "__libc_start_call_main",
+            ],
+            cpp_proc.pid(),
+        ),
+        "expected a 32-bit C++ stack containing top2 -> c2 -> b2 -> a2 -> main, observed:\n{}",
+        observed_stacks.join("\n"),
+    );
+}
+
+#[test]
 fn test_integration() {
     let bpf_test_debug = std::env::var("TEST_LIBBPF_DEBUG").is_ok();
     let system_info = SystemInfo::new(None).expect("failed to detect system info");

@@ -122,6 +122,8 @@
             nixos-vmtest-kasan-assertions-driver = nixos-vmtest-kasan-assertions.test.driver;
             kasan-assertions-kernel = nixos-vmtest-kasan-assertions.kernel;
             integration-tests-progs = integration-tests-progs.all-progs;
+          } // lib.optionalAttrs (system == "x86_64-linux") {
+            integration-tests-progs-i686 = integration-tests-progs.cpp-progs-i686;
           };
           devShells.default = mkShell {
             nativeBuildInputs = nativeBuildInputs;

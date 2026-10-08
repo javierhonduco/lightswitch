@@ -59,6 +59,22 @@ let
     ];
   };
 
+  test-cpp-progs-i686 = pkgs.pkgsi686Linux.stdenv.mkDerivation {
+    name = "build-test-cpp-prog-i686";
+    src = ./.;
+    buildPhase = ''
+      cd src/
+      gcc -O2 main.cpp -o main_cpp_gcc_i686_O2
+    '';
+    installPhase = ''
+      mkdir -p $out/bin
+      cp main_cpp_gcc_i686_O2 $out/bin
+    '';
+    buildInputs = [
+      pkgs.pkgsi686Linux.gcc
+    ];
+  };
+
   test-static-glibc-cpp-progs = pkgs.stdenv.mkDerivation {
     name = "build-test-static-glibc-cpp-prog";
     src = ./.;
@@ -143,6 +159,7 @@ in
 {
   default = test-cpp-progs;
   cpp-progs = test-cpp-progs;
+  cpp-progs-i686 = test-cpp-progs-i686;
   go-progs = test-go-progs;
   ocaml-progs = test-ocaml-progs;
   cpp-progs-static-musl = test-static-musl-cpp-progs;
