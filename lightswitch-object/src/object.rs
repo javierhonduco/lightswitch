@@ -1,5 +1,4 @@
 use std::fmt;
-use std::fs;
 use std::fs::File;
 use std::path::Path;
 
@@ -74,45 +73,33 @@ pub struct StopUnwindingFrames {
 }
 
 #[derive(Debug)]
-pub struct ObjectFile {
-    /// Warning! `object` must always go above `mmap` to ensure it will be
-    /// dropped before. Rust guarantees that fields are dropped in the order
-    /// they are defined.
-    object: object::File<'static>, // Its lifetime is tied to the `mmap` below.
-    mmap: Box<Mmap>,
+pub struct ObjectFile<'a> {
+    bytes: &'a [u8],
+    object: object::File<'a>,
     build_id: BuildId,
 }
 
-impl ObjectFile {
-    pub fn new(file: &File) -> Result<Self> {
-        // Rust offers no guarantees on whether a "move" is done virtually or by
-        // memcpying, so to ensure that the memory value is valid we store it in
-        // the heap. Safety: Memory mapping files can cause issues if the file
-        // is modified or unmapped.
-        let mmap = Box::new(unsafe { Mmap::map(file) }?);
-        let object = object::File::parse(&**mmap)?;
-        // Safety: The lifetime of `object` will outlive `mmap`'s. We ensure
-        // `mmap` lives as long as `object` by defining `object` before.
-        let object =
-            unsafe { std::mem::transmute::<object::File<'_>, object::File<'static>>(object) };
+impl<'a> ObjectFile<'a> {
+    pub fn new(bytes: &'a [u8]) -> Result<Self> {
+        let object = object::File::parse(bytes)?;
         let build_id = Self::read_build_id(&object)?;
 
         Ok(ObjectFile {
+            bytes,
             object,
-            mmap,
             build_id,
         })
-    }
-
-    pub fn from_path(path: &Path) -> Result<Self> {
-        let file = fs::File::open(path)?;
-        Self::new(&file)
     }
 
     /// Returns an identifier for the executable using the first 8 bytes of the
     /// build id.
     pub fn id(&self) -> Result<ExecutableId> {
         self.build_id.id()
+    }
+
+    /// Returns the memory backing the executable file.
+    pub fn bytes(&self) -> &[u8] {
+        self.bytes
     }
 
     /// Returns the executable build ID.
@@ -122,7 +109,7 @@ impl ObjectFile {
 
     /// Returns the executable build ID if present. If no GNU build ID and no Go
     /// build ID are found it returns the hash of the text section.
-    pub fn read_build_id(object: &object::File<'static>) -> Result<BuildId> {
+    pub fn read_build_id(object: &object::File) -> Result<BuildId> {
         let gnu_build_id = object.build_id()?;
 
         if let Some(data) = gnu_build_id {
@@ -236,13 +223,12 @@ impl ObjectFile {
     /// virtual addresses to offsets in an executable during unwinding
     /// and symbolization.
     pub fn elf_load_segments(&self) -> Result<Vec<ElfLoad>> {
-        let mmap = &**self.mmap;
-
-        match FileKind::parse(mmap) {
+        match FileKind::parse(self.bytes) {
             Ok(FileKind::Elf32) => {
-                let header: &FileHeader32<Endianness> = FileHeader32::<Endianness>::parse(mmap)?;
+                let header: &FileHeader32<Endianness> =
+                    FileHeader32::<Endianness>::parse(self.bytes)?;
                 let endian = header.endian()?;
-                let segments = header.program_headers(endian, mmap)?;
+                let segments = header.program_headers(endian, self.bytes)?;
 
                 let mut elf_loads = Vec::new();
                 for segment in segments {
@@ -259,9 +245,10 @@ impl ObjectFile {
                 Ok(elf_loads)
             }
             Ok(FileKind::Elf64) => {
-                let header: &FileHeader64<Endianness> = FileHeader64::<Endianness>::parse(mmap)?;
+                let header: &FileHeader64<Endianness> =
+                    FileHeader64::<Endianness>::parse(self.bytes)?;
                 let endian = header.endian()?;
-                let segments = header.program_headers(endian, mmap)?;
+                let segments = header.program_headers(endian, self.bytes)?;
 
                 let mut elf_loads = Vec::new();
                 for segment in segments {
@@ -283,6 +270,60 @@ impl ObjectFile {
             )),
             Err(e) => Err(anyhow!("FileKind failed with {:?}", e)),
         }
+    }
+}
+
+/// Owns the memory-mapped executable backing an [`ObjectFile`]. Use this when
+/// there is no other owner keeping the executable's bytes alive for as long
+/// as the parsed object file is needed.
+#[derive(Debug)]
+pub struct MappedObjectFile {
+    /// Warning! `object` must always go above `mmap` to ensure it will be
+    /// dropped before. Rust guarantees that fields are dropped in the order
+    /// they are defined.
+    object: ObjectFile<'static>,
+    mmap: Box<Mmap>,
+}
+
+impl MappedObjectFile {
+    pub fn from_path(path: &Path) -> Result<Self> {
+        let file = File::open(path)?;
+        // Rust offers no guarantees on whether a "move" is done virtually or by
+        // memcpying, so to ensure that the memory value is valid we store it in
+        // the heap. Safety: Memory mapping files can cause issues if the file
+        // is modified or unmapped.
+        let mmap = Box::new(unsafe { Mmap::map(&file) }?);
+        Self::from_mmap(mmap)
+    }
+
+    pub fn from_mmap(mmap: Box<Mmap>) -> Result<Self> {
+        let object = ObjectFile::new(&mmap)?;
+        // Safety: The lifetime of `object` will outlive `mmap`'s. We ensure
+        // `mmap` lives as long as `object` by defining `object` before `mmap`.
+        let object = unsafe { std::mem::transmute::<ObjectFile<'_>, ObjectFile<'static>>(object) };
+
+        Ok(MappedObjectFile { object, mmap })
+    }
+
+    /// Returns the parsed object file.
+    pub fn object(&self) -> &ObjectFile<'_> {
+        &self.object
+    }
+
+    /// Returns an identifier for the executable using the first 8 bytes of the
+    /// build id.
+    pub fn id(&self) -> Result<ExecutableId> {
+        self.object.id()
+    }
+
+    /// Returns the memory backing the executable file.
+    pub fn bytes(&self) -> &[u8] {
+        &self.mmap
+    }
+
+    /// Returns the executable build ID.
+    pub fn build_id(&self) -> &BuildId {
+        &self.object.build_id
     }
 }
 
@@ -309,7 +350,7 @@ fn sha256_digest(data: &[u8]) -> Digest {
 }
 
 /// Read a GO build id (`.note.go.buildid`), if present
-fn go_build_id<'object>(object: &'object object::File<'static>) -> Result<Option<&'object [u8]>> {
+fn go_build_id<'data>(object: &object::File<'data>) -> Result<Option<&'data [u8]>> {
     for section in object.sections() {
         if section.name_bytes()? == b".note.go.buildid"
             && let Ok(data) = section.data()
@@ -338,15 +379,14 @@ fn go_build_id<'object>(object: &'object object::File<'static>) -> Result<Option
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use crate::buildid::BuildIdFlavour;
 
     use super::*;
 
     #[test]
     fn test_object_file_go() {
-        let object = ObjectFile::from_path(&PathBuf::from("src/testdata/main-go")).unwrap();
+        let bytes = std::fs::read("src/testdata/main-go").unwrap();
+        let object = ObjectFile::new(&bytes).unwrap();
         assert_eq!(object.build_id().flavour, BuildIdFlavour::Go);
         assert_eq!(
             object.build_id().id().unwrap(),
