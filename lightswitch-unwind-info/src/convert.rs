@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::fs::File;
 
 use anyhow::Result;
 use gimli::{
@@ -8,7 +7,6 @@ use gimli::{
     Operation::{Deref, PlusConstant, RegisterOffset},
     Register, StoreOnHeap, UnwindContext, UnwindSection, UnwindTableRow,
 };
-use memmap2::Mmap;
 use object::Architecture;
 use object::{Object, ObjectSection};
 use thiserror::Error;
@@ -268,22 +266,19 @@ pub enum UnwindData {
 // Ideally this interface should do most of the preparatory work in the
 // constructor but this is complicated by the various lifetimes.
 pub struct CompactUnwindInfoBuilder<'a> {
-    mmap: Mmap,
+    object_bytes: &'a [u8],
     callback: Box<dyn FnMut(&UnwindData) + 'a>,
     first_frame_override: Option<(u64, u64)>,
 }
 
 impl<'a> CompactUnwindInfoBuilder<'a> {
     pub fn with_callback(
-        path: &'a str,
+        executable: &'a [u8],
         first_frame_override: Option<(u64, u64)>,
         callback: impl FnMut(&UnwindData) + 'a,
     ) -> anyhow::Result<Self> {
-        let in_file = File::open(path)?;
-        let mmap = unsafe { memmap2::Mmap::map(&in_file)? };
-
         Ok(Self {
-            mmap,
+            object_bytes: executable,
             callback: Box::new(callback),
             first_frame_override,
         })
@@ -292,7 +287,7 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
     pub fn process(mut self) -> Result<(), anyhow::Error> {
         let _span = span!(Level::DEBUG, "processing unwind info").entered();
 
-        let object_file = object::File::parse(&self.mmap[..])
+        let object_file = object::File::parse(self.object_bytes)
             .map_err(|e| UnwindInfoError::ParsingObjectFile(e.to_string()))?;
 
         let endian = if object_file.is_little_endian() {
@@ -301,7 +296,7 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
             gimli::RunTimeEndian::Big
         };
 
-        let unwind_info = resolve_unwind_info(&object_file, &self.mmap, endian)?;
+        let unwind_info = resolve_unwind_info(&object_file, self.object_bytes, endian)?;
         let bases = gimli::BaseAddresses::default()
             .set_eh_frame(unwind_info.eh_frame_address)
             .set_text(unwind_info.text_address);
@@ -367,11 +362,13 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
 }
 
 pub fn compact_unwind_info(
-    path: &str,
+    executable: &[u8],
     first_frame_override: Option<(u64, u64)>,
 ) -> anyhow::Result<Vec<CompactUnwindRow>> {
     let mut unwind_info = Vec::new();
-    compact_unwind_info_callback(path, first_frame_override, |row| unwind_info.push(*row))?;
+    compact_unwind_info_callback(executable, first_frame_override, |row| {
+        unwind_info.push(*row)
+    })?;
 
     // Reduce the unwind information size
     let unwind_info_size_before = unwind_info.len();
@@ -388,14 +385,14 @@ pub fn compact_unwind_info(
 }
 
 fn compact_unwind_info_callback(
-    path: &str,
+    executable: &[u8],
     first_frame_override: Option<(u64, u64)>,
     mut callback: impl FnMut(&CompactUnwindRow),
 ) -> anyhow::Result<()> {
     let mut last_function_end_addr: Option<u64> = None;
 
     let builder =
-        CompactUnwindInfoBuilder::with_callback(path, first_frame_override, |unwind_data| {
+        CompactUnwindInfoBuilder::with_callback(executable, first_frame_override, |unwind_data| {
             match unwind_data {
                 UnwindData::Function(_start_addr, end_addr) => {
                     // Add the end addr when we hit a new func
@@ -455,8 +452,9 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/src/testdata/sectionless-elf-x86_64"
         );
+        let bytes = std::fs::read(path).unwrap();
 
-        let unwind_info = compact_unwind_info(path, None).unwrap();
+        let unwind_info = compact_unwind_info(&bytes, None).unwrap();
 
         assert!(!unwind_info.is_empty());
         assert!(unwind_info.iter().any(|row| row.pc == 0x40_0360));
