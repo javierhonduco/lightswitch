@@ -44,7 +44,7 @@ use lightswitch::kernel::kernel_build_id;
 use lightswitch::profile::{fold_profile, to_pprof};
 use lightswitch::profiler::{Profiler, ProfilerConfig};
 use lightswitch::server::{ProfileFileFormat, find_default_profile, start_profile_server};
-use lightswitch_object::ObjectFile;
+use lightswitch_object::MappedObjectFile;
 use lightswitch_object::kernel::kaslr_offset;
 use lightswitch_unwind_info::CompactUnwindInfoBuilder;
 use lightswitch_unwind_info::compact_unwind_info;
@@ -519,7 +519,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn show_unwind_info(path: &str) -> Result<(), Box<dyn Error>> {
-    let unwind_info = compact_unwind_info(path, None)?;
+    let file = File::open(path)?;
+    let mmap = unsafe { memmap2::Mmap::map(&file)? };
+    let unwind_info = compact_unwind_info(&mmap, None)?;
     for compact_row in unwind_info {
         let pc = compact_row.pc;
         let cfa_type = compact_row.cfa_type;
@@ -547,22 +549,28 @@ fn show_system_info(btf_custom_path: &Option<String>) {
 }
 
 fn show_object_file_info(path: &str) {
-    let object_file = ObjectFile::from_path(&PathBuf::from(path)).unwrap();
+    let object_file = MappedObjectFile::from_path(&PathBuf::from(path)).unwrap();
     println!("- build id: {:?}", object_file.build_id());
     if let Ok(executable_id) = object_file.build_id().id() {
         println!("- executable id: 0x{executable_id}");
     }
-    let unwind_info = CompactUnwindInfoBuilder::with_callback(path, None, |_| {});
+    let unwind_info = CompactUnwindInfoBuilder::with_callback(object_file.bytes(), None, |_| {});
     println!("- unwind info: {:?}", unwind_info.unwrap().process());
-    println!("- debug info (dwarf): {:?}", object_file.has_debug_info());
+    println!(
+        "- debug info (dwarf): {:?}",
+        object_file.object().has_debug_info()
+    );
     println!(
         "- go: {:?} {:?}",
-        object_file.is_go(),
-        object_file.go_stop_unwinding_frames()
+        object_file.object().is_go(),
+        object_file.object().go_stop_unwinding_frames()
     );
-    println!("- dynamic: {:?}", object_file.is_dynamic());
-    println!("- 64 bits: {:?}", object_file.is_64());
-    println!("- load segments: {:?}", object_file.elf_load_segments());
+    println!("- dynamic: {:?}", object_file.object().is_dynamic());
+    println!("- 64 bits: {:?}", object_file.object().is_64());
+    println!(
+        "- load segments: {:?}",
+        object_file.object().elf_load_segments()
+    );
 }
 
 #[cfg(test)]

@@ -16,6 +16,7 @@ use lightswitch_object::BuildId;
 use lightswitch_object::ElfLoad;
 use lightswitch_unwind_info::manager::FetchUnwindInfoError;
 use lru::LruCache;
+use memmap2::Mmap;
 use parking_lot::RwLock;
 use std::any::Any;
 use std::collections::HashMap;
@@ -61,7 +62,7 @@ use lightswitch_metadata::metadata_provider::{
     GlobalMetadataProvider, ThreadSafeGlobalMetadataProvider,
 };
 use lightswitch_metadata::types::TaskKey;
-use lightswitch_object::{ExecutableId, ObjectFile, Runtime};
+use lightswitch_object::{ExecutableId, MappedObjectFile, Runtime};
 use lightswitch_unwind_info::manager::UnwindInfoManager;
 use lightswitch_unwind_info::types::CompactUnwindRow;
 
@@ -205,7 +206,7 @@ fn fetch_vdso_info(
     end_addr: u64,
     offset: u64,
     vdso_path: &Path,
-) -> Result<ObjectFile> {
+) -> Result<MappedObjectFile> {
     // Read the vDSO object from the process' memory
     let file = File::open(format!("/proc/{pid}/mem")).context("Failed to open procfs mem")?;
     let size = end_addr - start_addr;
@@ -214,8 +215,18 @@ fn fetch_vdso_info(
         .context("Failed to read procfs mem")?;
     // Write to a temporary location, so it can be inspected, if needed
     fs::write(vdso_path, &buf)?;
-    let object = ObjectFile::from_path(vdso_path).context("Failed to parse vDSO object file")?;
+    let object =
+        MappedObjectFile::from_path(vdso_path).context("Failed to parse vDSO object file")?;
     Ok(object)
+}
+
+/// Memory maps an executable so its bytes can be handed to the unwind info
+/// generator without it having to reopen the file itself.
+fn mmap_executable(path: &Path) -> Result<Mmap, FetchUnwindInfoError> {
+    let file = File::open(path).map_err(FetchUnwindInfoError::Io)?;
+    // Safety: Memory mapping files can cause issues if the file is modified
+    // or unmapped while it's in use.
+    unsafe { Mmap::map(&file) }.map_err(FetchUnwindInfoError::Io)
 }
 
 enum AddUnwindInformationResult {
@@ -953,8 +964,9 @@ impl Profiler {
                     executable_path.display()
                 )
                 .entered();
+                let executable_mmap = mmap_executable(&opened_exe_path)?;
                 self.unwind_info_manager.fetch_unwind_info(
-                    &opened_exe_path,
+                    &executable_mmap,
                     executable_id,
                     Some((start_low_address, start_high_address)),
                     false,
@@ -976,8 +988,9 @@ impl Profiler {
                         executable_path.display()
                     )
                     .entered();
+                    let executable_mmap = mmap_executable(&opened_exe_path)?;
                     self.unwind_info_manager.fetch_unwind_info(
-                        &opened_exe_path,
+                        &executable_mmap,
                         executable_id,
                         None,
                         false,
@@ -1247,17 +1260,16 @@ impl Profiler {
 
     /// Open and parse an object file on disk. This is a relatively expensive
     /// operation.
-    pub fn get_object_file(&self, path: &Path) -> Result<ObjectFile> {
+    pub fn get_object_file(&self, path: &Path) -> Result<MappedObjectFile> {
         // We want to open the file as quickly as possible to minimise the
         // chances of races if the file is deleted.
-        let file = File::open(path)?;
-        let object_file = ObjectFile::new(&file)?;
+        let object_file = MappedObjectFile::from_path(path)?;
         Ok(object_file)
     }
 
     pub fn insert_object_file(
         &mut self,
-        object_file: &ObjectFile,
+        object_file: &MappedObjectFile,
         exe_path: &Path,
         is_vdso: bool,
     ) -> Result<(Option<BuildId>, ElfLoad)> {
@@ -1265,7 +1277,7 @@ impl Profiler {
         let executable_id = build_id.id()?;
 
         // If the object file has debug info, add it to our store.
-        if object_file.has_debug_info() {
+        if object_file.object().has_debug_info() {
             let name = match exe_path.file_name() {
                 Some(os_name) => os_name.to_string_lossy().to_string(),
                 None => "error".to_string(),
@@ -1291,7 +1303,7 @@ impl Profiler {
             );
         }
 
-        let Ok(elf_loads) = object_file.elf_load_segments() else {
+        let Ok(elf_loads) = object_file.object().elf_load_segments() else {
             return Err(anyhow::anyhow!("no elf load segments"));
         };
 
@@ -1305,11 +1317,11 @@ impl Profiler {
                 build_id: Some(build_id.clone()),
                 path: exe_path.to_path_buf(),
                 elf_load_segments: elf_loads,
-                is_dyn: object_file.is_dynamic(),
+                is_dyn: object_file.object().is_dynamic(),
                 references: 1,
                 native_unwind_info_size: None,
                 is_vdso,
-                runtime: object_file.runtime(),
+                runtime: object_file.object().runtime(),
             },
         );
 
