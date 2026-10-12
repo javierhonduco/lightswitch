@@ -225,6 +225,7 @@ pub fn to_pprof(
         pprof.add_sample(location_ids, sample.count as i64, labels);
     }
 
+    pprof.add_comment(&format!("lightswitch.version={}", crate::VERSION));
     pprof.build()
 }
 
