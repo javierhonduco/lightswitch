@@ -33,6 +33,8 @@ pub struct ProcessInfo {
     pub comm: String,
     pub status: ProcessStatus,
     pub mappings: ExecutableMappings,
+    /// If there's at least one 32 bit executable linked in this process.
+    pub compatibility_mode: bool,
     pub last_used: Instant,
 }
 
@@ -116,6 +118,7 @@ pub struct ObjectFileInfo {
     pub native_unwind_info_size: Option<u64>,
     pub is_vdso: bool,
     pub runtime: Runtime,
+    pub is_64: bool,
 }
 
 impl Clone for ObjectFileInfo {
@@ -129,6 +132,7 @@ impl Clone for ObjectFileInfo {
             native_unwind_info_size: self.native_unwind_info_size,
             is_vdso: self.is_vdso,
             runtime: self.runtime.clone(),
+            is_64: self.is_64,
         }
     }
 }
@@ -184,6 +188,7 @@ mod tests {
             native_unwind_info_size: None,
             is_vdso: false,
             runtime: Runtime::CLike,
+            is_64: true,
         };
 
         let mapping = ExecutableMapping {
