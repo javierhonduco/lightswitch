@@ -413,6 +413,7 @@ impl Profiler {
                                 })
                                 .collect(),
                         ),
+                        compatibility_mode: false,
                         last_used: Instant::now(),
                     },
                 );
@@ -432,6 +433,7 @@ impl Profiler {
                             native_unwind_info_size: None,
                             is_vdso: false,
                             runtime: Runtime::CLike,
+                            is_64: false,
                         },
                     );
                 }
@@ -1272,7 +1274,7 @@ impl Profiler {
         object_file: &MappedObjectFile,
         exe_path: &Path,
         is_vdso: bool,
-    ) -> Result<(Option<BuildId>, ElfLoad)> {
+    ) -> Result<(Option<BuildId>, ElfLoad, bool)> {
         let build_id = object_file.build_id();
         let executable_id = build_id.id()?;
 
@@ -1311,6 +1313,8 @@ impl Profiler {
             return Err(anyhow::anyhow!("empty elf load segments"));
         };
 
+        let is_64 = object_file.object().is_64();
+
         self.object_files.write().insert(
             executable_id,
             ObjectFileInfo {
@@ -1322,10 +1326,11 @@ impl Profiler {
                 native_unwind_info_size: None,
                 is_vdso,
                 runtime: object_file.object().runtime(),
+                is_64,
             },
         );
 
-        Ok((Some(build_id.clone()), first_elf_load))
+        Ok((Some(build_id.clone()), first_elf_load, is_64))
     }
 
     /// Returns the information needed to fill in a process
@@ -1335,7 +1340,7 @@ impl Profiler {
         opened_exe_path: &Path,
         exe_path: &Path,
         is_vdso: bool,
-    ) -> Result<(Option<BuildId>, ElfLoad)> {
+    ) -> Result<(Option<BuildId>, ElfLoad, bool)> {
         let file_id = FileId::new(opened_exe_path)?;
         let cached_executable_id = self.file_id_to_info.get(&file_id);
         let (object, executable_id) = match cached_executable_id {
@@ -1359,12 +1364,11 @@ impl Profiler {
             Entry::Occupied(mut entry) => {
                 let obj = entry.get_mut();
                 obj.references += 1;
-
                 let Some(first_load_segment) = obj.elf_load_segments.first() else {
                     return Err(anyhow::anyhow!("empty load segments"));
                 };
 
-                Ok((obj.build_id.clone(), first_load_segment.clone()))
+                Ok((obj.build_id.clone(), first_load_segment.clone(), obj.is_64))
             }
         };
 
@@ -1380,6 +1384,10 @@ impl Profiler {
         }
 
         let mut mappings = vec![];
+        // 64 bit kernels can run 32 bit executables in compatibility mode. We don't
+        // support them and only the kernel stack will show up, with the
+        // userspace frames erroring.
+        let mut compatibility_mode = false;
         for map in maps.iter() {
             if !map.perms.contains(procfs::process::MMPermissions::EXECUTE) {
                 continue;
@@ -1420,7 +1428,11 @@ impl Profiler {
                         map_start.saturating_sub(first_elf_load.p_vaddr & page_mask)
                     };
 
-                    if let Ok((Some(build_id), first_elf_load)) = info {
+                    if let Ok((Some(build_id), first_elf_load, is_64)) = info {
+                        if !is_64 {
+                            compatibility_mode = true;
+                        }
+
                         mappings.push(ExecutableMapping {
                             executable_id: build_id.id().expect("executable id"),
                             kind: ExecutableMappingType::FileBacked,
@@ -1490,7 +1502,7 @@ impl Profiler {
                     }
 
                     let info = self.get_or_insert_object_file(&vdso_path, &vdso_path, true);
-                    let Ok((Some(_build_id), _elf_load)) = info else {
+                    let Ok((Some(_build_id), _elf_load, _is_64)) = info else {
                         error!("could not insert vDSO object file due to {:?}", info);
                         continue;
                     };
@@ -1514,6 +1526,7 @@ impl Profiler {
             comm: comm.to_owned(),
             status: ProcessStatus::Running,
             mappings: ExecutableMappings(mappings),
+            compatibility_mode,
             last_used: Instant::now(),
         };
         self.procs.clone().write().insert(pid, proc_info);

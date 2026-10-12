@@ -3,6 +3,9 @@ use crate::types::{MetadataLabel, TaskKey, TaskMetadataProvider, TaskMetadataPro
 
 pub const PROCESS_NAME_KEY: &str = "process.name";
 pub const THREAD_NAME_KEY: &str = "thread.name";
+/// Whether any executable mapped in the process was built in 32 bits. This is
+/// known as compatibility mode in Linux.
+pub const COMPATIBILITY_MODE: &str = "process.compatibility_mode";
 
 pub struct TaskMetadata {}
 

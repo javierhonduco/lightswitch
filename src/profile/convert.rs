@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use lightswitch_metadata::metadata_provider::ThreadSafeGlobalMetadataProvider;
-use lightswitch_metadata::task_metadata::PROCESS_NAME_KEY;
+use lightswitch_metadata::task_metadata::{COMPATIBILITY_MODE, PROCESS_NAME_KEY};
 use lightswitch_metadata::taskname::ThreadInfo;
 use lightswitch_metadata::types::{MetadataLabel, MetadataLabelValue, TaskKey};
 
@@ -213,10 +213,13 @@ pub fn to_pprof(
             let metadata = metadata_provider.lock().unwrap().get_metadata(task_key);
             metadata
                 .into_iter()
-                .chain(vec![MetadataLabel::from_string_value(
-                    PROCESS_NAME_KEY.into(),
-                    info.comm.clone(),
-                )])
+                .chain(vec![
+                    MetadataLabel::from_string_value(PROCESS_NAME_KEY.into(), info.comm.clone()),
+                    MetadataLabel::from_string_value(
+                        COMPATIBILITY_MODE.into(),
+                        info.compatibility_mode.to_string(),
+                    ),
+                ])
                 .map(|label| {
                     pprof.new_label(&label.key, ProfileLabel { value: label.value }.into())
                 })
