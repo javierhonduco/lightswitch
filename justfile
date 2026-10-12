@@ -14,10 +14,12 @@ hack:
     cargo hack check --each-feature --all
     cargo hack check --feature-powerset --all
 
-ci: clippy test hack
+ci: clippy test
     cargo fmt --check --all
     cargo shear
     cargo rustdoc --all-features -- -Zunstable-options --check -Dwarnings
+
+ci-full: ci hack
 
 cov:
     cargo llvm-cov --open --workspace --ignore-filename-regex "(_skel)\.rs"

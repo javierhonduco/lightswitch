@@ -1,3 +1,7 @@
+Unreleased
+----------
+- pprof: Add public API to add comments
+
 v0.3.0
 ------
 - Refer to mappings by their id and not their position
