@@ -24,8 +24,27 @@ pub enum ExecutableMappingType {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum ProcessStatus {
-    Running,
+    Running { evicted: bool },
     Exited,
+}
+
+impl ProcessStatus {
+    /// Checks if the process is still running as far as we know and that we
+    /// haven't evicted any of the BPF structures for it.
+    pub fn is_running_and_loaded(&self) -> bool {
+        matches!(self, ProcessStatus::Running { evicted: false })
+    }
+
+    /// Sets a process as evicted. This means that the userspace structures are
+    /// left as-is but the BPF structures have been unloaded.
+    pub fn evict(&mut self) {
+        *self = ProcessStatus::Running { evicted: true };
+    }
+
+    /// Sets a process as running with the full BPF structures loaded.
+    pub fn running(&mut self) {
+        *self = ProcessStatus::Running { evicted: false };
+    }
 }
 
 #[derive(Debug, Clone)]

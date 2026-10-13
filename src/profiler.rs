@@ -392,7 +392,7 @@ impl Profiler {
                     KERNEL_PID,
                     ProcessInfo {
                         comm: "kernel".to_string(),
-                        status: ProcessStatus::Running,
+                        status: ProcessStatus::Running { evicted: false },
                         mappings: ExecutableMappings(
                             kernel_code_ranges
                                 .iter()
@@ -636,6 +636,33 @@ impl Profiler {
         }
     }
 
+    pub fn handle_process_eviction(&mut self, pid: Pid, partial_write: bool) {
+        debug!("eviction for process {pid}");
+        let mut procs = self.procs.write();
+        if let Some(proc_info) = procs.get_mut(&pid) {
+            if proc_info.status == ProcessStatus::Exited {
+                todo!("should not be exited");
+            }
+
+            proc_info.status.evict();
+
+            // Delete process related data from BPF maps
+            let err = self.bpf.delete_process(pid);
+            if let Err(e) = err {
+                debug!("could not remove bpf process due to {:?}", e);
+            }
+
+            for mapping in &mut proc_info.mappings.0 {
+                self.bpf.delete_process_mapping(
+                    pid,
+                    mapping.start_addr,
+                    mapping.end_addr,
+                    partial_write,
+                );
+            }
+        }
+    }
+
     pub fn handle_process_exit(&mut self, pid: Pid, partial_write: bool) {
         // TODO: remove BPF ratelimits for this process.
         let _ = self.afflicted_processes.pop(&pid);
@@ -794,19 +821,28 @@ impl Profiler {
             return;
         }
 
+        let procs = self.procs.clone();
+        let mut procs = procs.write();
+        let Some(proc) = procs.get_mut(&pid) else {
+            warn!("process {pid} could not be found");
+            return;
+        };
+
+        let status = &mut proc.status;
+        if let ProcessStatus::Running { evicted } = status
+            && *evicted
+        {
+            debug!("process {pid} was evicted before, re-adding BPF maps");
+            status.running();
+        }
+        let mappings = proc.mappings.0.clone();
+        // Release mutex since the callsite might also hold it.
+        std::mem::drop(procs);
+
         let mut errored = false;
         let mut bpf_mappings = Vec::new();
         // Get unwind info
-        for mapping in self
-            .procs
-            .clone()
-            .read()
-            .get(&pid)
-            .unwrap()
-            .mappings
-            .0
-            .iter()
-        {
+        for mapping in mappings {
             // There is no unwind information for anonymous (JIT) mappings, so
             // let's skip them. In the future we could either try to
             // synthesise the unwind information.
@@ -1164,8 +1200,7 @@ impl Profiler {
         }
 
         if self.process_is_known(pid) {
-            // We hit this when we had to reset the state of the BPF maps but we
-            // know about this process.
+            // Eviction happened, but userspace still exists
             self.add_unwind_info_for_process(pid);
             return;
         }
@@ -1175,7 +1210,7 @@ impl Profiler {
                 self.add_unwind_info_for_process(pid);
             }
             Err(AddProcessError::Eviction) => {
-                warn!("could not evict a process to make room for process: {pid}");
+                debug!("could not evict a process to make room for process: {pid}");
             }
             // Nothing to do in these two cases.
             Err(AddProcessError::ProcfsRace) => {}
@@ -1214,15 +1249,13 @@ impl Profiler {
     }
 
     /// Evicts a process. If *only_when_exceeded* is true, this will only be
-    /// done if there are more processes with  [`ProcessStatus::Running`]
-    /// status than the maximum number of processes, [`MAX_PROCESSES`].
+    /// done if there are more processes with [`ProcessStatus::Running`] status
+    /// than the maximum number of processes, [`MAX_PROCESSES`].
     /// Returns false only if an eviction is necessary but not enough time has
     /// elapsed since the last one.
     fn maybe_evict_process(&mut self, only_when_exceeded: bool) -> bool {
         let procs = self.procs.read();
-        let running_procs = procs
-            .iter()
-            .filter(|e| e.1.status == ProcessStatus::Running);
+        let running_procs = procs.iter().filter(|e| e.1.status.is_running_and_loaded());
         let should_evict = if only_when_exceeded {
             running_procs.clone().count() >= MAX_PROCESSES as usize
         } else {
@@ -1253,7 +1286,7 @@ impl Profiler {
 
         if let Some(pid) = to_evict {
             debug!("evicting pid {}", pid);
-            self.handle_process_exit(pid, false);
+            self.handle_process_eviction(pid, true);
             self.native_unwind_state.process_eviction();
         }
 
@@ -1524,7 +1557,7 @@ impl Profiler {
 
         let proc_info = ProcessInfo {
             comm: comm.to_owned(),
-            status: ProcessStatus::Running,
+            status: ProcessStatus::Running { evicted: false },
             mappings: ExecutableMappings(mappings),
             compatibility_mode,
             last_used: Instant::now(),
@@ -1615,6 +1648,66 @@ mod tests {
     use libbpf_rs::MapCore;
 
     use crate::{bpf::profiler_skel::ProfilerMaps, profiler::*};
+
+    #[test]
+    fn test_process_eviction_and_added_again() {
+        let (_stop_signal_send, stop_signal_receive) = crossbeam_channel::bounded(1);
+        let metadata_provider = std::sync::Arc::new(std::sync::Mutex::new(
+            lightswitch_metadata::metadata_provider::GlobalMetadataProvider::default(),
+        ));
+        let mut profiler = Profiler::new(
+            ProfilerConfig {
+                use_task_pt_regs_helper: false,
+                ..ProfilerConfig::default()
+            },
+            stop_signal_receive,
+            metadata_provider,
+        );
+
+        let pid = std::process::id() as i32;
+        assert_eq!(profiler.procs.read().len(), 0);
+
+        profiler.event_new_proc(pid, "test-proc".into());
+        assert_eq!(profiler.procs.read().len(), 1);
+        assert!(
+            profiler
+                .procs
+                .read()
+                .values()
+                .next()
+                .unwrap()
+                .status
+                .is_running_and_loaded()
+        );
+
+        profiler.handle_process_eviction(pid, false);
+        assert_eq!(profiler.procs.read().len(), 1);
+        matches!(
+            profiler.procs.read().values().next().unwrap().status,
+            ProcessStatus::Running { evicted: true }
+        );
+        // Object files refcount should not be zero
+        for object_file in profiler.object_files.read().values() {
+            assert!(object_file.references > 0)
+        }
+
+        profiler.event_new_proc(pid, "test-proc".into());
+        assert_eq!(profiler.procs.read().len(), 1);
+        assert!(
+            profiler
+                .procs
+                .read()
+                .values()
+                .next()
+                .unwrap()
+                .status
+                .is_running_and_loaded()
+        );
+        // The ref count should still be non-zero
+        for object_file in profiler.object_files.read().values() {
+            assert!(object_file.references > 0)
+        }
+    }
 
     #[test]
     fn test_bpf_cleanup() {
