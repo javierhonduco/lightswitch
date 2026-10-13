@@ -1,7 +1,17 @@
-Unreleased
-----------
+v0.6.0
+------
 - Expose Firefox profiler collector as a format in the CLI
 - Add Perfetto trace output and local Perfetto UI serving
+- Add `lightswitch server` support for serving Firefox and Perfetto profiles
+- Gate Kubernetes metadata, the live TUI, and deadlock detection behind features
+- Fail early when kernel BTF is missing and surface BTF status in `system-info`
+- Surface unwind diagnostics in generated profiles
+- Fix vDSO handling when processes do not share the same vDSO (i.e. compatibility mode)
+- Fix Go `.text` region calculation
+- Fix unwinding with large stack frames
+- Fix underflow in the BPF previous-page lookup
+- Fix ring buffer sizing
+- Add compatibility mode metadata when 32-bit code is in use
 
 v0.5.0
 ------

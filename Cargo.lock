@@ -2313,7 +2313,7 @@ dependencies = [
 
 [[package]]
 name = "lightswitch-metadata"
-version = "0.2.4"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "futures",
@@ -2330,7 +2330,7 @@ dependencies = [
 
 [[package]]
 name = "lightswitch-object"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "data-encoding",
@@ -2342,7 +2342,7 @@ dependencies = [
 
 [[package]]
 name = "lightswitch-proto"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "prost",
  "prost-build",
@@ -2352,7 +2352,7 @@ dependencies = [
 
 [[package]]
 name = "lightswitch-unwind-info"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "gimli 0.34.0",

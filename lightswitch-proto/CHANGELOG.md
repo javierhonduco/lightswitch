@@ -1,5 +1,5 @@
-Unreleased
-----------
+v0.3.1
+------
 - pprof: Add public API to add comments
 
 v0.3.0
