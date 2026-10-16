@@ -2,26 +2,6 @@ use crate::types::{CfaType, CompactUnwindRow};
 
 //==================
 
-pub fn remove_unnecessary_markers_2(unwind_info: &mut Vec<CompactUnwindRow>) {
-    let mut opt = RemoveSuperfluousEndOfFunctionMarkers::new();
-    let mut new_i = 0;
-    for i in 0..unwind_info.len() {
-        let row = unwind_info[i];
-
-        if let Some(r) = opt.add(&row) {
-            unwind_info[new_i] = r;
-            new_i += 1;
-        }
-    }
-
-    if let Some(r) = opt.finish() {
-        unwind_info[new_i] = r;
-        new_i += 1;
-    }
-
-    unwind_info.truncate(new_i);
-}
-
 #[derive(Default)]
 pub(crate) struct RemoveSuperfluousEndOfFunctionMarkers {
     prev_marker: Option<CompactUnwindRow>,
@@ -75,32 +55,20 @@ impl RemoveSuperfluousEndOfFunctionMarkers {
 ///
 /// The input *must* be sorted.
 pub fn remove_unnecessary_markers(unwind_info: &mut Vec<CompactUnwindRow>) {
-    let mut last_row: Option<CompactUnwindRow> = None;
+    let mut opt = RemoveSuperfluousEndOfFunctionMarkers::new();
     let mut new_i = 0;
-
     for i in 0..unwind_info.len() {
         let row = unwind_info[i];
-        if let Some(last_row_unwrapped) = last_row {
-            let previous_is_redundant_marker = (last_row_unwrapped.cfa_type
-                == CfaType::EndFdeMarker)
-                && last_row_unwrapped.pc == row.pc;
-            if previous_is_redundant_marker {
-                new_i -= 1;
-            }
-        }
 
-        let mut current_is_redundant_marker = false;
-        if let Some(last_row_unwrapped) = last_row {
-            current_is_redundant_marker =
-                (row.cfa_type == CfaType::EndFdeMarker) && last_row_unwrapped.pc == row.pc;
-        }
-
-        if !current_is_redundant_marker {
-            unwind_info[new_i] = row;
+        if let Some(r) = opt.add(&row) {
+            unwind_info[new_i] = r;
             new_i += 1;
         }
+    }
 
-        last_row = Some(row);
+    if let Some(r) = opt.finish() {
+        unwind_info[new_i] = r;
+        new_i += 1;
     }
 
     unwind_info.truncate(new_i);

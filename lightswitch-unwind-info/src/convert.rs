@@ -15,7 +15,7 @@ use tracing::{Level, debug, span};
 use crate::{
     optimize::{
         RemoveRedundant, RemoveSuperfluousEndOfFunctionMarkers, remove_redundant,
-        remove_unnecessary_markers_2,
+        remove_unnecessary_markers,
     },
     types::*,
 };
@@ -376,7 +376,7 @@ pub fn compact_unwind_info(
     // Reduce the unwind information size
     let unwind_info_size_before = unwind_info.len();
     let span = span!(Level::DEBUG, "optimize unwind info").entered();
-    remove_unnecessary_markers_2(&mut unwind_info);
+    remove_unnecessary_markers(&mut unwind_info);
     remove_redundant(&mut unwind_info);
     span.exit();
     let unwind_info_size_after = unwind_info.len();
