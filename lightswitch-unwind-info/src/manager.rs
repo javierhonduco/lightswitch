@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Instant;
 use std::{fs::File, io::BufReader};
+use tempfile::NamedTempFile;
 
 use thiserror::Error;
 use tracing::debug;
@@ -88,15 +89,12 @@ impl UnwindInfoManager {
             Ok(unwind_info) => Ok(unwind_info),
             Err(e) => {
                 if matches!(e, FetchUnwindInfoError::NotFound) {
-                    debug!("error fetch_unwind_info: {:?}, regenerating...", e);
+                    debug!("unwind info not found {:?}, writing it...", e);
                 }
                 // No matter the error, regenerate the unwind information.
-                let unwind_info =
-                    self.write_to_cache(executable, executable_id, first_frame_override);
-                if unwind_info.is_ok() {
-                    self.bump(executable_id, None);
-                }
-                unwind_info
+                self.write_to_cache(executable, executable_id, first_frame_override)
+                    .inspect(|_| self.bump(executable_id, None))?;
+                self.read_from_cache(executable_id, check_digest)
             }
         }
     }
@@ -128,15 +126,22 @@ impl UnwindInfoManager {
         executable: &[u8],
         executable_id: ExecutableId,
         first_frame_override: Option<(u64, u64)>,
-    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
-        let unwind_info_path = self.path_for(executable_id);
+    ) -> Result<(), FetchUnwindInfoError> {
         let unwind_info_writer = Writer::new(executable, first_frame_override);
-        // [`File::create`] will truncate an existing file to the size it needs.
-        let mut file =
-            BufWriter::new(File::create(unwind_info_path).map_err(FetchUnwindInfoError::Io)?);
-        unwind_info_writer
-            .write(&mut file)
-            .map_err(FetchUnwindInfoError::Write)
+        let mut temp_file =
+            NamedTempFile::new_in(&self.cache_dir).map_err(FetchUnwindInfoError::Io)?;
+        {
+            let mut file = BufWriter::new(temp_file.as_file_mut());
+            unwind_info_writer
+                .write(&mut file)
+                .map_err(FetchUnwindInfoError::Write)?;
+        }
+
+        let final_path = self.path_for(executable_id);
+        temp_file
+            .persist(final_path)
+            .map_err(|e| FetchUnwindInfoError::Io(e.error))?;
+        Ok(())
     }
 
     fn path_for(&self, executable_id: ExecutableId) -> PathBuf {
@@ -147,6 +152,10 @@ impl UnwindInfoManager {
         for direntry in fs::read_dir(&self.cache_dir)?.flatten() {
             let name = direntry.file_name();
             let Some(name) = name.to_str() else { continue };
+            // Skip temporary files that are mid-write
+            if name.starts_with(".tmp") {
+                continue;
+            };
             let executable_id = ExecutableId::from_str(name)?;
 
             let metadata = fs::metadata(direntry.path())?;

@@ -1,4 +1,37 @@
+use std::sync::RwLock;
+
 use crate::types::{CfaType, CompactUnwindRow};
+
+#[derive(Default)]
+pub(crate) struct RemoveSuperfluousEndOfFunctionMarkers {
+    prev_marker: Option<CompactUnwindRow>,
+}
+
+impl RemoveSuperfluousEndOfFunctionMarkers {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn add(&mut self, row: &CompactUnwindRow, emit: &mut impl FnMut(CompactUnwindRow)) {
+        if let Some(marker) = self.prev_marker.take()
+            && marker.pc != row.pc
+        {
+            emit(marker)
+        }
+
+        if row.cfa_type == CfaType::EndFdeMarker {
+            self.prev_marker = Some(*row);
+        } else {
+            emit(*row)
+        }
+    }
+
+    pub(crate) fn finish(&mut self, emit: &mut impl FnMut(CompactUnwindRow)) {
+        if let Some(row) = self.prev_marker.take() {
+            emit(row);
+        }
+    }
+}
 
 /// Remove unnecessary end of function markers.
 ///
@@ -8,49 +41,36 @@ use crate::types::{CfaType, CompactUnwindRow};
 ///
 /// The input *must* be sorted.
 pub fn remove_unnecessary_markers(unwind_info: &mut Vec<CompactUnwindRow>) {
-    let mut last_row: Option<CompactUnwindRow> = None;
+    let unwind_info = RwLock::new(unwind_info);
+    let mut opt = RemoveSuperfluousEndOfFunctionMarkers::new();
     let mut new_i = 0;
+    let mut emit = |row| {
+        unwind_info.write().expect("lock")[new_i] = row;
+        new_i += 1;
+    };
 
-    for i in 0..unwind_info.len() {
-        let row = unwind_info[i];
-
-        if let Some(last_row_unwrapped) = last_row {
-            let previous_is_redundant_marker = (last_row_unwrapped.cfa_type
-                == CfaType::EndFdeMarker)
-                && last_row_unwrapped.pc == row.pc;
-            if previous_is_redundant_marker {
-                new_i -= 1;
-            }
-        }
-
-        let mut current_is_redundant_marker = false;
-        if let Some(last_row_unwrapped) = last_row {
-            current_is_redundant_marker =
-                (row.cfa_type == CfaType::EndFdeMarker) && last_row_unwrapped.pc == row.pc;
-        }
-
-        if !current_is_redundant_marker {
-            unwind_info[new_i] = row;
-            new_i += 1;
-        }
-
-        last_row = Some(row);
+    let len = unwind_info.read().expect("lock").len();
+    for i in 0..len {
+        let row = unwind_info.read().expect("lock")[i];
+        opt.add(&row, &mut emit);
     }
 
-    unwind_info.truncate(new_i);
+    opt.finish(&mut emit);
+
+    unwind_info.write().expect("lock").truncate(new_i);
 }
 
 #[derive(Default)]
-struct RemoveRedundant {
+pub(crate) struct RemoveRedundant {
     last_row: Option<CompactUnwindRow>,
 }
 
 impl RemoveRedundant {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    fn add<'a>(&mut self, row: &'a CompactUnwindRow) -> Option<&'a CompactUnwindRow> {
+    pub(crate) fn add<'a>(&mut self, row: &'a CompactUnwindRow) -> Option<&'a CompactUnwindRow> {
         let mut redundant = false;
         let mut result = None;
         if let Some(last_row_unwrapped) = self.last_row {

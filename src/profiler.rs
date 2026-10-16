@@ -1,3 +1,4 @@
+use crate::bpf_objects::AddPagesError;
 use crate::bpf_objects::Bpf;
 use crate::bpf_objects::clear_map;
 use crate::bpf_poller::start_poll_thread;
@@ -253,7 +254,7 @@ enum AddUnwindInformationError {
     #[error("failed to write to BPF map that stores unwind information")]
     BpfUnwindWrite { source: anyhow::Error },
     #[error("failed to write to BPF map that stores pages")]
-    BpfPages { source: libbpf_rs::Error },
+    BpfPages { source: AddPagesError },
     #[error("stripped Go binaries aren't supported yet")]
     StrippedGo,
     #[error("failed to fetch unwind info")]
@@ -889,6 +890,7 @@ impl Profiler {
             match &add_unwind_res {
                 Ok(_) => {}
                 Err(AddUnwindInformationError::FetchUnwind(FetchUnwindInfoError::Io(e)))
+                    // TODO: check for this path to be procfs
                     if e.kind() == ErrorKind::NotFound => {}
                 Err(e) => {
                     warn!(
@@ -1237,6 +1239,7 @@ impl Profiler {
             match self.add_unwind_information_for_executable(pid, executable_id, s, e) {
                 Ok(_) => {}
                 Err(AddUnwindInformationError::FetchUnwind(FetchUnwindInfoError::Io(e)))
+                    // TODO: check for this path to be procfs
                     if e.kind() == ErrorKind::NotFound => {}
                 Err(e) => {
                     warn!(

@@ -1,3 +1,7 @@
+Unreleased
+----------
+- Do not allocate the whole unwind information in memory when writing it to disk
+
 v0.1.0
 ------
 - Move unwind info handling to its own crate

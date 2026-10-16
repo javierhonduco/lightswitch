@@ -17,10 +17,9 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 ring = { workspace = true }
-
-[dev-dependencies]
 tempfile = { workspace = true }
 
-# TODO: enable
-# [lints]
-# workspace = true
+[dev-dependencies]
+
+[lints]
+workspace = true

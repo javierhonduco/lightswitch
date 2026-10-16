@@ -31,6 +31,14 @@ use lightswitch_unwind_info::types::CompactUnwindRow;
 use memmap2::MmapOptions;
 use tracing::{debug, error, info, warn};
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AddPagesError {
+    #[error("i/o error")]
+    Libbpf(#[from] libbpf_rs::Error),
+    #[error("failed integer conversion")]
+    Reader(#[from] std::num::TryFromIntError),
+}
+
 pub(crate) struct Bpf {
     native_unwinder_open_object: ManuallyDrop<Box<MaybeUninit<OpenObject>>>,
     pub(crate) native_unwinder: ManuallyDrop<ProfilerSkel<'static>>,
@@ -373,8 +381,8 @@ impl Bpf {
         &self,
         unwind_info: &[CompactUnwindRow],
         executable_id: u64,
-    ) -> Result<(), libbpf_rs::Error> {
-        let pages = lightswitch_unwind_info::pages::to_pages(unwind_info);
+    ) -> Result<(), AddPagesError> {
+        let pages = lightswitch_unwind_info::pages::to_pages(unwind_info)?;
         for page in pages {
             let page_key = page_key_t {
                 file_offset: page.address,
