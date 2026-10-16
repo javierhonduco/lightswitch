@@ -25,6 +25,9 @@ impl RemoveSuperfluousEndOfFunctionMarkers {
                 result = Some(*row);
             } else {
                 // not redundant, add
+                // if row.cfa_type == CfaType::EndFdeMarker {
+                //     return None;
+                // }
                 self.prev_marker = Some(*row);
                 result = Some(prev_marker);
             }
@@ -134,7 +137,7 @@ mod tests {
             },
         ];
         let mut processed = unwind_info.clone();
-        remove_unnecessary_markers_2(&mut processed);
+        remove_unnecessary_markers(&mut processed);
 
         assert_eq!(
             processed,
