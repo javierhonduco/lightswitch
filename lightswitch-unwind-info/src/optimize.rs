@@ -1,12 +1,6 @@
-use std::{
-    cell::RefCell,
-    rc::Rc,
-    sync::{Mutex, RwLock},
-};
+use std::sync::RwLock;
 
-use crate::types::{CfaType, CompactUnwindRow, RbpType::CfaOffset};
-
-//==================
+use crate::types::{CfaType, CompactUnwindRow};
 
 #[derive(Default)]
 pub(crate) struct RemoveSuperfluousEndOfFunctionMarkers {
@@ -19,10 +13,10 @@ impl RemoveSuperfluousEndOfFunctionMarkers {
     }
 
     pub(crate) fn add(&mut self, row: &CompactUnwindRow, emit: &mut impl FnMut(CompactUnwindRow)) {
-        if let Some(marker) = self.prev_marker.take() {
-            if marker.pc != row.pc {
-                emit(marker)
-            }
+        if let Some(marker) = self.prev_marker.take()
+            && marker.pc != row.pc
+        {
+            emit(marker)
         }
 
         if row.cfa_type == CfaType::EndFdeMarker {
@@ -39,7 +33,6 @@ impl RemoveSuperfluousEndOfFunctionMarkers {
     }
 }
 
-//==================
 /// Remove unnecessary end of function markers.
 ///
 /// A function marker is superfluous when there is another unwind information

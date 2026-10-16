@@ -95,14 +95,13 @@ impl<'a> Writer<'a> {
     ) -> Result<(UnwindInformationDigest, usize), WriterError> {
         let mut context = Context::new(&SHA256);
         let mut len = 0;
-
         compact_unwind_info_callback_opt(self.executable, self.first_frame_override, |row| {
             let unwind_row_data = unsafe { plain::as_bytes(row) };
             context.update(unwind_row_data);
-            writer.write_all(unwind_row_data).unwrap();
+            let _ = writer.write_all(unwind_row_data).unwrap();
             len += 1;
         })
-        .unwrap();
+        .map_err(|e| WriterError::UnwindInfoGeneric(format!("{:?}", e)))?;
 
         let mut buffer = [0; 8];
         let _ = context.finish().as_ref().read(&mut buffer)?;

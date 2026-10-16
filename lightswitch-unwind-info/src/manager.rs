@@ -88,14 +88,11 @@ impl UnwindInfoManager {
             Ok(unwind_info) => Ok(unwind_info),
             Err(e) => {
                 if matches!(e, FetchUnwindInfoError::NotFound) {
-                    debug!("error fetch_unwind_info: {:?}, regenerating...", e);
+                    debug!("unwind info not found {:?}, writing it...", e);
                 }
                 // No matter the error, regenerate the unwind information.
-                let cache_write =
-                    self.write_to_cache(executable, executable_id, first_frame_override);
-                if cache_write.is_ok() {
-                    self.bump(executable_id, None);
-                }
+                self.write_to_cache(executable, executable_id, first_frame_override)
+                    .inspect(|_| self.bump(executable_id, None))?;
                 self.read_from_cache(executable_id, check_digest)
             }
         }
