@@ -1,5 +1,72 @@
 use crate::types::{CfaType, CompactUnwindRow};
 
+//==================
+
+pub fn remove_unnecessary_markers_2(unwind_info: &mut Vec<CompactUnwindRow>) {
+    let mut opt = RemoveSuperfluousEndOfFunctionMarkers::new();
+    let mut new_i = 0;
+    for i in 0..unwind_info.len() {
+        let row = unwind_info[i];
+
+        if let Some(r) = opt.add(&row) {
+            unwind_info[new_i] = r;
+            new_i += 1;
+        }
+    }
+
+    if let Some(r) = opt.finish() {
+        unwind_info[new_i] = r;
+        new_i += 1;
+    }
+
+    unwind_info.truncate(new_i);
+}
+
+#[derive(Default)]
+pub(crate) struct RemoveSuperfluousEndOfFunctionMarkers {
+    prev_marker: Option<CompactUnwindRow>,
+}
+
+impl RemoveSuperfluousEndOfFunctionMarkers {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn add<'a>(&'a mut self, row: &CompactUnwindRow) -> Option<CompactUnwindRow> {
+        let mut result = None;
+
+        ///////////////////////////////////
+
+        // last one was a marker, let's check if it's redundant
+        if let Some(prev_marker) = self.prev_marker {
+            if prev_marker.pc == row.pc {
+                // redundant
+                self.prev_marker = None;
+                result = Some(*row);
+            } else {
+                // not redundant, add
+                self.prev_marker = Some(*row);
+                result = Some(prev_marker);
+            }
+        } else {
+            // We don't know if we should add it until we see the next one
+            if row.cfa_type == CfaType::EndFdeMarker {
+                self.prev_marker = Some(*row);
+            } else {
+                self.prev_marker = None;
+                result = Some(*row);
+            }
+        }
+
+        result
+    }
+
+    pub(crate) fn finish(&self) -> Option<CompactUnwindRow> {
+        self.prev_marker
+    }
+}
+
+//==================
 /// Remove unnecessary end of function markers.
 ///
 /// A function marker is superfluous when there is another unwind information
@@ -13,6 +80,11 @@ pub fn remove_unnecessary_markers(unwind_info: &mut Vec<CompactUnwindRow>) {
 
     for i in 0..unwind_info.len() {
         let row = unwind_info[i];
+        // don't touch the last one
+        // if i == unwind_info.len() - 1 {
+        //     new_i += 1;
+        //     break;
+        // }
 
         if let Some(last_row_unwrapped) = last_row {
             let previous_is_redundant_marker = (last_row_unwrapped.cfa_type
@@ -41,16 +113,16 @@ pub fn remove_unnecessary_markers(unwind_info: &mut Vec<CompactUnwindRow>) {
 }
 
 #[derive(Default)]
-struct RemoveRedundant {
+pub(crate) struct RemoveRedundant {
     last_row: Option<CompactUnwindRow>,
 }
 
 impl RemoveRedundant {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    fn add<'a>(&mut self, row: &'a CompactUnwindRow) -> Option<&'a CompactUnwindRow> {
+    pub(crate) fn add<'a>(&mut self, row: &'a CompactUnwindRow) -> Option<&'a CompactUnwindRow> {
         let mut redundant = false;
         let mut result = None;
         if let Some(last_row_unwrapped) = self.last_row {
@@ -100,7 +172,7 @@ mod tests {
             },
         ];
         let mut processed = unwind_info.clone();
-        remove_unnecessary_markers(&mut processed);
+        remove_unnecessary_markers_2(&mut processed);
 
         assert_eq!(
             processed,

@@ -13,7 +13,9 @@ use thiserror::Error;
 use tracing::{Level, debug, span};
 
 use crate::{
-    optimize::{remove_redundant, remove_unnecessary_markers},
+    optimize::{
+        RemoveRedundant, RemoveSuperfluousEndOfFunctionMarkers, remove_redundant, remove_unnecessary_markers_2,
+    },
     types::*,
 };
 
@@ -373,7 +375,7 @@ pub fn compact_unwind_info(
     // Reduce the unwind information size
     let unwind_info_size_before = unwind_info.len();
     let span = span!(Level::DEBUG, "optimize unwind info").entered();
-    remove_unnecessary_markers(&mut unwind_info);
+    remove_unnecessary_markers_2(&mut unwind_info);
     remove_redundant(&mut unwind_info);
     span.exit();
     let unwind_info_size_after = unwind_info.len();
@@ -384,7 +386,32 @@ pub fn compact_unwind_info(
     Ok(unwind_info)
 }
 
-fn compact_unwind_info_callback(
+pub(crate) fn compact_unwind_info_callback_opt(
+    executable: &[u8],
+    first_frame_override: Option<(u64, u64)>,
+    mut callback: impl FnMut(&CompactUnwindRow),
+) -> anyhow::Result<()> {
+    let mut opt1 = RemoveSuperfluousEndOfFunctionMarkers::new();
+    let mut opt2 = RemoveRedundant::new();
+
+    compact_unwind_info_callback(executable, first_frame_override, |row| {
+        if let Some(row_opt1) = opt1.add(row) {
+            if let Some(row_opt2) = opt2.add(&row_opt1) {
+                callback(row_opt2)
+            }
+        }
+    })?;
+
+    if let Some(row_opt1) = opt1.finish() {
+        if let Some(row_opt2) = opt2.add(&row_opt1) {
+            callback(row_opt2)
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn compact_unwind_info_callback(
     executable: &[u8],
     first_frame_override: Option<(u64, u64)>,
     mut callback: impl FnMut(&CompactUnwindRow),
