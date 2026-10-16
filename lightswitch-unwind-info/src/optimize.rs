@@ -1,4 +1,10 @@
-use crate::types::{CfaType, CompactUnwindRow};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::{Mutex, RwLock},
+};
+
+use crate::types::{CfaType, CompactUnwindRow, RbpType::CfaOffset};
 
 //==================
 
@@ -12,40 +18,24 @@ impl RemoveSuperfluousEndOfFunctionMarkers {
         Self::default()
     }
 
-    pub(crate) fn add<'a>(&'a mut self, row: &CompactUnwindRow) -> Option<CompactUnwindRow> {
-        let mut result = None;
-
-        ///////////////////////////////////
-
-        // last one was a marker, let's check if it's redundant
-        if let Some(prev_marker) = self.prev_marker {
-            if prev_marker.pc == row.pc {
-                // redundant
-                self.prev_marker = None;
-                result = Some(*row);
-            } else {
-                // not redundant, add
-                // if row.cfa_type == CfaType::EndFdeMarker {
-                //     return None;
-                // }
-                self.prev_marker = Some(*row);
-                result = Some(prev_marker);
-            }
-        } else {
-            // We don't know if we should add it until we see the next one
-            if row.cfa_type == CfaType::EndFdeMarker {
-                self.prev_marker = Some(*row);
-            } else {
-                self.prev_marker = None;
-                result = Some(*row);
+    pub(crate) fn add(&mut self, row: &CompactUnwindRow, emit: &mut impl FnMut(CompactUnwindRow)) {
+        if let Some(marker) = self.prev_marker.take() {
+            if marker.pc != row.pc {
+                emit(marker)
             }
         }
 
-        result
+        if row.cfa_type == CfaType::EndFdeMarker {
+            self.prev_marker = Some(*row);
+        } else {
+            emit(*row)
+        }
     }
 
-    pub(crate) fn finish(&self) -> Option<CompactUnwindRow> {
-        self.prev_marker
+    pub(crate) fn finish(&mut self, emit: &mut impl FnMut(CompactUnwindRow)) {
+        if let Some(row) = self.prev_marker.take() {
+            emit(row);
+        }
     }
 }
 
@@ -58,23 +48,23 @@ impl RemoveSuperfluousEndOfFunctionMarkers {
 ///
 /// The input *must* be sorted.
 pub fn remove_unnecessary_markers(unwind_info: &mut Vec<CompactUnwindRow>) {
+    let unwind_info = RwLock::new(unwind_info);
     let mut opt = RemoveSuperfluousEndOfFunctionMarkers::new();
     let mut new_i = 0;
-    for i in 0..unwind_info.len() {
-        let row = unwind_info[i];
-
-        if let Some(r) = opt.add(&row) {
-            unwind_info[new_i] = r;
-            new_i += 1;
-        }
-    }
-
-    if let Some(r) = opt.finish() {
-        unwind_info[new_i] = r;
+    let mut emit = |row| {
+        unwind_info.write().unwrap()[new_i] = row;
         new_i += 1;
+    };
+
+    let len = unwind_info.read().unwrap().len();
+    for i in 0..len {
+        let row = unwind_info.read().unwrap()[i];
+        opt.add(&row, &mut emit);
     }
 
-    unwind_info.truncate(new_i);
+    opt.finish(&mut emit);
+
+    unwind_info.write().unwrap().truncate(new_i);
 }
 
 #[derive(Default)]

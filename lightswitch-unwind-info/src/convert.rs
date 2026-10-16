@@ -395,19 +395,17 @@ pub(crate) fn compact_unwind_info_callback_opt(
     let mut opt1 = RemoveSuperfluousEndOfFunctionMarkers::new();
     let mut opt2 = RemoveRedundant::new();
 
-    compact_unwind_info_callback(executable, first_frame_override, |row| {
-        if let Some(row_opt1) = opt1.add(row) {
-            if let Some(row_opt2) = opt2.add(&row_opt1) {
-                callback(row_opt2)
-            }
+    let mut emit = |row: CompactUnwindRow| {
+        if let Some(r) = opt2.add(&row) {
+            callback(r);
         }
+    };
+
+    compact_unwind_info_callback(executable, first_frame_override, |row| {
+        opt1.add(row, &mut emit);
     })?;
 
-    if let Some(row_opt1) = opt1.finish() {
-        if let Some(row_opt2) = opt2.add(&row_opt1) {
-            callback(row_opt2)
-        }
-    }
+    opt1.finish(&mut emit);
 
     Ok(())
 }
