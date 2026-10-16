@@ -7,7 +7,7 @@ use plain::Plain;
 use ring::digest::{Context, SHA256};
 use thiserror::Error;
 
-use crate::compact_unwind_info;
+use crate::convert::compact_unwind_info_callback_opt;
 use crate::types::{CompactUnwindRow, CompactUnwindRowWire};
 
 // To identify this binary file type.
@@ -62,26 +62,13 @@ impl<'a> Writer<'a> {
         }
     }
 
-    pub fn write<W: Write + Seek>(
-        self,
-        writer: &mut W,
-    ) -> Result<Vec<CompactUnwindRow>, WriterError> {
-        let unwind_info = self.read_unwind_info(self.first_frame_override)?;
-        // Write dummy header.
+    pub fn write<W: Write + Seek>(self, writer: &mut W) -> Result<(), WriterError> {
         self.write_header(writer, 0, None)?;
-        let digest = self.write_unwind_info(writer, &unwind_info)?;
-        // Write real header.
+        let (digest, unwind_info_len) = self.write_unwind_info(writer)?;
         writer.seek(SeekFrom::Start(0))?;
-        self.write_header(writer, unwind_info.len(), Some(digest))?;
-        Ok(unwind_info)
-    }
+        self.write_header(writer, unwind_info_len, Some(digest))?;
 
-    fn read_unwind_info(
-        &self,
-        first_frame_override: Option<(u64, u64)>,
-    ) -> Result<Vec<CompactUnwindRow>, WriterError> {
-        compact_unwind_info(self.executable, first_frame_override)
-            .map_err(|e| WriterError::UnwindInfoGeneric(e.to_string()))
+        Ok(())
     }
 
     fn write_header(
@@ -105,20 +92,22 @@ impl<'a> Writer<'a> {
     fn write_unwind_info(
         &self,
         writer: &mut impl Write,
-        unwind_info: &[CompactUnwindRow],
-    ) -> Result<UnwindInformationDigest, WriterError> {
+    ) -> Result<(UnwindInformationDigest, usize), WriterError> {
         let mut context = Context::new(&SHA256);
+        let mut len = 0;
 
-        for unwind_row in unwind_info {
-            let unwind_row_data = unsafe { plain::as_bytes(unwind_row) };
+        compact_unwind_info_callback_opt(self.executable, self.first_frame_override, |row| {
+            let unwind_row_data = unsafe { plain::as_bytes(row) };
             context.update(unwind_row_data);
-            writer.write_all(unwind_row_data)?;
-        }
+            writer.write_all(unwind_row_data).unwrap();
+            len += 1;
+        })
+        .unwrap();
 
         let mut buffer = [0; 8];
         let _ = context.finish().as_ref().read(&mut buffer)?;
 
-        Ok(u64::from_ne_bytes(buffer))
+        Ok((u64::from_ne_bytes(buffer), len))
     }
 }
 
@@ -251,7 +240,10 @@ mod tests {
         let unwind_info = reader.unwrap().unwind_info();
         assert!(unwind_info.is_ok());
         let unwind_info = unwind_info.unwrap();
-        assert_eq!(unwind_info, compact_unwind_info(&mmap, None).unwrap());
+        assert_eq!(
+            unwind_info,
+            crate::compact_unwind_info(&mmap, None).unwrap()
+        );
     }
 
     #[test]

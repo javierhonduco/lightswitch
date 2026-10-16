@@ -80,12 +80,6 @@ pub fn remove_unnecessary_markers(unwind_info: &mut Vec<CompactUnwindRow>) {
 
     for i in 0..unwind_info.len() {
         let row = unwind_info[i];
-        // don't touch the last one
-        // if i == unwind_info.len() - 1 {
-        //     new_i += 1;
-        //     break;
-        // }
-
         if let Some(last_row_unwrapped) = last_row {
             let previous_is_redundant_marker = (last_row_unwrapped.cfa_type
                 == CfaType::EndFdeMarker)

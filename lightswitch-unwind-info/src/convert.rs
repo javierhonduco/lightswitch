@@ -14,7 +14,8 @@ use tracing::{Level, debug, span};
 
 use crate::{
     optimize::{
-        RemoveRedundant, RemoveSuperfluousEndOfFunctionMarkers, remove_redundant, remove_unnecessary_markers_2,
+        RemoveRedundant, RemoveSuperfluousEndOfFunctionMarkers, remove_redundant,
+        remove_unnecessary_markers_2,
     },
     types::*,
 };

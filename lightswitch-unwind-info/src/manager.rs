@@ -91,12 +91,12 @@ impl UnwindInfoManager {
                     debug!("error fetch_unwind_info: {:?}, regenerating...", e);
                 }
                 // No matter the error, regenerate the unwind information.
-                let unwind_info =
+                let cache_write =
                     self.write_to_cache(executable, executable_id, first_frame_override);
-                if unwind_info.is_ok() {
+                if cache_write.is_ok() {
                     self.bump(executable_id, None);
                 }
-                unwind_info
+                self.read_from_cache(executable_id, check_digest)
             }
         }
     }
@@ -128,7 +128,7 @@ impl UnwindInfoManager {
         executable: &[u8],
         executable_id: ExecutableId,
         first_frame_override: Option<(u64, u64)>,
-    ) -> Result<Vec<CompactUnwindRow>, FetchUnwindInfoError> {
+    ) -> Result<(), FetchUnwindInfoError> {
         let unwind_info_path = self.path_for(executable_id);
         let unwind_info_writer = Writer::new(executable, first_frame_override);
         // [`File::create`] will truncate an existing file to the size it needs.
@@ -136,7 +136,9 @@ impl UnwindInfoManager {
             BufWriter::new(File::create(unwind_info_path).map_err(FetchUnwindInfoError::Io)?);
         unwind_info_writer
             .write(&mut file)
-            .map_err(FetchUnwindInfoError::Write)
+            .map_err(FetchUnwindInfoError::Write)?;
+
+        Ok(())
     }
 
     fn path_for(&self, executable_id: ExecutableId) -> PathBuf {
