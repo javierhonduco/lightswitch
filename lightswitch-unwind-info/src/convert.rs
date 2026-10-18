@@ -13,7 +13,10 @@ use thiserror::Error;
 use tracing::{Level, debug, span};
 
 use crate::{
-    optimize::{remove_redundant, remove_unnecessary_markers},
+    optimize::{
+        RemoveRedundant, RemoveSuperfluousEndOfFunctionMarkers, remove_redundant,
+        remove_unnecessary_markers,
+    },
     types::*,
 };
 
@@ -384,7 +387,30 @@ pub fn compact_unwind_info(
     Ok(unwind_info)
 }
 
-fn compact_unwind_info_callback(
+pub(crate) fn compact_unwind_info_callback_opt(
+    executable: &[u8],
+    first_frame_override: Option<(u64, u64)>,
+    mut callback: impl FnMut(&CompactUnwindRow),
+) -> anyhow::Result<()> {
+    let mut opt1 = RemoveSuperfluousEndOfFunctionMarkers::new();
+    let mut opt2 = RemoveRedundant::new();
+
+    let mut emit = |row: CompactUnwindRow| {
+        if let Some(r) = opt2.add(&row) {
+            callback(r);
+        }
+    };
+
+    compact_unwind_info_callback(executable, first_frame_override, |row| {
+        opt1.add(row, &mut emit);
+    })?;
+
+    opt1.finish(&mut emit);
+
+    Ok(())
+}
+
+pub(crate) fn compact_unwind_info_callback(
     executable: &[u8],
     first_frame_override: Option<(u64, u64)>,
     mut callback: impl FnMut(&CompactUnwindRow),

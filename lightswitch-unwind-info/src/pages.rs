@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, num::TryFromIntError};
 
 use crate::types::CompactUnwindRow;
 
@@ -28,7 +28,7 @@ impl fmt::Debug for Page {
 /// unwind info in a given page in 16 iterations, and represent the program
 /// counters with 32 bits (32 bits for PC + 16 bits for page offset = 48 bits,
 /// which is enough as the upper 16 bits are unused).
-pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
+pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Result<Vec<Page>, TryFromIntError> {
     let page_size_bits = 16;
     let page_size = 2_u64.pow(page_size_bits);
     let low_bits_mask = page_size - 1;
@@ -53,8 +53,8 @@ pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
                     for address in (prev_pc_high..high_pc).step_by(page_size as usize) {
                         pages.push(Page {
                             address,
-                            low_index: prev_index.try_into().unwrap(),
-                            high_index: i.try_into().unwrap(),
+                            low_index: prev_index.try_into()?,
+                            high_index: i.try_into()?,
                         });
                     }
                     prev_index = i;
@@ -63,8 +63,8 @@ pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
                 } else if prev_pc_high != high_pc {
                     pages.push(Page {
                         address: prev_pc_high,
-                        low_index: prev_index.try_into().unwrap(),
-                        high_index: i.try_into().unwrap(),
+                        low_index: prev_index.try_into()?,
+                        high_index: i.try_into()?,
                     });
                     prev_index = i;
                     prev_high_pc = Some(high_pc);
@@ -78,12 +78,12 @@ pub fn to_pages(unwind_info: &[CompactUnwindRow]) -> Vec<Page> {
     if let Some(id) = prev_high_pc {
         pages.push(Page {
             address: id,
-            low_index: prev_index.try_into().unwrap(),
-            high_index: unwind_info.len().try_into().unwrap(),
+            low_index: prev_index.try_into()?,
+            high_index: unwind_info.len().try_into()?,
         });
     }
 
-    pages
+    Ok(pages)
 }
 
 #[cfg(test)]
@@ -93,12 +93,12 @@ mod tests {
     #[test]
     fn test_to_pages() {
         let unwind_info = vec![];
-        let pages = to_pages(&unwind_info);
+        let pages = to_pages(&unwind_info).unwrap();
         assert_eq!(pages, vec![]);
 
         let row = CompactUnwindRow::default();
         let unwind_info = vec![CompactUnwindRow { pc: 0x100, ..row }];
-        let pages = to_pages(&unwind_info);
+        let pages = to_pages(&unwind_info).unwrap();
         assert_eq!(
             pages,
             vec![Page {
@@ -123,7 +123,7 @@ mod tests {
                 ..row
             },
         ];
-        let pages = to_pages(&unwind_info);
+        let pages = to_pages(&unwind_info).unwrap();
         assert!(
             unwind_info.is_sorted_by(|a, b| a.pc <= b.pc),
             "unwind info is sorted"
@@ -160,7 +160,7 @@ mod tests {
                 ..row
             },
         ];
-        let pages = to_pages(&unwind_info);
+        let pages = to_pages(&unwind_info).unwrap();
         assert_eq!(
             pages,
             vec![
@@ -196,7 +196,7 @@ mod tests {
         let page_size_bits = 16;
         let low_bits_mask = u64::pow(2, page_size_bits) - 1;
         let high_bits_mask = u64::MAX ^ low_bits_mask;
-        let pages = to_pages(&unwind_info);
+        let pages = to_pages(&unwind_info).unwrap();
 
         for row in &unwind_info {
             let pc = row.pc;
