@@ -16,6 +16,7 @@ use libbpf_rs::Link;
 use lightswitch_object::BuildId;
 use lightswitch_object::ElfLoad;
 use lightswitch_unwind_info::manager::FetchUnwindInfoError;
+use lightswitch_unwind_info::manager::UnwindInfo;
 use lru::LruCache;
 use memmap2::Mmap;
 use parking_lot::RwLock;
@@ -990,7 +991,7 @@ impl Profiler {
                 }
 
                 unwind_info.sort_by_key(|e| e.pc);
-                Ok(unwind_info)
+                Ok(UnwindInfo::Vec(unwind_info))
             }
             Runtime::Zig {
                 start_low_address,
@@ -1015,10 +1016,10 @@ impl Profiler {
             Runtime::CLike => {
                 if needs_synthesis {
                     debug!("synthetising arm64 unwind information using frame pointers for vDSO");
-                    Ok(vec![
+                    Ok(UnwindInfo::Vec(vec![
                         CompactUnwindRow::frame_pointer(start_address, is_arm64),
                         CompactUnwindRow::stop_unwinding(end_address),
-                    ])
+                    ]))
                 } else {
                     let _span = span!(
                         Level::DEBUG,

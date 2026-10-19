@@ -23,6 +23,7 @@ use lightswitch::collector::{
 };
 use lightswitch::debug_info::DebugInfoManager;
 use lightswitch::profile::symbolize_profile;
+use lightswitch_unwind_info::compact_unwind_info;
 use nix::unistd::Gid;
 use nix::unistd::Uid;
 #[cfg(feature = "live-tui")]
@@ -47,7 +48,6 @@ use lightswitch::server::{ProfileFileFormat, find_default_profile, start_profile
 use lightswitch_object::MappedObjectFile;
 use lightswitch_object::kernel::kaslr_offset;
 use lightswitch_unwind_info::CompactUnwindInfoBuilder;
-use lightswitch_unwind_info::compact_unwind_info;
 
 mod args;
 mod killswitch;
@@ -529,7 +529,8 @@ fn show_unwind_info(path: &str) -> Result<(), Box<dyn Error>> {
         let cfa_offset = compact_row.cfa_offset;
         let rbp_offset = compact_row.rbp_offset;
         println!(
-            "pc: {:x} cfa_type: {:<2} rbp_type: {:<2} cfa_offset: {:<4} rbp_offset: {:<4}",
+            "pc: {:x} cfa_type: {:<2} rbp_type: {:<2} cfa_offset: {:<4}
+    rbp_offset: {:<4}",
             pc, cfa_type as u8, rbp_type as u8, cfa_offset, rbp_offset
         );
     }
