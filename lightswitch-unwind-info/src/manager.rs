@@ -360,7 +360,7 @@ mod tests {
         // both when it's a cache miss and a cache hit.
         for _ in 0..2 {
             let manager_unwind_info =
-                manager.fetch_unwind_info(&mmap, ExecutableId(0xFABADA), None, false);
+                manager.fetch_unwind_info(&mmap, ExecutableId(0xFABADA), None, true);
             let manager_unwind_info = manager_unwind_info.unwrap();
             assert_eq!(unwind_info, manager_unwind_info.to_vec().unwrap());
         }
