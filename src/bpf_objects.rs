@@ -27,7 +27,7 @@ use libbpf_rs::{
 use libbpf_rs::{Map, OpenObject, skel::Skel};
 use libbpf_rs::{MapCore, MapFlags, MapHandle, MapType};
 use lightswitch_object::ExecutableId;
-use lightswitch_unwind_info::types::CompactUnwindRow;
+use lightswitch_unwind_info::{manager::UnwindInfo, pages::ToPagesError};
 use memmap2::MmapOptions;
 use tracing::{debug, error, info, warn};
 
@@ -35,8 +35,8 @@ use tracing::{debug, error, info, warn};
 pub(crate) enum AddPagesError {
     #[error("i/o error")]
     Libbpf(#[from] libbpf_rs::Error),
-    #[error("failed integer conversion")]
-    Reader(#[from] std::num::TryFromIntError),
+    #[error("page generation error")]
+    ToPages(#[from] ToPagesError),
 }
 
 pub(crate) struct Bpf {
@@ -358,7 +358,7 @@ impl Bpf {
 
     pub(crate) fn add_unwind_info(
         inner: &MapHandle,
-        unwind_info: &[CompactUnwindRow],
+        unwind_info: &UnwindInfo,
     ) -> Result<(), anyhow::Error> {
         let size = inner.value_size() as usize * unwind_info.len();
         let mut mmap = unsafe {
@@ -370,8 +370,9 @@ impl Bpf {
         assert_eq!(prefix.len(), 0);
         assert_eq!(suffix.len(), 0);
 
-        for (row, write) in unwind_info.iter().zip(middle) {
-            *write = row.into();
+        for (row, write) in unwind_info.iter().unwrap().zip(middle) {
+            let row = row.unwrap();
+            *write = (&row).into();
         }
 
         Ok(())
@@ -379,7 +380,7 @@ impl Bpf {
 
     pub(crate) fn add_pages(
         &self,
-        unwind_info: &[CompactUnwindRow],
+        unwind_info: &UnwindInfo,
         executable_id: u64,
     ) -> Result<(), AddPagesError> {
         let pages = lightswitch_unwind_info::pages::to_pages(unwind_info)?;

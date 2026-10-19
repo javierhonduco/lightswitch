@@ -8,7 +8,7 @@ use ring::digest::{Context, SHA256};
 use thiserror::Error;
 
 use crate::convert::compact_unwind_info_callback_opt;
-use crate::types::{CompactUnwindRow, CompactUnwindRowWire};
+use crate::types::CompactUnwindRowWire;
 
 // To identify this binary file type.
 const MAGIC_NUMBER: u32 = 0x1357531;
@@ -177,52 +177,40 @@ impl<'a> Reader<'a> {
         Ok(header)
     }
 
-    pub fn unwind_info(self) -> Result<Vec<CompactUnwindRow>, ReaderError> {
+    pub fn unwind_info(&self) -> Result<&'a [CompactUnwindRowWire], ReaderError> {
         let header_size = std::mem::size_of::<Header>();
-        let unwind_row_size = std::mem::size_of::<CompactUnwindRow>();
         let unwind_info_len: usize = self
             .header
             .unwind_info_len
             .try_into()
             .map_err(|_| ReaderError::SizeConversion)?;
 
-        let mut unwind_info = Vec::with_capacity(unwind_info_len);
-        let mut unwind_row_wire = CompactUnwindRowWire::default();
-
         let unwind_info_data = &self.data[header_size..];
-        let mut context = Context::new(&SHA256);
-        for i in 0..unwind_info_len {
-            let step = i * unwind_row_size;
-            let unwind_row_data = unwind_info_data
-                .get(step..step + unwind_row_size)
-                .ok_or(ReaderError::OutOfRange)?;
-            if self.check_digest {
-                context.update(unwind_row_data);
-            }
-            plain::copy_from_bytes(&mut unwind_row_wire, unwind_row_data)
-                .map_err(|e| ReaderError::Generic(format!("{e:?}")))?;
-            unwind_info.push(
-                unwind_row_wire
-                    .try_into()
-                    .map_err(|_| ReaderError::RowInvalidData)?,
-            );
+        let wire_slice = plain::slice_from_bytes::<CompactUnwindRowWire>(unwind_info_data)
+            .map_err(|e| ReaderError::Generic(format!("{:?}", e)))?;
+
+        // The header's len field should match the actual number of unwind information
+        // entries
+        if unwind_info_len != wire_slice.len() {
+            return Err(ReaderError::OutOfRange);
         }
 
         if self.check_digest {
+            let mut context = Context::new(&SHA256);
             let mut buffer = [0; 8];
-            let _ = context
+            context.update(unwind_info_data);
+            context
                 .finish()
                 .as_ref()
                 .read(&mut buffer)
-                .map_err(|e| ReaderError::Generic(e.to_string()));
-            let digest = u64::from_ne_bytes(buffer);
+                .map_err(|e| ReaderError::Generic(e.to_string()))?;
 
+            let digest = u64::from_ne_bytes(buffer);
             if self.header.unwind_info_digest != digest {
                 return Err(ReaderError::Digest);
             }
         }
-
-        Ok(unwind_info)
+        Ok(wire_slice)
     }
 }
 
@@ -231,6 +219,8 @@ mod tests {
     use std::io::Cursor;
 
     use memmap2::Mmap;
+
+    use crate::types::CompactUnwindRow;
 
     use super::*;
 
@@ -244,9 +234,13 @@ mod tests {
         assert!(writer.write(&mut buffer).is_ok());
 
         let reader = Reader::new(&buffer.get_ref()[..], true);
-        let unwind_info = reader.unwrap().unwind_info();
-        assert!(unwind_info.is_ok());
-        let unwind_info = unwind_info.unwrap();
+        let unwind_info = reader
+            .unwrap()
+            .unwind_info()
+            .unwrap()
+            .iter()
+            .map(|e| (*e).try_into().unwrap())
+            .collect::<Vec<CompactUnwindRow>>();
         assert_eq!(
             unwind_info,
             crate::compact_unwind_info(&mmap, None).unwrap()

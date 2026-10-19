@@ -364,6 +364,8 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
     }
 }
 
+/// Returns the whole compact unwind information in a new Vec. This should not
+/// be used anywhere except for testing / CLIs.
 pub fn compact_unwind_info(
     executable: &[u8],
     first_frame_override: Option<(u64, u64)>,
