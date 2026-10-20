@@ -2,7 +2,7 @@ use std::io;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::bounded;
 
@@ -269,6 +269,130 @@ fn test_integration() {
         &[],
         go_stripped_proc.pid(),
     ));
+}
+
+#[test]
+fn test_integration_exec() {
+    let bpf_test_debug = std::env::var("TEST_LIBBPF_DEBUG").is_ok();
+    let system_info = SystemInfo::new(None).expect("failed to detect system info");
+    build_test_binary("integration-tests-progs");
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let ready_file = temp_dir.path().join("ready");
+    let release_file = temp_dir.path().join("exec");
+    let executable = std::fs::canonicalize("target/nix/bin/main_cpp_clang_O1").unwrap();
+    let mut process = TestProcess {
+        child: Command::new("bash")
+            .args([
+                "--noprofile",
+                "--norc",
+                "-c",
+                // Use builtins to keep Bash itself waiting, without spawning children.
+                r#": > "$1"; while [[ ! -e "$2" ]]; do :; done; exec "$3""#,
+                "bash",
+            ])
+            .arg(&ready_file)
+            .arg(&release_file)
+            .arg(&executable)
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("failed to spawn Bash"),
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ready_file.exists() {
+        assert!(
+            process.child.try_wait().unwrap().is_none(),
+            "Bash exited before waiting"
+        );
+        assert!(Instant::now() < deadline, "Bash did not become ready");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let collector = Arc::new(Mutex::new(
+        Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
+    ));
+    let config = ProfilerConfig {
+        libbpf_debug: bpf_test_debug,
+        bpf_logging: bpf_test_debug,
+        duration: Duration::from_secs(5),
+        session_duration: Duration::from_millis(100),
+        sample_freq: 999,
+        userspace_pid_ns_level: system_info.available_bpf_features.userspace_pid_ns_level,
+        use_task_pt_regs_helper: system_info.available_bpf_features.has_task_pt_regs_helper
+            && system_info.available_bpf_features.has_get_current_task_btf,
+        ..Default::default()
+    };
+    let (_stop_signal_send, stop_signal_receive) = bounded(1);
+    let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+    let mut profiler = Profiler::new(config, stop_signal_receive, metadata_provider);
+    profiler.profile_pids(vec![process.pid()]);
+    // Cache Bash's mappings before exec replaces its address space at the same PID.
+    profiler
+        .add_proc(process.pid(), "bash".into())
+        .expect("failed to add Bash");
+    std::thread::scope(|scope| {
+        let release = scope.spawn(|| {
+            // Wait for a Bash sample so profiling and exec tracing are active
+            // before releasing the process. A fixed sleep could race startup.
+            let deadline = Instant::now() + Duration::from_secs(4);
+            loop {
+                let has_bash_sample = collector
+                    .lock()
+                    .unwrap()
+                    .finish()
+                    .0
+                    .iter()
+                    .any(|sample| sample.pid == process.pid());
+                if has_bash_sample {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "no pre-exec Bash samples collected"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            std::fs::write(&release_file, b"").unwrap();
+
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while std::fs::read_link(format!("/proc/{}/exe", process.pid())).unwrap() != executable
+            {
+                assert!(
+                    process.child.try_wait().unwrap().is_none(),
+                    "Bash failed to exec the C++ fixture"
+                );
+                assert!(
+                    Instant::now() < deadline,
+                    "Bash did not exec the C++ fixture"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        profiler.run(collector.clone());
+        release.join().unwrap();
+    });
+    let collector = collector.lock().unwrap();
+    let (raw_profile, procs, objs) = collector.finish();
+    let symbolized_profile = symbolize_profile(&raw_profile, procs, objs);
+    let observed_stacks = stack_strings_for_pid(&symbolized_profile, process.pid());
+    assert!(
+        assert_any_stack_contains(
+            &symbolized_profile,
+            &[
+                "top2()",
+                "c2()",
+                "b2()",
+                "a2()",
+                "main",
+                "__libc_start_call_main"
+            ],
+            process.pid(),
+        ),
+        "expected the exec'd C++ stack at PID {}, observed:\n{}",
+        process.pid(),
+        observed_stacks.join("\n"),
+    );
 }
 
 #[test]

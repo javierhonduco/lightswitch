@@ -204,6 +204,7 @@ typedef struct {
 enum event_type {
     EVENT_NEW_PROCESS = 1,
     EVENT_NEED_UNWIND_INFO = 2,
+    EVENT_NEED_PROCESS_INFO_REFRESH = 3,
 };
 
 typedef struct {

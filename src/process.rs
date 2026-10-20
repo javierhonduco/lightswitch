@@ -8,6 +8,8 @@ use lightswitch_object::ElfLoad;
 use lightswitch_object::ExecutableId;
 use lightswitch_object::Runtime;
 
+use crate::util::FileId;
+
 pub type Pid = i32;
 
 /// What type of mapping we are dealing with.
@@ -55,6 +57,7 @@ pub struct ProcessInfo {
     /// If there's at least one 32 bit executable linked in this process.
     pub compatibility_mode: bool,
     pub last_used: Instant,
+    pub file_id: FileId,
 }
 
 /// Stores information for a executable mapping with all

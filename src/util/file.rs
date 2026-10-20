@@ -17,7 +17,7 @@ use std::path::PathBuf;
 /// Note that this would return the same `FileId` if a file is replaced in-place
 /// with another one of the same size, but different contents. Since this is
 /// highly unlikely, this is a compromise that should be okay.
-#[derive(Eq, Hash, Debug, PartialEq)]
+#[derive(Eq, Hash, Debug, PartialEq, Clone)]
 pub struct FileId {
     inode: u64,
     device: u64,
@@ -25,7 +25,7 @@ pub struct FileId {
 }
 
 impl FileId {
-    pub fn new(path: &Path) -> io::Result<Self> {
+    pub fn new(path: impl AsRef<Path>) -> io::Result<Self> {
         let metadata = fs::metadata(path)?;
         Ok(FileId {
             inode: metadata.ino(),
@@ -69,8 +69,8 @@ mod tests {
     #[test]
     fn test_file_id() {
         assert_eq!(
-            FileId::new(&PathBuf::from("/")).unwrap(),
-            FileId::new(&PathBuf::from("/")).unwrap()
+            FileId::new(PathBuf::from("/")).unwrap(),
+            FileId::new(PathBuf::from("/")).unwrap()
         );
     }
 }
