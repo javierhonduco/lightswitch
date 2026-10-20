@@ -96,7 +96,7 @@ fn assert_any_stack_contains(
 }
 
 fn assert_any_stack_contains_subsequence(
-    symbolized_profile: &AggregatedProfile,
+    symbolized_profile: &[lightswitch::profile::AggregatedSample],
     expected_stack: &[&str],
     expected_pid: i32,
 ) -> bool {
@@ -269,6 +269,57 @@ fn test_integration() {
         &[],
         go_stripped_proc.pid(),
     ));
+}
+
+#[test]
+fn test_integration_rust_mixed_frame_pointers() {
+    build_test_binary("integration-tests-progs");
+    let process = TestProcess::new("main_rust_mixed", false);
+    let system_info = SystemInfo::new(None).unwrap();
+    let collector = Arc::new(Mutex::new(
+        Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
+    ));
+    let config = ProfilerConfig {
+        duration: Duration::from_secs(5),
+        sample_freq: 997,
+        userspace_pid_ns_level: system_info.available_bpf_features.userspace_pid_ns_level,
+        use_task_pt_regs_helper: system_info.available_bpf_features.has_task_pt_regs_helper
+            && system_info.available_bpf_features.has_get_current_task_btf,
+        ..Default::default()
+    };
+    let (_stop, stop_receive) = bounded(1);
+    let metadata = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+    let mut profiler = Profiler::new(config, stop_receive, metadata);
+    profiler.profile_pids(vec![process.pid()]);
+    profiler.run(collector.clone());
+    let collector = collector.lock().unwrap();
+    let (raw, procs, objects) = collector.finish();
+    let profile = symbolize_profile(&raw, procs, objects);
+    let total: u64 = profile.iter().map(|sample| sample.count).sum();
+    let complete: u64 = profile
+        .iter()
+        .filter(|sample| {
+            sample.result == lightswitch::profile::SampleResult::Success
+                && assert_any_stack_contains_subsequence(
+                    std::slice::from_ref(*sample),
+                    &[
+                        "rust_leaf",
+                        "rust_without_frame_pointer",
+                        "rust_main::rust_middle",
+                        "rust_main::main",
+                        "__libc_start",
+                    ],
+                    process.pid(),
+                )
+        })
+        .map(|sample| sample.count)
+        .sum();
+    assert!(total > 100, "too few samples: {total}");
+    assert!(
+        complete as f64 / total as f64 > 0.99,
+        "only {complete}/{total} samples contain the full Rust caller chain:\n{}",
+        stack_strings_for_pid(&profile, process.pid()).join("\n"),
+    );
 }
 
 #[test]

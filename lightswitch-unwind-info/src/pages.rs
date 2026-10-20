@@ -57,26 +57,23 @@ pub fn to_pages(unwind_info: &UnwindInfo) -> Result<Vec<Page>, ToPagesError> {
                 prev_high_pc = Some(high_pc);
             }
             Some(prev_pc_high) => {
-                // There's a gap larger than the page size, we need to insert
-                // pages that map to the same range of unwind
-                // information rows.
-                if prev_pc_high + page_size < high_pc {
-                    for address in (prev_pc_high..high_pc).step_by(page_size as usize) {
-                        pages.push(Page {
-                            address,
-                            low_index: prev_index.try_into()?,
-                            high_index: i.try_into()?,
-                        });
-                    }
-                    prev_index = i;
-                    prev_high_pc = Some(high_pc);
-                // If the high PC changes, add it.
-                } else if prev_pc_high != high_pc {
+                if prev_pc_high != high_pc {
                     pages.push(Page {
                         address: prev_pc_high,
                         low_index: prev_index.try_into()?,
                         high_index: i.try_into()?,
                     });
+                    // Empty pages have no rows of their own. Searching them
+                    // must fall back to the last row before the page, rather
+                    // than compare its low PC bits as if it belonged here.
+                    for address in ((prev_pc_high + page_size)..high_pc).step_by(page_size as usize)
+                    {
+                        pages.push(Page {
+                            address,
+                            low_index: i.try_into()?,
+                            high_index: i.try_into()?,
+                        });
+                    }
                     prev_index = i;
                     prev_high_pc = Some(high_pc);
                 }
@@ -102,6 +99,30 @@ mod tests {
     use crate::types::CompactUnwindRow;
 
     use super::*;
+
+    #[test]
+    fn paged_lookup_matches_full_table_across_gaps() {
+        let rows: Vec<_> = [0x100, 0x180, 0x1f0, 0x40010, 0x40100]
+            .into_iter()
+            .map(|pc| CompactUnwindRow {
+                pc,
+                ..Default::default()
+            })
+            .collect();
+        let pages = to_pages(&UnwindInfo::Vec(rows.clone())).unwrap();
+        for pc in 0x100..0x50000 {
+            let page = pages
+                .iter()
+                .find(|page| page.address == pc & !0xffff)
+                .unwrap();
+            let start = page.low_index as usize;
+            let end = page.high_index as usize;
+            let relative_index = rows[start..end].partition_point(|row| row.pc as u16 <= pc as u16);
+            let found_index = (start + relative_index).checked_sub(1);
+            let expected_index = rows.partition_point(|row| row.pc <= pc).checked_sub(1);
+            assert_eq!(found_index, expected_index, "PC {pc:#x}");
+        }
+    }
 
     #[test]
     fn test_to_pages() {
@@ -154,7 +175,7 @@ mod tests {
                 },
                 Page {
                     address: 0x100000,
-                    low_index: 0,
+                    low_index: 4,
                     high_index: 4
                 },
                 Page {
@@ -192,12 +213,12 @@ mod tests {
                 },
                 Page {
                     address: 0x20000,
-                    low_index: 1,
+                    low_index: 2,
                     high_index: 2
                 },
                 Page {
                     address: 0x30000,
-                    low_index: 1,
+                    low_index: 2,
                     high_index: 2
                 },
                 Page {

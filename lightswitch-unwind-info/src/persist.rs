@@ -13,7 +13,8 @@ use crate::types::CompactUnwindRowWire;
 // To identify this binary file type.
 const MAGIC_NUMBER: u32 = 0x1357531;
 // Any changes to the ABI / digest must bump the version.
-const VERSION: u32 = 4;
+// Version 5 also invalidates tables generated before AArch64 PLT synthesis.
+const VERSION: u32 = 5;
 // Maximum entries that can be read.
 const MAX_UNWIND_ENTRIES: u64 = 10_000_000;
 

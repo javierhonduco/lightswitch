@@ -131,12 +131,31 @@ let
     ];
   };
 
+  test-rust-progs = pkgs.stdenv.mkDerivation {
+    name = "build-test-rust-prog";
+    src = ./.;
+    dontStrip = true;
+    nativeBuildInputs = [ pkgs.rustc ];
+    buildPhase = ''
+      cd src
+      rustc -O -C force-unwind-tables=yes -C force-frame-pointers=no \
+        --crate-type lib --emit=obj rust_leaf.rs -o rust_leaf.o
+      rustc -O -C force-unwind-tables=yes -C force-frame-pointers=yes \
+        -C link-arg=rust_leaf.o rust_main.rs -o main_rust_mixed
+    '';
+    installPhase = ''
+      mkdir -p $out/bin
+      cp main_rust_mixed $out/bin
+    '';
+  };
+
   test-all-progs = pkgs.symlinkJoin {
     name = "all-progs";
     paths = [
       test-cpp-progs
       test-go-progs
       test-ocaml-progs
+      test-rust-progs
     ];
   };
 in
@@ -145,6 +164,7 @@ in
   cpp-progs = test-cpp-progs;
   go-progs = test-go-progs;
   ocaml-progs = test-ocaml-progs;
+  rust-progs = test-rust-progs;
   cpp-progs-static-musl = test-static-musl-cpp-progs;
   all-progs = test-all-progs;
 }

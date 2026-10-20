@@ -240,6 +240,7 @@ impl RawAggregatedSample {
 
         for virtual_address in &self.sample.kstack {
             let Some(mapping) = info.mappings.for_address(virtual_address) else {
+                println!("could be a BPF boy");
                 continue;
             };
 

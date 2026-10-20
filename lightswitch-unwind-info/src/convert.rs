@@ -260,6 +260,54 @@ fn resolve_unwind_info<'data>(
     crate::elf::unwind_info(object_file, data, runtime_endian)
 }
 
+// The classic AArch64 PLT only changes SP in its resolver header; the
+// individual entries branch through x17 and preserve x29/x30. Validate the
+// instructions before synthesizing rules, since other PLT layouts need their
+// own rules (for example BTI-enabled entries).
+fn arm64_plt_rows(address: u64, data: &[u8]) -> Option<Vec<CompactUnwindRow>> {
+    if data.len() < 48 || !data.len().is_multiple_of(16) {
+        return None;
+    }
+    let words: Vec<u32> = data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .copied()
+        .map(u32::from_le_bytes)
+        .collect();
+    let is_entry = |entry: &[u32]| {
+        entry[0] & 0x9f00_001f == 0x9000_0010 // adrp x16
+            && entry[1] & 0xffc0_03ff == 0xf940_0211 // ldr x17, [x16, #imm]
+            && entry[2] & 0xffc0_03ff == 0x9100_0210 // add x16, x16, #imm
+            && entry[3] == 0xd61f_0220 // br x17
+    };
+    if words[0] != 0xa9bf_7bf0 // stp x16, x30, [sp, #-16]!
+        || !is_entry(&words[1..5])
+        || words[5..8].iter().any(|word| *word != 0xd503_201f) // nop
+        || !words[8..].as_chunks::<4>().0.iter().all(|entry| is_entry(entry))
+    {
+        return None;
+    }
+    let leaf = CompactUnwindRow {
+        pc: address,
+        cfa_type: CfaType::StackPointerOffset,
+        rbp_type: RbpType::Arm64ReturnAddressLr,
+        ..Default::default()
+    };
+    Some(vec![
+        leaf,
+        CompactUnwindRow {
+            pc: address + 4,
+            cfa_offset: 16,
+            ..leaf
+        },
+        CompactUnwindRow {
+            pc: address + 32,
+            ..leaf
+        },
+    ])
+}
+
 pub enum UnwindData {
     // Initial, end addresses
     Function(u64, u64),
@@ -320,10 +368,40 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
             X86_SP
         };
 
-        let pc_and_fde_offset = pc_and_fde_offset(&bases, &eh_frame);
+        let mut entries: Vec<_> = pc_and_fde_offset(&bases, &eh_frame)
+            .into_iter()
+            .map(|(pc, offset)| (pc, Some(offset)))
+            .collect();
+        let mut plt = None;
+        if object_file.architecture() == Architecture::Aarch64
+            && object_file.is_little_endian()
+            && let Some(section) = object_file.section_by_name(".plt")
+        {
+            let start = section.address();
+            let end = start + section.size();
+            // Keep existing DWARF authoritative whenever it covers the PLT.
+            let has_cfi = entries.iter().any(|(pc, _)| *pc >= start && *pc < end)
+                || eh_frame
+                    .fde_for_address(&bases, start, EhFrame::cie_from_offset)
+                    .is_ok();
+            if !has_cfi && let Some(rows) = arm64_plt_rows(start, section.data()?) {
+                entries.push((start, None));
+                entries.sort_by_key(|(pc, _)| *pc);
+                plt = Some((start, end, rows));
+            }
+        }
 
         let mut ctx = Box::new(UnwindContext::new());
-        for (_, fde_offset) in pc_and_fde_offset {
+        for (_, fde_offset) in entries {
+            let Some(fde_offset) = fde_offset else {
+                if let Some((start, end, rows)) = plt.take() {
+                    (self.callback)(&UnwindData::Function(start, end));
+                    for row in rows {
+                        (self.callback)(&UnwindData::Instruction(row));
+                    }
+                }
+                continue;
+            };
             let fde = eh_frame.fde_from_offset(
                 &bases,
                 gimli::EhFrameOffset(fde_offset),
@@ -473,6 +551,36 @@ mod tests {
     use gimli::{AArch64, Encoding, Format, LittleEndian, Register, Vendor, X86_64};
 
     const TEST_PC: u64 = 0x1357;
+
+    #[test]
+    fn synthesizes_only_verified_arm64_plt_instructions() {
+        let words: [u32; 12] = [
+            0xa9bf7bf0, 0x90000010, 0xf9400211, 0x91000210, 0xd61f0220, 0xd503201f, 0xd503201f,
+            0xd503201f, 0x90000010, 0xf9400211, 0x91000210, 0xd61f0220,
+        ];
+        let bytes: Vec<_> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+        let rows = arm64_plt_rows(0x75490, &bytes).unwrap();
+        assert_eq!(
+            rows.iter().map(|row| row.pc).collect::<Vec<_>>(),
+            vec![0x75490, 0x75494, 0x754b0]
+        );
+        assert_eq!(
+            rows.iter().map(|row| row.cfa_offset).collect::<Vec<_>>(),
+            vec![0, 16, 0]
+        );
+        assert!(
+            rows.iter()
+                .all(|row| row.cfa_type == CfaType::StackPointerOffset
+                    && row.rbp_type == RbpType::Arm64ReturnAddressLr)
+        );
+        for word in 0..words.len() {
+            let mut invalid = bytes.clone();
+            invalid[word * 4..word * 4 + 4].copy_from_slice(&0u32.to_le_bytes());
+            assert!(arm64_plt_rows(0, &invalid).is_none(), "word {word}");
+        }
+        assert!(arm64_plt_rows(0, &bytes[..32]).is_none());
+        assert!(arm64_plt_rows(0, &bytes[..47]).is_none());
+    }
 
     #[test]
     fn reads_unwind_info_from_program_headers() {

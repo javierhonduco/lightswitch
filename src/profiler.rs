@@ -595,7 +595,9 @@ impl Profiler {
                             } else if event.type_ == event_type_EVENT_NEED_UNWIND_INFO {
                                 self.event_need_unwind_info(event.pid, event.address);
                             } else if event.type_ == event_type_EVENT_NEED_PROCESS_INFO_REFRESH {
-                                self.event_proc_info_refresh(event.pid);
+                                if let Err(error) = self.event_proc_info_refresh(event.pid) {
+                                    debug!("could not refresh process {}: {error}", event.pid);
+                                }
                             } else {
                                 error!("unknown event type {}", event.type_);
                             }
@@ -1214,6 +1216,12 @@ impl Profiler {
                 }
 
                 for mapping in &mut proc_info.mappings.0 {
+                    self.bpf.delete_process_mapping(
+                        pid,
+                        mapping.start_addr,
+                        mapping.end_addr,
+                        false,
+                    );
                     let mut object_files = self.object_files.write();
                     if mapping.mark_as_deleted(&mut object_files) {
                         self.deletion_scheduler
@@ -1235,12 +1243,11 @@ impl Profiler {
         let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
         let proc_name = proc.stat().map_err(|_| AddProcessError::ProcfsRace)?.comm;
 
-        println!(
-            "---- event_proc_info_refresh bef: {:?} aft: {}",
-            prev_name, proc_name
-        );
+        debug!("refreshing process {pid}: {prev_name:?} -> {proc_name}");
 
-        self.add_proc(pid, proc_name).unwrap();
+        self.add_proc(pid, proc_name)?;
+        self.afflicted_processes.pop(&pid);
+        self.add_unwind_info_for_process(pid);
 
         Ok(())
     }

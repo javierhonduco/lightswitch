@@ -387,7 +387,9 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
             if (table_idx == BINARY_SEARCH_DEFAULT && low_index > 0) {
                 low_index -= 1;
                 stack_unwind_row_t* previous_row = bpf_map_lookup_elem(inner, &low_index);
-                if (previous_row != NULL && object_relative_pc > PREVIOUS_PAGE(object_relative_pc_high) + previous_row->pc_low) {
+                // low_index is the first row in this page. Its predecessor
+                // applies until then, even if it starts several pages earlier.
+                if (previous_row != NULL) {
                     table_idx = low_index;
                     in_previous_page = true;
                 }
@@ -398,7 +400,14 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
                 if (table_idx == BINARY_SEARCH_EXHAUSTED_ITERATIONS) {
                     bump_unwind_error_binary_search_exhausted_iterations();
                 }
-                return 1;
+                // Keep the failing PC so missing unwind coverage can be diagnosed.
+                u32 ulen = unwind_state->sample.stack.ulen;
+                if (ulen < MAX_STACK_DEPTH) {
+                    unwind_state->sample.stack.addresses[ulen] = unwind_state->ip;
+                    unwind_state->sample.stack.ulen++;
+                }
+                unwind_state->sample.result = SAMPLE_UNWINDING_ERROR;
+                break;
             }
         }
 
@@ -407,7 +416,8 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
 
         stack_unwind_row_t* row = bpf_map_lookup_elem(inner, &table_idx);
         if (row == NULL) {
-            return 1;
+            unwind_state->sample.result = SAMPLE_UNWINDING_ERROR;
+            break;
         }
 
         u64 found_pc = object_relative_pc_high + row->pc_low;
@@ -480,7 +490,8 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
             previous_rsp += addition;
         } else if (found_cfa_type == CFA_TYPE_CFA_TYPE_UNSUP_EXP) {
             bump_unwind_error_unsupported_expression();
-            return 1;
+            unwind_state->sample.result = SAMPLE_UNSUPPORTED_UNWIND_RULE;
+            break;
         } else if (found_cfa_type == CFA_TYPE_PLT1 || found_cfa_type == CFA_TYPE_PLT2) {
             LOG("CFA expression found with id %d", found_cfa_offset);
             u64 threshold = found_cfa_type == CFA_TYPE_PLT1 ? 11 : 10;
@@ -500,14 +511,20 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
         if (previous_rsp == 0) {
             LOG("[error] previous_rsp should not be zero.");
             bump_unwind_error_previous_rsp_zero();
-            return 1;
+            unwind_state->sample.result = SAMPLE_UNWINDING_ERROR;
+            break;
         }
 
         // Set rbp register.
         u64 previous_rbp = 0;
         u64 previous_rbp_addr = previous_rsp + found_rbp_offset;
 
-        if (found_rbp_type == RBP_TYPE_UNCHANGED) {
+        // ARM64 LR and ELSEWHERE rows describe the return address, not a saved
+        // frame pointer. Preserve x29 instead of reading it from the LR slot
+        // (or CFA+0 for leaf functions).
+        if (found_rbp_type == RBP_TYPE_UNCHANGED ||
+            found_rbp_type == RBP_TYPE_ARM64_RETURN_ADDRESS_LR ||
+            found_rbp_type == RBP_TYPE_ARM64_RETURN_ADDRESS_ELSEWHERE) {
             previous_rbp = unwind_state->bp;
         } else {
             LOG("\t(bp_offset: %d, bp value stored at %llx)", found_rbp_offset,
@@ -564,7 +581,8 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
         if (previous_rip == 0) {
             LOG("[error] previous_rip is zero, ret=%d @ %llx", err, previous_rip_addr);
             bump_unwind_error_previous_rip_zero();
-            return 1;
+            unwind_state->sample.result = SAMPLE_UNWINDING_ERROR;
+            break;
         }
 
         LOG("\tprevious ip: %llx (@ %llx)", previous_rip, previous_rip_addr);
