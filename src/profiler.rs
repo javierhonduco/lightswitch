@@ -594,6 +594,8 @@ impl Profiler {
                                 //    .delete(unsafe { plain::as_bytes(&event) });
                             } else if event.type_ == event_type_EVENT_NEED_UNWIND_INFO {
                                 self.event_need_unwind_info(event.pid, event.address);
+                            } else if event.type_ == event_type_EVENT_NEED_PROCESS_INFO_REFRESH {
+                                self.event_proc_info_refresh(event.pid);
                             } else {
                                 error!("unknown event type {}", event.type_);
                             }
@@ -1195,6 +1197,52 @@ impl Profiler {
         }
 
         self.filter_pids.contains_key(&pid)
+    }
+
+    fn event_proc_info_refresh(&mut self, pid: Pid) -> Result<(), AddProcessError> {
+        let mut prev_name = None;
+        // Evict all BPF structures, etc
+        {
+            let mut procs = self.procs.write();
+            if let Some(proc_info) = procs.get_mut(&pid) {
+                prev_name = Some(proc_info.comm.clone());
+
+                // Delete process related data from BPF maps
+                let err = self.bpf.delete_process(pid);
+                if let Err(e) = err {
+                    debug!("could not remove bpf process due to {:?}", e);
+                }
+
+                for mapping in &mut proc_info.mappings.0 {
+                    let mut object_files = self.object_files.write();
+                    if mapping.mark_as_deleted(&mut object_files) {
+                        self.deletion_scheduler
+                            .add(ToDelete::ObjectFile(Instant::now(), mapping.executable_id));
+
+                        if let Entry::Occupied(entry) =
+                            self.native_unwind_state.get(mapping.executable_id)
+                        {
+                            self.bpf.delete_native_unwind_all(mapping, entry, false);
+                        }
+                    }
+                }
+
+                // Evict mappings
+                proc_info.mappings = ExecutableMappings(vec![]);
+            }
+        }
+
+        let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
+        let proc_name = proc.stat().map_err(|_| AddProcessError::ProcfsRace)?.comm;
+
+        println!(
+            "---- event_proc_info_refresh bef: {:?} aft: {}",
+            prev_name, proc_name
+        );
+
+        self.add_proc(pid, proc_name).unwrap();
+
+        Ok(())
     }
 
     fn event_new_proc(&mut self, pid: Pid, comm: String) {

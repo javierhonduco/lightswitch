@@ -1,6 +1,10 @@
 #ifndef __LIGHTSWITCH_LINUX_PAGE_CONSTANTS__
 #define __LIGHTSWITCH_LINUX_PAGE_CONSTANTS__
 
+#define AA (1UL >> 47)
+#define AA_MASK ~(AA - 1)
+
+
 #define PAGE_SIZE (1UL << 12)  // 4KB
 #define PAGE_MASK ~(PAGE_SIZE - 1)
 

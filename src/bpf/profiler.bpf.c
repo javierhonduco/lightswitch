@@ -147,7 +147,7 @@ static __always_inline void send_event(Event* event, struct bpf_perf_event_data*
         LOG("[debug] send_event was rate limited for process %d", event->pid);
         return;
     }
-
+    bpf_printk("-- %d", event->type);
     int ret = 0;
     if (lightswitch_config.use_ring_buffers) {
         ret = bpf_ringbuf_output(&events_rb, event, sizeof(Event), 0);
@@ -333,8 +333,13 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
         }
 
         if (unwind_state->ip < mapping->begin || unwind_state->ip >= mapping->end) {
-            LOG("[error] pc %llx not contained within begin: %llx end: %llx", unwind_state->ip, mapping->begin, mapping->end);
+            bpf_printk("[error] pc %llx not contained within begin: %llx end: %llx", unwind_state->ip, mapping->begin, mapping->end);
             bump_unwind_error_mapping_does_not_contain_pc();
+            Event event = {
+                .type = EVENT_NEED_PROCESS_INFO_REFRESH,
+                .pid = per_process_id,
+            };
+            send_event(&event, ctx);
             unwind_state->sample.result = SAMPLE_MAPPING_DOES_NOT_CONTAIN_PC;
             break;
         }
@@ -366,7 +371,7 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
                 // additional information to find the right memory mapping. This way the
                 // rate limiting logic will work better due to the reduced cardinality of
                 // the rate limiting key.
-                .address = unwind_state->ip & PAGE_MASK,
+                .address = unwind_state->ip & PAGE_MASK & 0xFFFFFFFFFFFF,
             };
             send_event(&event, ctx);
             break;
