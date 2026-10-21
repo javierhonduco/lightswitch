@@ -572,6 +572,8 @@ fn show_object_file_info(path: &str) {
         "- load segments: {:?}",
         object_file.object().elf_load_segments()
     );
+    use lightswitch::util::FileId;
+    println!("- file id: {:?}", FileId::new(&PathBuf::from(path)));
 }
 
 #[cfg(test)]
@@ -607,10 +609,10 @@ mod tests {
         Usage: lightswitch [OPTIONS] [COMMAND]
 
         Commands:
-          object-info  
-          show-unwind  
-          system-info  
-          server       
+          object-info
+          show-unwind
+          system-info
+          server
           help         Print this message or the help of the given subcommand(s)
 
         Options:
@@ -619,7 +621,7 @@ mod tests {
 
           -D, --duration <DURATION>
                   How long this agent will run in seconds
-                  
+
                   [default: 18446744073709551615]
 
               --libbpf-debug
@@ -633,24 +635,24 @@ mod tests {
 
               --logging <LOGGING>
                   Set lightswitch's logging level
-                  
+
                   [default: info]
                   [possible values: trace, debug, info, warn, error]
 
               --sample-freq <SAMPLE_FREQ_IN_HZ>
                   Per-CPU Sampling Frequency in Hz
-                  
+
                   [default: 19]
 
               --profile-format <PROFILE_FORMAT>
                   Output file for Flame Graph in SVG format
-                  
+
                   [default: flame-graph]
                   [possible values: none, flame-graph, firefox, perfetto, pprof]
 
               --flamegraph-aggregation <FLAMEGRAPH_AGGREGATION>
                   What information to show in the flamegraph. Won't do anything for other profile formats
-                  
+
                   [default: function]
                   [possible values: function, all]
 
@@ -668,18 +670,18 @@ mod tests {
                   - local-disk
                   - remote
                   - pyroscope
-                  
+
                   [default: local-disk]
 
               --server-url <SERVER_URL>
-                  
+
 
               --token <TOKEN>
-                  
+
 
               --pyroscope-app-name <PYROSCOPE_APP_NAME>
                   Application name for Pyroscope
-                  
+
                   [default: lightswitch]
 
               --pyroscope-tenant-id <PYROSCOPE_TENANT_ID>
@@ -687,7 +689,7 @@ mod tests {
 
               --perf-buffer-bytes <PERF_BUFFER_BYTES>
                   Size of each profiler perf buffer, in bytes (must be a power of 2)
-                  
+
                   [default: 524288]
 
               --mapsize-info
@@ -695,7 +697,7 @@ mod tests {
 
               --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>
                   max number of rate limit entries
-                  
+
                   [default: 5000]
 
               --exclude-self
@@ -711,7 +713,7 @@ mod tests {
 
               --max-native-unwind-info-size-mb <MAX_NATIVE_UNWIND_INFO_SIZE_MB>
                   approximate max size in megabytes used for the BPF maps that hold unwind information
-                  
+
                   [default: 2147483647]
 
               --enable-deadlock-detector

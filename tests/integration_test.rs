@@ -272,6 +272,89 @@ fn test_integration() {
 }
 
 #[test]
+fn test_integration_minimum_truncated_stack_depth() {
+    use lightswitch::profile::SampleResult;
+
+    build_test_binary("integration-tests-progs");
+    // The unwinder checks its 200-frame storage limit after batches of seven.
+    // The last batch starts at frame 196 and can still find the undefined
+    // return address at depth 202. At depth 203 it exhausts the batch first,
+    // making 203 the minimum depth reported as truncated. The fixture's main
+    // has an undefined return address and is not itself added to the stack.
+    let below_boundary = TestProcess::new("stack_depth_202", false);
+    let at_boundary = TestProcess::new("stack_depth_203", false);
+    let system_info = SystemInfo::new(None).unwrap();
+    let collector = Arc::new(Mutex::new(
+        Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
+    ));
+    let config = ProfilerConfig {
+        duration: Duration::from_secs(5),
+        sample_freq: 997,
+        userspace_pid_ns_level: system_info.available_bpf_features.userspace_pid_ns_level,
+        use_task_pt_regs_helper: system_info.available_bpf_features.has_task_pt_regs_helper
+            && system_info.available_bpf_features.has_get_current_task_btf,
+        ..Default::default()
+    };
+    let (_stop, stop_receive) = bounded(1);
+    let metadata = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
+    let mut profiler = Profiler::new(config, stop_receive, metadata);
+    profiler.profile_pids(vec![below_boundary.pid(), at_boundary.pid()]);
+    profiler.run(collector.clone());
+    let collector = collector.lock().unwrap();
+    let (raw, procs, objects) = collector.finish();
+    let profile = symbolize_profile(&raw, procs, objects);
+
+    for (process, expected) in [
+        (&below_boundary, SampleResult::Success),
+        (&at_boundary, SampleResult::Truncated),
+    ] {
+        // Ignore startup samples by selecting stacks sampled in the leaf.
+        // Check every caller below rather than filtering out incorrect chains.
+        let samples: Vec<_> = profile
+            .iter()
+            .filter(|sample| {
+                sample.pid == process.pid()
+                    && sample.ustack.first().is_some_and(|frame| {
+                        frame
+                            .symbolization_result
+                            .as_ref()
+                            .and_then(|result| result.as_ref().ok())
+                            .is_some_and(|symbol| symbol.name == "void stack_depth<0>()")
+                    })
+            })
+            .collect();
+        let count: u64 = samples.iter().map(|sample| sample.count).sum();
+        assert!(
+            count > 100,
+            "too few full-depth samples for {expected:?}: {count}; observed:\n{}",
+            stack_strings_for_pid(&profile, process.pid()).join("\n"),
+        );
+        for sample in samples {
+            assert_eq!(sample.result, expected, "PID {}", process.pid());
+            // Symbolization appends a synthetic error frame for truncation.
+            assert_eq!(
+                sample.ustack.len(),
+                200 + usize::from(expected == SampleResult::Truncated),
+            );
+            for (id, frame) in sample.ustack.iter().take(200).enumerate() {
+                let symbol = frame
+                    .symbolization_result
+                    .as_ref()
+                    .expect("missing symbolization")
+                    .as_ref()
+                    .expect("failed to symbolize frame");
+                assert_eq!(
+                    symbol.name,
+                    format!("void stack_depth<{id}>()"),
+                    "unexpected frame {id} for PID {} ({expected:?})",
+                    process.pid(),
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn test_integration_rust_mixed_frame_pointers() {
     build_test_binary("integration-tests-progs");
     let process = TestProcess::new("main_rust_mixed", false);
