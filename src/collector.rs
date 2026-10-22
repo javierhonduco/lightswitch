@@ -134,7 +134,8 @@ impl Collector for StreamingCollector {
     ) {
         let _span = span!(Level::DEBUG, "StreamingCollector.collect").entered();
 
-        let mut profile = raw_to_processed(&Aggregator::default().aggregate(profile), procs, objs);
+        let (duration, profile) = Aggregator::default().aggregate(profile);
+        let mut profile = raw_to_processed(&profile, procs, objs);
         if self.local_symbolizer {
             profile = symbolize_profile(&profile, procs, objs);
         }
@@ -144,7 +145,7 @@ impl Collector for StreamingCollector {
             procs,
             objs,
             &self.metadata_provider,
-            self.profile_duration,
+            duration.unwrap_or(self.profile_duration),
             self.profile_frequency_hz,
         );
 
@@ -407,7 +408,7 @@ impl Collector for PyroscopeCollector {
         let series: Vec<_> = samples_by_labels
             .into_iter()
             .filter_map(|(task_labels, samples)| {
-                let profile = Aggregator::default().aggregate(samples);
+                let (_, profile) = Aggregator::default().aggregate(samples);
                 self.build_series(profile, procs, objs, &task_labels)
             })
             .collect();
@@ -447,11 +448,8 @@ impl Collector for AggregatorCollector {
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
-        self.profiles.push(raw_to_processed(
-            &Aggregator::default().aggregate(raw_profile),
-            procs,
-            objs,
-        ));
+        let (_, profile) = Aggregator::default().aggregate(raw_profile);
+        self.profiles.push(raw_to_processed(&profile, procs, objs));
 
         for (k, v) in procs {
             self.procs.insert(*k, v.clone());
@@ -524,7 +522,8 @@ impl Collector for LiveCollector {
     ) {
         let _span = span!(Level::DEBUG, "LiveCollector.collect").entered();
 
-        let profile = raw_to_processed(&Aggregator::default().aggregate(raw_profile), procs, objs);
+        let (_, aggregated) = Aggregator::default().aggregate(raw_profile);
+        let profile = raw_to_processed(&aggregated, procs, objs);
         let profile = symbolize_profile(&profile, procs, objs);
         let folded = fold_profile(procs, profile, true);
 
