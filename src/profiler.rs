@@ -390,7 +390,8 @@ impl Profiler {
 
         match get_all_kernel_modules() {
             Ok(kernel_code_ranges) => {
-                let file_id = FileId::new(PathBuf::from("/")).unwrap();
+                // dummy entry as kernel ranges are never refreshed
+                let file_id = FileId::new("/").expect("should never fail");
                 self.procs.write().insert(
                     KERNEL_PID,
                     ProcessInfo {
@@ -681,6 +682,8 @@ impl Profiler {
         let mut procs = self.procs.write();
         match procs.get_mut(&pid) {
             Some(proc_info) => {
+                // Not all deletions should remove the process, for example during a refresh
+                // call we'll remove everything except the process itself.
                 if from_userspace {
                     proc_info.status = ProcessStatus::Exited;
                     self.deletion_scheduler
@@ -1239,7 +1242,7 @@ impl Profiler {
                 self.add_unwind_info_for_process(pid);
             }
             None => {
-                println!("should never happen")
+                error!("could not find process {pid} during refresh, this should never happen")
             }
         }
 
