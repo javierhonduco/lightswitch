@@ -390,6 +390,8 @@ impl Profiler {
 
         match get_all_kernel_modules() {
             Ok(kernel_code_ranges) => {
+                // dummy entry as kernel ranges are never refreshed
+                let file_id = FileId::new("/").expect("should never fail");
                 self.procs.write().insert(
                     KERNEL_PID,
                     ProcessInfo {
@@ -417,6 +419,7 @@ impl Profiler {
                         ),
                         compatibility_mode: false,
                         last_used: Instant::now(),
+                        file_id,
                     },
                 );
 
@@ -594,6 +597,10 @@ impl Profiler {
                                 //    .delete(unsafe { plain::as_bytes(&event) });
                             } else if event.type_ == event_type_EVENT_NEED_UNWIND_INFO {
                                 self.event_need_unwind_info(event.pid, event.address);
+                            } else if event.type_ == event_type_EVENT_NEED_PROCESS_INFO_REFRESH {
+                                if let Err(e) = self.event_proc_info_refresh(event.pid) {
+                                    debug!("failed to refresh process info due to `{:?}`", e);
+                                }
                             } else {
                                 error!("unknown event type {}", event.type_);
                             }
@@ -666,14 +673,22 @@ impl Profiler {
     }
 
     pub fn handle_process_exit(&mut self, pid: Pid, partial_write: bool) {
+        self.delete_process(pid, partial_write, true);
+    }
+
+    pub fn delete_process(&mut self, pid: Pid, partial_write: bool, from_userspace: bool) {
         // TODO: remove BPF ratelimits for this process.
         let _ = self.afflicted_processes.pop(&pid);
         let mut procs = self.procs.write();
         match procs.get_mut(&pid) {
             Some(proc_info) => {
-                proc_info.status = ProcessStatus::Exited;
-                self.deletion_scheduler
-                    .add(ToDelete::Process(Instant::now(), pid));
+                // Not all deletions should remove the process, for example during a refresh
+                // call we'll remove everything except the process itself.
+                if from_userspace {
+                    proc_info.status = ProcessStatus::Exited;
+                    self.deletion_scheduler
+                        .add(ToDelete::Process(Instant::now(), pid));
+                }
 
                 let err = self.bpf.delete_process(pid);
                 if let Err(e) = err {
@@ -1197,6 +1212,43 @@ impl Profiler {
         self.filter_pids.contains_key(&pid)
     }
 
+    fn event_proc_info_refresh(&mut self, pid: Pid) -> Result<(), AddProcessError> {
+        let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
+        let proc_name = proc.stat().map_err(|_| AddProcessError::ProcfsRace)?.comm;
+        let file_id =
+            FileId::new(format!("/proc/{pid}/exe")).map_err(|_| AddProcessError::ProcfsRace)?;
+
+        let same_executable = self.procs.read().get(&pid).map(|e| e.file_id == file_id);
+        match same_executable {
+            Some(true) => {
+                // If we end up here it could mean that either the process exec the same binary
+                // or that we don't know about this memory mapping. Neither option is being
+                // handled yet.
+                //
+                // The former can be problematic as ASLR will change location of the mappings in
+                // memory, but might be rarer that the latter, which all applications that call
+                // dlopen will hit.
+                debug!("unknown mapping for process {pid}: `{proc_name}`")
+            }
+            Some(false) => {
+                debug!("`exec` called for process {pid}: `{proc_name}`");
+                // Removing the information on the mappings before the exec took place will
+                // result in failures normalising said samples. This it not addressed yet and
+                // could be fixed either by normalising addresses with the  previous mappings
+                // before we delete them, or to keep multiple "generations" of a process across
+                // execs and pid reuse.
+                self.delete_process(pid, true, false);
+                self.add_proc(pid, proc_name)?;
+                self.add_unwind_info_for_process(pid);
+            }
+            None => {
+                error!("could not find process {pid} during refresh, this should never happen")
+            }
+        }
+
+        Ok(())
+    }
+
     fn event_new_proc(&mut self, pid: Pid, comm: String) {
         if !self.should_profile(pid) {
             return;
@@ -1208,7 +1260,7 @@ impl Profiler {
             return;
         }
 
-        match self.add_proc(pid, comm) {
+        match self.add_proc_with_eviction(pid, comm) {
             Ok(()) => {
                 self.add_unwind_info_for_process(pid);
             }
@@ -1413,12 +1465,23 @@ impl Profiler {
         info
     }
 
-    pub fn add_proc(&mut self, pid: Pid, comm: String) -> Result<(), AddProcessError> {
-        let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
-        let maps = proc.maps().map_err(|_| AddProcessError::ProcfsRace)?;
+    pub fn add_proc_with_eviction(
+        &mut self,
+        pid: Pid,
+        comm: String,
+    ) -> Result<(), AddProcessError> {
         if !self.maybe_evict_process(true) {
             return Err(AddProcessError::Eviction);
         }
+
+        self.add_proc(pid, comm)
+    }
+
+    pub fn add_proc(&mut self, pid: Pid, comm: String) -> Result<(), AddProcessError> {
+        let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
+        let maps = proc.maps().map_err(|_| AddProcessError::ProcfsRace)?;
+        let file_id =
+            FileId::new(format!("/proc/{pid}/exe")).map_err(|_| AddProcessError::ProcfsRace)?;
 
         let mut mappings = vec![];
         // 64 bit kernels can run 32 bit executables in compatibility mode. We don't
@@ -1565,6 +1628,7 @@ impl Profiler {
             mappings: ExecutableMappings(mappings),
             compatibility_mode,
             last_used: Instant::now(),
+            file_id,
         };
         self.procs.clone().write().insert(pid, proc_info);
 

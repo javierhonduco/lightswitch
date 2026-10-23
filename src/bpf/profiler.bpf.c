@@ -121,7 +121,7 @@ find_page(mapping_t* mapping, u64 object_relative_pc, u64* low_index, u64* high_
 
     void* inner_map = bpf_map_lookup_elem(&outer_map, &mapping->executable_id);
     if (inner_map == NULL) {
-        bpf_printk("[warn] outer map not found, most likely it was evicted due to memory pressure");
+        LOG("[warn] outer map not found, most likely it was evicted due to memory pressure");
         *sample_result = SAMPLE_UNWIND_INFO_NOT_FOUND;
         bump_unwind_error_unwind_info_not_found();
         return NULL;
@@ -271,7 +271,7 @@ void send_sample_impl(struct bpf_perf_event_data* ctx, sample_t* sample) {
     }
 
     if (ret < 0) {
-        bpf_printk(
+        LOG(
             "send_sample_impl failed ret=%d, use_ring_buffers=%d",
             ret,
             lightswitch_config.use_ring_buffers);
@@ -335,6 +335,11 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
         if (unwind_state->ip < mapping->begin || unwind_state->ip >= mapping->end) {
             LOG("[error] pc %llx not contained within begin: %llx end: %llx", unwind_state->ip, mapping->begin, mapping->end);
             bump_unwind_error_mapping_does_not_contain_pc();
+            Event event = {
+                .type = EVENT_NEED_PROCESS_INFO_REFRESH,
+                .pid = per_process_id,
+            };
+            send_event(&event, ctx);
             unwind_state->sample.result = SAMPLE_MAPPING_DOES_NOT_CONTAIN_PC;
             break;
         }

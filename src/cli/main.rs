@@ -23,6 +23,7 @@ use lightswitch::collector::{
 };
 use lightswitch::debug_info::DebugInfoManager;
 use lightswitch::profile::symbolize_profile;
+use lightswitch::util::FileId;
 use lightswitch_unwind_info::compact_unwind_info;
 use nix::unistd::Gid;
 use nix::unistd::Uid;
@@ -572,6 +573,7 @@ fn show_object_file_info(path: &str) {
         "- load segments: {:?}",
         object_file.object().elf_load_segments()
     );
+    println!("- file id: {:?}", FileId::new(PathBuf::from(path)));
 }
 
 #[cfg(test)]
