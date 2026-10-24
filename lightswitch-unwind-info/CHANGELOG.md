@@ -1,5 +1,5 @@
-Unreleased
-----------
+v0.2.0
+------
 - Do not allocate the whole unwind information in memory when writing it to disk
 - Use `mmap(2)` to read cached compact unwind information off disk
 

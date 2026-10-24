@@ -1,6 +1,6 @@
 [package]
 name = "lightswitch"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 description = "CPU profiler as a library for Linux suitable for on-demand and continuous profiling"
 license = "MIT"
@@ -58,7 +58,7 @@ itertools = "0.15.0"
 lightswitch-metadata = { path = "lightswitch-metadata", version = "0.3.1" }
 lightswitch-proto = { path = "lightswitch-proto", version = "0.3.1" }
 lightswitch-capabilities = { path = "lightswitch-capabilities", version = "0.3.2" }
-lightswitch-unwind-info = { path = "lightswitch-unwind-info", version = "0.1.0" }
+lightswitch-unwind-info = { path = "lightswitch-unwind-info", version = "0.2.0" }
 lightswitch-object = { workspace = true }
 memmap2 = { workspace = true }
 anyhow = { workspace = true }
