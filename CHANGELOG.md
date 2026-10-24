@@ -1,3 +1,8 @@
+v0.7.0
+------
+- Significantly reduce memory footprint of reading and writing cached unwind information to / from disk
+- Detect `exec*` and reload process information
+
 v0.6.0
 ------
 - Expose Firefox profiler collector as a format in the CLI
