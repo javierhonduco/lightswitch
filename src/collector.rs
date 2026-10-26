@@ -268,7 +268,7 @@ impl PyroscopeCollector {
         let labels = self
             .metadata_provider
             .lock()
-            .unwrap()
+            .expect("lock metadata provider")
             .get_metadata(TaskKey { pid, tid });
         let mut namespace = None;
         let mut pod = None;
@@ -741,7 +741,12 @@ impl Collector for FirefoxProfilerCollector {
 
             let default_name = "process to have a name".to_string();
             let process_name = &self.pid_to_comm.get(&sample.pid).unwrap_or(&default_name);
-            let thread_name = match &meta.iter().find(|e| e.key == "thread.name").unwrap().value {
+            let thread_name = match &meta
+                .iter()
+                .find(|e| e.key == "thread.name")
+                .expect("thread name should always be present")
+                .value
+            {
                 MetadataLabelValue::String(a) => a,
                 MetadataLabelValue::Number(_, _) => todo!(),
             };
@@ -789,7 +794,7 @@ impl Collector for FirefoxProfilerCollector {
                         ff_profile.intern_string(
                             &e.symbolization_result
                                 .as_ref()
-                                .unwrap()
+                                .expect("symbolization result is present")
                                 .as_ref()
                                 .unwrap_or(&SymbolizedFrame {
                                     name: format!("error/generic: {:?}", e.symbolization_result),
@@ -815,8 +820,9 @@ impl Collector for FirefoxProfilerCollector {
             );
         }
 
-        let file = File::create(&self.profile_path).unwrap();
-        serde_json::to_writer(&mut BufWriter::new(file), &ff_profile).unwrap();
+        let file = File::create(&self.profile_path).expect("create firefox profile");
+        serde_json::to_writer(&mut BufWriter::new(file), &ff_profile)
+            .expect("write firefox profile");
 
         (AggregatedProfile::new(), &self.procs, &self.objs)
     }

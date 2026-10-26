@@ -3,7 +3,6 @@ use crate::bpf::noprealloc_test_skel::NopreallocTestSkelBuilder;
 use std::fs::read_to_string;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
-use std::os::raw::c_int;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
@@ -128,7 +127,7 @@ fn software_perfevents_detected() -> bool {
                 /* cpu */ 0, -1, /* group_fd */
                 0,  /* flags */
             )
-        } as c_int,
+        },
     };
 
     if fd.fd < 0 {
@@ -163,7 +162,7 @@ fn tracepoints_detected() -> bool {
                 0,  /* cpu */
                 -1, /* group_fd */
                 0,  /* flags */
-            ) as c_int
+            )
         },
     };
 
@@ -199,23 +198,32 @@ fn has_variable_inner_map() -> bool {
         ..Default::default()
     };
     for max_entries in [10, 100, 10_000] {
-        let map = MapHandle::create(
+        let ret = MapHandle::create(
             MapType::Array,
             Some(format!("inner_{max_entries}")),
             4,
             8,
             max_entries,
             &inner_opts,
-        )
-        .expect("create inner map");
+        );
 
-        inner_maps.push(map);
+        match ret {
+            Ok(map) => inner_maps.push(map),
+            Err(e) => {
+                error!("failed to create inner map with `{:?}`", e);
+                return false;
+            }
+        }
     }
 
     let outer_opts = libbpf_sys::bpf_map_create_opts {
         sz: size_of::<libbpf_sys::bpf_map_create_opts>() as libbpf_sys::size_t,
         // The outer map requires an inner map to initialise its metadata.
-        inner_map_fd: inner_maps.first().unwrap().as_fd().as_raw_fd() as u32,
+        inner_map_fd: inner_maps
+            .first()
+            .expect("should not happen")
+            .as_fd()
+            .as_raw_fd() as u32,
         ..Default::default()
     };
     let outer = MapHandle::create(

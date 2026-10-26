@@ -117,8 +117,6 @@ unused = "warn"
 [workspace.lints.clippy]
 unwrap_used = "warn"
 join-absolute-paths = "warn"
-clone-on-ref-ptr = "warn"
 
-# TODO: enable
-# [lints]
-# workspace = true
+[lints]
+workspace = true

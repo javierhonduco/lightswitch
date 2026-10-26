@@ -1,4 +1,4 @@
-extern crate bindgen;
+#![allow(clippy::unwrap_used)]
 
 use std::env;
 use std::path::PathBuf;

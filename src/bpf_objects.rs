@@ -186,7 +186,7 @@ impl Bpf {
 
         // It is required that this is page-aligned and a multiple of two.
         // libbpf takes care of rounding up to the next multiple of two.
-        roundup_page(max_entries_bytes as usize) as u32
+        roundup_page(max_entries_bytes) as u32
     }
 
     fn setup_tracers_maps(
@@ -370,8 +370,8 @@ impl Bpf {
         assert_eq!(prefix.len(), 0);
         assert_eq!(suffix.len(), 0);
 
-        for (row, write) in unwind_info.iter().unwrap().zip(middle) {
-            let row = row.unwrap();
+        for (row, write) in unwind_info.iter()?.zip(middle) {
+            let row = row.map_err(|_| anyhow::anyhow!("sdf"))?;
             *write = (&row).into();
         }
 

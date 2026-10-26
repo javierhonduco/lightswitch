@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 pub mod features_skel {
     include!(concat!(env!("OUT_DIR"), "/features_skel.rs"));
 }

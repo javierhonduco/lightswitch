@@ -260,6 +260,8 @@ enum AddUnwindInformationError {
     StrippedGo,
     #[error("failed to fetch unwind info")]
     FetchUnwind(#[from] FetchUnwindInfoError),
+    #[error("object file not found")]
+    MissingObjectFile(ExecutableId),
 }
 
 impl Profiler {
@@ -311,8 +313,10 @@ impl Profiler {
         let raw_sample_sender = Arc::new(sender);
         let raw_sample_receiver = Arc::new(receiver);
 
-        let walltime_at_system_boot =
-            procfs::boot_time().unwrap().timestamp_nanos_opt().unwrap() as u64;
+        let walltime_at_system_boot = procfs::boot_time()
+            .expect("read boot time")
+            .timestamp_nanos_opt()
+            .expect("convert boot time") as u64;
 
         Profiler {
             cache_dir,
@@ -525,7 +529,7 @@ impl Profiler {
             loop {
                 match profile_receive.recv() {
                     Ok(profile) => {
-                        collector.lock().unwrap().collect(
+                        collector.lock().expect("lock collector").collect(
                             profile,
                             &procs.read(),
                             &object_files.read(),
@@ -985,7 +989,9 @@ impl Profiler {
             return Ok(AddUnwindInformationResult::AlreadyLoaded);
         }
         let object_files = self.object_files.read();
-        let executable_info = object_files.get(&executable_id).unwrap();
+        let Some(executable_info) = object_files.get(&executable_id) else {
+            return Err(AddUnwindInformationError::MissingObjectFile(executable_id));
+        };
         let executable_path = executable_info.path.clone();
         let mut elf_loads = executable_info.elf_load_segments.clone();
         let opened_exe_path = if executable_info.is_vdso {
@@ -1114,8 +1120,9 @@ impl Profiler {
         self.bpf
             .add_pages(&unwind_info, executable_id.into())
             .map_err(|e| AddUnwindInformationError::BpfPages { source: e })?;
-        let unwind_info_start_address = unwind_info.first().unwrap().pc;
-        let unwind_info_end_address = unwind_info.last().unwrap().pc;
+
+        let unwind_info_start_address = unwind_info.first().expect("should never happen").pc;
+        let unwind_info_end_address = unwind_info.last().expect("should never happen").pc;
         self.native_unwind_state.insert(
             executable_id,
             KnownExecutableInfo {
@@ -1674,7 +1681,7 @@ impl Profiler {
                     Ok(thread) => {
                         self.metadata_provider
                             .lock()
-                            .unwrap()
+                            .expect("lock collector")
                             .register_task(TaskKey {
                                 pid,
                                 tid: thread.tid,
@@ -1727,8 +1734,10 @@ impl Profiler {
     pub fn setup_perf_events(&mut self) {
         let mut perf_fds = Vec::new();
         for i in get_online_cpus().expect("get online CPUs") {
-            let perf_fd = unsafe { setup_perf_event(i.try_into().unwrap(), self.sample_freq) }
-                .expect("setup perf event");
+            let perf_fd = unsafe {
+                setup_perf_event(i.try_into().expect("setup perf event"), self.sample_freq)
+            }
+            .expect("setup perf event");
             perf_fds.push(perf_fd);
         }
 

@@ -20,6 +20,5 @@ nix = { workspace = true }
 libbpf-cargo = { workspace = true}
 glob = { workspace = true}
 
-# TODO: enable
-# [lints]
-# workspace = true
+[lints]
+workspace = true
