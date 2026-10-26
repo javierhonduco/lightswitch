@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;

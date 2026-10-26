@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use core::str;
 use std::error::Error;
 use std::ffi::CString;
@@ -434,7 +436,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     p.profile_pids(args.pids);
     let profile_duration = p.run(collector.clone());
 
-    let collector = collector.lock().unwrap();
+    let collector = collector.lock().expect("lock collector");
     let (mut profile, procs, objs) = collector.finish();
 
     // The senders below send the profiles directly.

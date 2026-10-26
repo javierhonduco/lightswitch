@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use std::io;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
