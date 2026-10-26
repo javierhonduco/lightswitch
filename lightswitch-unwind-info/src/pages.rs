@@ -57,14 +57,17 @@ pub fn to_pages(unwind_info: &UnwindInfo) -> Result<Vec<Page>, ToPagesError> {
                 prev_high_pc = Some(high_pc);
             }
             Some(prev_pc_high) => {
-                // There's a gap larger than the page size, we need to insert
-                // pages that map to the same range of unwind
-                // information rows.
+                // Keep rows in their own page. Empty pages use [i, i), so
+                // i - 1 is their carry-forward predecessor.
                 if prev_pc_high + page_size < high_pc {
                     for address in (prev_pc_high..high_pc).step_by(page_size as usize) {
                         pages.push(Page {
                             address,
-                            low_index: prev_index.try_into()?,
+                            low_index: if address == prev_pc_high {
+                                prev_index.try_into()?
+                            } else {
+                                i.try_into()?
+                            },
                             high_index: i.try_into()?,
                         });
                     }
@@ -154,7 +157,7 @@ mod tests {
                 },
                 Page {
                     address: 0x100000,
-                    low_index: 0,
+                    low_index: 4,
                     high_index: 4
                 },
                 Page {
@@ -192,12 +195,12 @@ mod tests {
                 },
                 Page {
                     address: 0x20000,
-                    low_index: 1,
+                    low_index: 2,
                     high_index: 2
                 },
                 Page {
                     address: 0x30000,
-                    low_index: 1,
+                    low_index: 2,
                     high_index: 2
                 },
                 Page {

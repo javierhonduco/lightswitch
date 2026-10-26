@@ -76,7 +76,8 @@ struct {
 // information for a given program counter (pc) relative to the object file.
 static __always_inline u64 find_offset_for_pc(void* inner_map, u16 pc_low, u64 left,
                                               u64 right) {
-    u64 found = BINARY_SEARCH_DEFAULT;
+    // to_pages guarantees that rows before left start before this page.
+    u64 found = left > 0 ? left - 1 : BINARY_SEARCH_DEFAULT;
 
 // On kernels ~6.8 and greater the verifier fails with argument list too long. This did not use to
 // happen before and it's probably due to a regression in the way the verifier accounts for the explored
@@ -382,24 +383,11 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
         if (table_idx == BINARY_SEARCH_DEFAULT ||
             table_idx == BINARY_SEARCH_SHOULD_NEVER_HAPPEN ||
             table_idx == BINARY_SEARCH_EXHAUSTED_ITERATIONS) {
-            bool in_previous_page = false;
-
-            if (table_idx == BINARY_SEARCH_DEFAULT && low_index > 0) {
-                low_index -= 1;
-                stack_unwind_row_t* previous_row = bpf_map_lookup_elem(inner, &low_index);
-                if (previous_row != NULL && object_relative_pc > PREVIOUS_PAGE(object_relative_pc_high) + previous_row->pc_low) {
-                    table_idx = low_index;
-                    in_previous_page = true;
-                }
+            LOG("[error] binary search failed with %llx, pc: %llx", table_idx, unwind_state->ip);
+            if (table_idx == BINARY_SEARCH_EXHAUSTED_ITERATIONS) {
+                bump_unwind_error_binary_search_exhausted_iterations();
             }
-
-            if (!in_previous_page) {
-                LOG("[error] binary search failed with %llx, pc: %llx", table_idx, unwind_state->ip);
-                if (table_idx == BINARY_SEARCH_EXHAUSTED_ITERATIONS) {
-                    bump_unwind_error_binary_search_exhausted_iterations();
-                }
-                return 1;
-            }
+            return 1;
         }
 
         LOG("\t=> table_index: %d", table_idx);
