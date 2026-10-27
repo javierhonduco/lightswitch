@@ -180,7 +180,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some(Commands::SystemInfo) => {
             ensure_root();
             ensure_btf(&args.btf_custom_path);
-            show_system_info(&args.btf_custom_path);
+            show_system_info(&args.btf_custom_path, args.libbpf_debug);
             return Ok(());
         }
         Some(Commands::Server {
@@ -234,7 +234,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     ensure_root();
     ensure_btf(&args.btf_custom_path);
 
-    let Ok(system_info) = SystemInfo::new(args.btf_custom_path.clone()) else {
+    let Ok(system_info) = SystemInfo::new(args.btf_custom_path.clone(), args.libbpf_debug) else {
         error!("Failed to detect system info!");
         std::process::exit(1)
     };
@@ -538,10 +538,10 @@ fn show_unwind_info(path: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn show_system_info(btf_custom_path: &Option<String>) {
+fn show_system_info(btf_custom_path: &Option<String>, libbpf_debug: bool) {
     println!(
         "- system info: {:#?}",
-        SystemInfo::new(btf_custom_path.clone())
+        SystemInfo::new(btf_custom_path.clone(), libbpf_debug)
     );
     println!("- kernel build id: {:?}", kernel_build_id());
     if let Ok(aslr_offset) = kaslr_offset() {
