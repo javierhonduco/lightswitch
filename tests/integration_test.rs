@@ -147,7 +147,7 @@ fn stack_strings_for_pid(symbolized_profile: &AggregatedProfile, expected_pid: i
 #[test]
 fn test_integration() {
     let bpf_test_debug = std::env::var("TEST_LIBBPF_DEBUG").is_ok();
-    let system_info = SystemInfo::new(None).expect("failed to detect system info");
+    let system_info = SystemInfo::new(None, bpf_test_debug).expect("failed to detect system info");
 
     build_test_binary("integration-tests-progs");
     let cpp_proc = TestProcess::new("main_cpp_clang_O1", false);
@@ -274,7 +274,7 @@ fn test_integration() {
 #[test]
 fn test_integration_exec() {
     let bpf_test_debug = std::env::var("TEST_LIBBPF_DEBUG").is_ok();
-    let system_info = SystemInfo::new(None).expect("failed to detect system info");
+    let system_info = SystemInfo::new(None, bpf_test_debug).expect("failed to detect system info");
     build_test_binary("integration-tests-progs");
 
     let temp_dir = tempfile::tempdir().unwrap();
@@ -398,7 +398,7 @@ fn test_integration_exec() {
 #[test]
 fn test_integration_ocaml_native_defaults() {
     let bpf_test_debug = std::env::var("TEST_LIBBPF_DEBUG").is_ok();
-    let system_info = SystemInfo::new(None).expect("failed to detect system info");
+    let system_info = SystemInfo::new(None, bpf_test_debug).expect("failed to detect system info");
 
     build_test_binary("integration-tests-progs");
     let ocaml_proc = TestProcess::new("main_ocaml", false);
@@ -441,7 +441,7 @@ fn test_integration_ocaml_native_defaults() {
 #[test]
 fn test_use_pt_regs_helper() {
     let bpf_test_debug = std::env::var("TEST_LIBBPF_DEBUG").is_ok();
-    let system_info = SystemInfo::new(None).expect("failed to detect system info");
+    let system_info = SystemInfo::new(None, bpf_test_debug).expect("failed to detect system info");
     if !system_info.available_bpf_features.has_task_pt_regs_helper
         || !system_info.available_bpf_features.has_get_current_task_btf
     {

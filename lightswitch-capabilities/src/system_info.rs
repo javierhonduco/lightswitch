@@ -239,9 +239,10 @@ fn has_variable_inner_map() -> bool {
     true
 }
 
-fn has_non_prealloc_hash_maps_in_tracing() -> bool {
-    let skel_builder = NopreallocTestSkelBuilder::default();
+fn has_non_prealloc_hash_maps_in_tracing(libbpf_debug: bool) -> bool {
+    let mut skel_builder = NopreallocTestSkelBuilder::default();
     let mut obj = MaybeUninit::uninit();
+    skel_builder.obj_builder.debug(libbpf_debug);
     let open_skel = match skel_builder.open(&mut obj) {
         Ok(s) => s,
         Err(_) => return false,
@@ -251,13 +252,14 @@ fn has_non_prealloc_hash_maps_in_tracing() -> bool {
     loaded.is_ok()
 }
 
-fn check_bpf_features(btf_custom_path: Option<String>) -> Result<BpfFeatures> {
+fn check_bpf_features(btf_custom_path: Option<String>, libbpf_debug: bool) -> Result<BpfFeatures> {
     let mut skel_builder = FeaturesSkelBuilder::default();
     let mut a = MaybeUninit::uninit();
 
     if let Some(btf_custom_path) = btf_custom_path {
         let _ = skel_builder.obj_builder.btf_custom_path(btf_custom_path);
     }
+    skel_builder.obj_builder.debug(libbpf_debug);
 
     let mut open_skel = skel_builder
         .open(&mut a)
@@ -304,7 +306,7 @@ fn check_bpf_features(btf_custom_path: Option<String>) -> Result<BpfFeatures> {
         has_task_pt_regs_helper: bpf_features_bss.has_task_pt_regs_helper,
         has_get_current_task_btf: bpf_features_bss.has_get_current_task_btf,
         has_variable_inner_map: has_variable_inner_map(),
-        has_non_prealloc_hash_maps_in_tracing: has_non_prealloc_hash_maps_in_tracing(),
+        has_non_prealloc_hash_maps_in_tracing: has_non_prealloc_hash_maps_in_tracing(libbpf_debug),
         userspace_pid_ns_level: bpf_features_bss.userspace_pid_ns_level,
         has_loop: bpf_features_bss.has_loop,
         has_iter_num_new: bpf_features_bss.has_iter_num_new,
@@ -316,8 +318,8 @@ fn check_bpf_features(btf_custom_path: Option<String>) -> Result<BpfFeatures> {
 }
 
 impl SystemInfo {
-    pub fn new(btf_custom_path: Option<String>) -> Result<SystemInfo> {
-        let available_bpf_features = match check_bpf_features(btf_custom_path) {
+    pub fn new(btf_custom_path: Option<String>, libbpf_debug: bool) -> Result<SystemInfo> {
+        let available_bpf_features = match check_bpf_features(btf_custom_path, libbpf_debug) {
             Ok(features) => features,
             Err(err) => {
                 warn!("Failed to detect available BPF features {}", err);
@@ -356,7 +358,8 @@ mod tests {
 
     #[test]
     fn test_get_system_info() {
-        let result = SystemInfo::new(None);
+        let bpf_test_debug = std::env::var("TEST_LIBBPF_DEBUG").is_ok();
+        let result = SystemInfo::new(None, bpf_test_debug);
 
         assert!(result.is_ok());
 
