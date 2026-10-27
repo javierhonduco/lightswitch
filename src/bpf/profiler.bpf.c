@@ -12,6 +12,8 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
+#include "unwind_rules.h"
+
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
     __uint(max_entries, 256 * 1024 /* 256 KB */);
@@ -107,7 +109,8 @@ static __always_inline u64 find_offset_for_pc(void* inner_map, u16 pc_low, u64 l
             right = mid;
         }
     }
-    return BINARY_SEARCH_EXHAUSTED_ITERATIONS;
+    // The last comparison can converge without another iteration to notice it.
+    return left >= right ? found : BINARY_SEARCH_EXHAUSTED_ITERATIONS;
 }
 
 // Finds the shard information for a given pid and program counter. Optionally,
@@ -439,36 +442,41 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
             unwind_state->sample.stack.ulen++;
         }
 
-        if (found_rbp_type == RBP_TYPE_REGISTER ||
-            found_rbp_type == RBP_TYPE_EXPRESSION) {
-            LOG("\t[error] frame pointer is %d (register or exp), bailing out",
-                found_rbp_type);
+        struct register_rules registers = {};
+#ifdef __TARGET_ARCH_arm64
+        const bool arm64 = true;
+#else
+        const bool arm64 = false;
+#endif
+        if (!decode_register_rules(found_rbp_type, found_rbp_offset, arm64, &registers)) {
+            LOG("\t[error] unsupported FP/RA rule %d", found_rbp_type);
             bump_unwind_error_unsupported_frame_pointer_action();
             unwind_state->sample.result = SAMPLE_UNSUPPORTED_UNWIND_RULE;
             break;
         }
 
+        s16 deref_offset = 0;
+        u16 deref_addition = 0;
+        u8 deref_size = 0;
         u64 previous_rsp = 0;
         if (found_cfa_type == CFA_TYPE_RBP) {
             previous_rsp = unwind_state->bp + found_cfa_offset;
         } else if (found_cfa_type == CFA_TYPE_RSP) {
             previous_rsp = unwind_state->sp + found_cfa_offset;
-        } else if (found_cfa_type == CFA_TYPE_DEREF_AND_ADD) {
-            u8 offset = found_cfa_offset >> 8;
-            u8 addition = found_cfa_offset;
-            LOG("dwarf exp: *($rsp + %d) + %d", offset, addition);
-            int ret =
-                bpf_probe_read_user(&previous_rsp, 8, (void*)(unwind_state->sp + offset));
+        } else if (decode_cfa_deref(found_cfa_type, found_cfa_offset,
+                                    &deref_offset, &deref_addition, &deref_size)) {
+            int ret = read_cfa_deref(unwind_state->sp, deref_offset, deref_addition,
+                                     deref_size, &previous_rsp);
             if (ret < 0) {
                 LOG("[error] reading previous rsp failed with %d", ret);
                 bump_unwind_error_previous_rsp_read();
                 unwind_state->sample.result = ret == -EFAULT ? SAMPLE_MEM_READ_FAULT_ERROR : SAMPLE_MEM_READ_GENERIC_ERROR;
                 break;
             }
-            previous_rsp += addition;
         } else if (found_cfa_type == CFA_TYPE_CFA_TYPE_UNSUP_EXP) {
             bump_unwind_error_unsupported_expression();
-            return 1;
+            unwind_state->sample.result = SAMPLE_UNSUPPORTED_UNWIND_RULE;
+            break;
         } else if (found_cfa_type == CFA_TYPE_PLT1 || found_cfa_type == CFA_TYPE_PLT2) {
             LOG("CFA expression found with id %d", found_cfa_offset);
             u64 threshold = found_cfa_type == CFA_TYPE_PLT1 ? 11 : 10;
@@ -493,12 +501,12 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
 
         // Set rbp register.
         u64 previous_rbp = 0;
-        u64 previous_rbp_addr = previous_rsp + found_rbp_offset;
+        u64 previous_rbp_addr = previous_rsp + registers.fp_offset;
 
-        if (found_rbp_type == RBP_TYPE_UNCHANGED) {
+        if (!registers.restore_fp) {
             previous_rbp = unwind_state->bp;
         } else {
-            LOG("\t(bp_offset: %d, bp value stored at %llx)", found_rbp_offset,
+            LOG("\t(bp_offset: %d, bp value stored at %llx)", registers.fp_offset,
                 previous_rbp_addr);
             int ret =
                 bpf_probe_read_user(&previous_rbp, 8, (void*)(previous_rbp_addr));
@@ -514,32 +522,15 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
         u64 previous_rip_addr = 0;
         int err = 0;
 
-#ifdef __TARGET_ARCH_x86
-        // The return address is guaranteed to be 8 bytes ahead of
-        // the previous stack pointer in x86_64.
-        previous_rip_addr = previous_rsp - 8;
-        err = bpf_probe_read_user(&previous_rip, 8, (void*)(previous_rip_addr));
-
-#endif
-
 #ifdef __TARGET_ARCH_arm64
-        // Special handling for leaf frame. Binaries with .eh_frame will have
-        // a explicit usage of the LR register, while syntethised binaries do
-        // not, such as Golang and Arm64 vDSO.
-        if (found_rbp_type == RBP_TYPE_ARM64_RETURN_ADDRESS_LR) {
+        if (registers.use_lr) {
             previous_rip = unwind_state->lr;
-        } else if (found_rbp_type == RBP_TYPE_ARM64_RETURN_ADDRESS_FRAME) {
-            // The binary was compiled with frame pointers, the location of the return
-            // address is guaranteed by the Aarch64 ABI.
-            previous_rip_addr = previous_rbp_addr + 8;
-            err = bpf_probe_read_user(&previous_rip, 8, (void*)(previous_rip_addr));
-        } else {
-            // If there are not frame pointers, we need to fetch the return address somewhere
-            // else in the stack.
-            previous_rip_addr = previous_rsp + found_rbp_offset;
-            err = bpf_probe_read_user(&previous_rip, 8, (void*)(previous_rip_addr));
-        }
+        } else
 #endif
+        {
+            previous_rip_addr = previous_rsp + registers.ra_offset;
+            err = bpf_probe_read_user(&previous_rip, 8, (void*)previous_rip_addr);
+        }
 
         if (err < 0) {
             LOG("[error] previous_rip read failed, ret=%d @ %llx",

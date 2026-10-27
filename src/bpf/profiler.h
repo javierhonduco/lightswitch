@@ -54,7 +54,7 @@ typedef struct {
 #define CFA_TYPE_CFA_TYPE_UNSUP_EXP    3
 #define CFA_TYPE_PLT1                  4
 #define CFA_TYPE_PLT2                  5
-#define CFA_TYPE_DEREF_AND_ADD         6
+#define CFA_TYPE_DEREF_AND_ADD         0x10  // 0x10..0x1b: width and operand modes
 #define CFA_TYPE_END_OF_FDE_MARKER     7
 #define CFA_TYPE_UNSUP_REGISTER_OFFSET 8  // not used in the unwinder yet.
 #define CFA_TYPE_OFFSET_DID_NOT_FIT    9
@@ -69,6 +69,10 @@ typedef struct {
 #define RBP_TYPE_ARM64_RETURN_ADDRESS_LR        6
 #define RBP_TYPE_ARM64_RETURN_ADDRESS_FRAME     7
 #define RBP_TYPE_ARM64_RETURN_ADDRESS_ELSEWHERE 8
+#define RBP_TYPE_ARM64_RETURN_ADDRESS_LR_WITH_FP 9
+#define RBP_TYPE_ARM64_INDEPENDENT_OFFSETS      10
+#define RBP_TYPE_ARM64_INDEPENDENT_OFFSETS_SCALED 11
+#define RBP_TYPE_UNSUPPORTED                    12
 
 // Binary search error codes.
 #define BINARY_SEARCH_DEFAULT              0xFABADAFABADAULL

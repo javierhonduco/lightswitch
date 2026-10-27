@@ -13,7 +13,7 @@ use crate::types::CompactUnwindRowWire;
 // To identify this binary file type.
 const MAGIC_NUMBER: u32 = 0x1357531;
 // Any changes to the ABI / digest must bump the version.
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 // Maximum entries that can be read.
 const MAX_UNWIND_ENTRIES: u64 = 10_000_000;
 
@@ -265,19 +265,21 @@ mod tests {
 
     #[test]
     fn test_version_mismatch() {
-        let mut buffer = Vec::new();
-        let header = Header {
-            version: VERSION + 1,
-            magic: MAGIC_NUMBER,
-            ..Default::default()
-        };
-        buffer
-            .write_all(unsafe { plain::as_bytes(&header) })
-            .unwrap();
-        assert!(matches!(
-            Reader::new(&buffer, true),
-            Err(ReaderError::Version)
-        ));
+        for version in [VERSION - 1, VERSION + 1] {
+            let mut buffer = Vec::new();
+            let header = Header {
+                version,
+                magic: MAGIC_NUMBER,
+                ..Default::default()
+            };
+            buffer
+                .write_all(unsafe { plain::as_bytes(&header) })
+                .unwrap();
+            assert!(matches!(
+                Reader::new(&buffer, true),
+                Err(ReaderError::Version)
+            ));
+        }
     }
 
     #[test]

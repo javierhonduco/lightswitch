@@ -2,8 +2,7 @@ use std::borrow::Cow;
 
 use anyhow::Result;
 use gimli::{
-    BaseAddresses, CfaRule, CieOrFde, EhFrame, Encoding, EndianSlice, Endianity, Format,
-    FrameDescriptionEntry,
+    BaseAddresses, CfaRule, CieOrFde, EhFrame, EndianSlice, Endianity, FrameDescriptionEntry,
     Operation::{Deref, PlusConstant, RegisterOffset},
     Register, StoreOnHeap, UnwindContext, UnwindSection, UnwindTableRow,
 };
@@ -68,42 +67,42 @@ where
                 } else if expression_data == *PLT2 {
                     compact_row.cfa_type = CfaType::Plt2;
                 } else {
-                    let mut ops = expression.operations(Encoding {
-                        format: Format::Dwarf64,
-                        version: 4,
-                        address_size: 8,
-                    });
+                    let mut ops = expression.operations(fde.cie().encoding());
 
                     match (ops.next(), ops.next(), ops.next(), ops.next(), ops.next()) {
                         (
                             Ok(Some(RegisterOffset {
-                                register, offset, ..
+                                register,
+                                offset,
+                                base_type,
                             })),
-                            Ok(Some(Deref { .. })),
+                            Ok(Some(Deref {
+                                size,
+                                base_type: deref_base_type,
+                                space: false,
+                            })),
                             Ok(Some(PlusConstant { value: addition1 })),
                             Ok(last_instr),
                             Ok(None), // All PlusConstant + none
-                        ) if register == *stack_pointer => {
+                        ) if register == *stack_pointer
+                            && base_type.0 == 0
+                            && deref_base_type.0 == 0 =>
+                        {
                             let addition = match last_instr {
                                 None => Some(addition1),
-                                // OCaml has a couple of expressions with two                     //
+                                // OCaml has a couple of expressions with two
                                 // additions which their backend is not folding,
                                 // so we do it here.
                                 Some(PlusConstant { value: addition2 }) => {
-                                    Some(addition1 + addition2)
+                                    addition1.checked_add(addition2)
                                 }
                                 _ => None,
                             };
-                            if let Some(addition) = addition {
-                                debug!("*(rsp+{offset})+{addition}");
-                                compact_row.cfa_type = CfaType::DerefAndAdd;
-                                // Assumes that both the offset and addition
-                                // will fit in 2
-                                // bytes, which seems to be
-                                // the case for many binaries I've tried but
-                                // would be good to
-                                // test against larger ones.
-                                compact_row.cfa_offset = ((offset as u16) << 8) | (addition as u16);
+                            if let Some((kind, operands)) = addition
+                                .and_then(|addition| CfaType::encode_deref(offset, addition, size))
+                            {
+                                compact_row.cfa_type = kind;
+                                compact_row.cfa_offset = operands;
                             }
                         }
                         _ => {}
@@ -115,59 +114,83 @@ where
 
     let fp = row.register(*frame_pointer);
     match fp {
-        Some(gimli::RegisterRule::Undefined) => {}
-        Some(gimli::RegisterRule::Offset(offset)) => {
-            compact_row.rbp_type = RbpType::CfaOffset;
-
-            match i16::try_from(offset) {
-                Ok(off) => {
-                    compact_row.rbp_offset = off;
-                }
-                Err(_) => {
-                    compact_row.rbp_type = RbpType::OffsetDidNotFit;
-                }
+        None | Some(gimli::RegisterRule::Undefined | gimli::RegisterRule::SameValue) => {}
+        Some(gimli::RegisterRule::Offset(offset)) => match i16::try_from(offset) {
+            Ok(offset) => {
+                compact_row.rbp_type = RbpType::CfaOffset;
+                compact_row.rbp_offset = offset;
             }
-        }
-        Some(gimli::RegisterRule::Register(_reg)) => {
-            compact_row.rbp_type = RbpType::Register;
-        }
-        Some(gimli::RegisterRule::Expression(_)) => {
-            compact_row.rbp_type = RbpType::Expression;
-        }
-        _ => {
-            debug!("unsupported frame pointer {:?}", fp);
-        }
+            Err(_) => compact_row.rbp_type = RbpType::OffsetDidNotFit,
+        },
+        Some(gimli::RegisterRule::Register(_)) => compact_row.rbp_type = RbpType::Register,
+        Some(gimli::RegisterRule::Expression(_)) => compact_row.rbp_type = RbpType::Expression,
+        _ => compact_row.rbp_type = RbpType::Unsupported,
     }
 
-    match row.register(fde.cie().return_address_register()) {
-        Some(gimli::RegisterRule::Undefined) => {
-            compact_row.rbp_type = RbpType::UndefinedReturnAddress;
-        }
-        Some(gimli::RegisterRule::Offset(offset)) if is_arm => {
-            // In the presence of frame pointers, the following locations
-            // are guaranteed by the aarch64 ABI.
-            let fp_layout = offset - compact_row.rbp_offset as i64 == 8;
-            if compact_row.rbp_type == RbpType::CfaOffset && fp_layout {
-                compact_row.rbp_type = RbpType::Arm64ReturnAddressFrame;
-            } else {
-                compact_row.rbp_type = RbpType::Arm64ReturnAddressElsewhere;
-                match i16::try_from(offset) {
-                    Ok(off) => {
-                        compact_row.rbp_offset = off;
-                    }
-                    Err(_) => {
+    let ra = row.register(fde.cie().return_address_register());
+    if ra == Some(gimli::RegisterRule::Undefined) {
+        compact_row.rbp_type = RbpType::UndefinedReturnAddress;
+    } else if matches!(
+        compact_row.rbp_type,
+        RbpType::Unchanged | RbpType::CfaOffset
+    ) {
+        // Do not overwrite an unsupported FP rule with a supported RA tag.
+        if is_arm {
+            match ra {
+                None | Some(gimli::RegisterRule::SameValue) => {
+                    compact_row.rbp_type = if compact_row.rbp_type == RbpType::Unchanged {
+                        RbpType::Arm64ReturnAddressLr
+                    } else {
+                        RbpType::Arm64ReturnAddressLrWithFramePointer
+                    };
+                }
+                Some(gimli::RegisterRule::Offset(offset)) => {
+                    if let Ok(ra_offset) = i16::try_from(offset) {
+                        if compact_row.rbp_type == RbpType::Unchanged {
+                            compact_row.rbp_type = RbpType::Arm64ReturnAddressElsewhere;
+                            compact_row.rbp_offset = ra_offset;
+                        } else if offset - i64::from(compact_row.rbp_offset) == 8 {
+                            compact_row.rbp_type = RbpType::Arm64ReturnAddressFrame;
+                        } else if let Some((kind, offsets)) =
+                            encode_arm64_offsets(compact_row.rbp_offset, ra_offset)
+                        {
+                            compact_row.rbp_type = kind;
+                            compact_row.rbp_offset = offsets;
+                        } else {
+                            compact_row.rbp_type = RbpType::OffsetDidNotFit;
+                        }
+                    } else {
                         compact_row.rbp_type = RbpType::OffsetDidNotFit;
                     }
                 }
+                _ => compact_row.rbp_type = RbpType::Unsupported,
             }
+        } else if ra != Some(gimli::RegisterRule::Offset(-8)) {
+            compact_row.rbp_type = RbpType::Unsupported;
         }
-        None if is_arm => {
-            compact_row.rbp_type = RbpType::Arm64ReturnAddressLr;
-        }
-        _ => {}
     }
 
     compact_row
+}
+
+/// Independent offsets share the existing two-byte payload. Wider pairs that
+/// are not the usual FP/RA frame record are rejected, never silently aliased.
+fn encode_arm64_offsets(fp: i16, ra: i16) -> Option<(RbpType, i16)> {
+    let (kind, fp, ra) = if let (Ok(fp), Ok(ra)) = (i8::try_from(fp), i8::try_from(ra)) {
+        (RbpType::Arm64IndependentOffsets, fp, ra)
+    } else if fp % 8 == 0 && ra % 8 == 0 {
+        (
+            RbpType::Arm64IndependentOffsetsScaled,
+            i8::try_from(fp / 8).ok()?,
+            i8::try_from(ra / 8).ok()?,
+        )
+    } else {
+        return None;
+    };
+    Some((
+        kind,
+        ((u16::from(fp as u8) << 8) | u16::from(ra as u8)) as i16,
+    ))
 }
 
 /// For a given `gimli::eh_frame` section, returns the program counters and
@@ -796,6 +819,7 @@ mod tests {
                 pc: TEST_PC,
                 cfa_type: CfaType::StackPointerOffset,
                 cfa_offset: 8,
+                rbp_type: RbpType::Unsupported,
                 ..Default::default()
             },
         );
@@ -809,6 +833,7 @@ mod tests {
                 pc: TEST_PC,
                 cfa_type: CfaType::StackPointerOffset,
                 cfa_offset: 8,
+                rbp_type: RbpType::Unsupported,
                 ..Default::default()
             },
         );
@@ -869,9 +894,9 @@ mod tests {
             CompactUnwindRow {
                 pc: TEST_PC,
                 cfa_type: CfaType::FramePointerOffset,
-                rbp_type: RbpType::Arm64ReturnAddressElsewhere,
+                rbp_type: RbpType::Arm64IndependentOffsets,
                 cfa_offset: 16,
-                rbp_offset: -24,
+                rbp_offset: 0xf0e8_u16 as i16,
             },
         );
 
@@ -893,5 +918,168 @@ mod tests {
                 rbp_offset: -16,
             },
         );
+    }
+    #[test]
+    fn arm64_fp_and_ra_rules_remain_independent() {
+        for explicit_same_value in [false, true] {
+            for fp_offset in [None, Some(-16), Some(-32768)] {
+                let mut initial = vec![CallFrameInstruction::Cfa(AArch64::SP, 32)];
+                if let Some(fp_offset) = fp_offset {
+                    initial.push(CallFrameInstruction::Offset(AArch64::X29, fp_offset));
+                }
+                if explicit_same_value {
+                    initial.push(CallFrameInstruction::SameValue(AArch64::X30));
+                }
+                let row = convert_arm64(initial, vec![]);
+                assert_eq!(
+                    row.rbp_type,
+                    if fp_offset.is_some() {
+                        RbpType::Arm64ReturnAddressLrWithFramePointer
+                    } else {
+                        RbpType::Arm64ReturnAddressLr
+                    }
+                );
+                assert_eq!({ row.rbp_offset }, fp_offset.unwrap_or(0) as i16);
+            }
+        }
+        let row = convert_arm64(
+            vec![
+                CallFrameInstruction::Cfa(AArch64::SP, 32),
+                CallFrameInstruction::Offset(AArch64::X30, -24),
+            ],
+            vec![],
+        );
+        assert_eq!(row.rbp_type, RbpType::Arm64ReturnAddressElsewhere);
+        assert_eq!({ row.rbp_offset }, -24);
+
+        for (fp, ra, kind, packed) in [
+            (-32, -8, RbpType::Arm64IndependentOffsets, 0xe0f8_u16),
+            (-1024, -8, RbpType::Arm64IndependentOffsetsScaled, 0x80ff),
+            (-32768, -32760, RbpType::Arm64ReturnAddressFrame, 0x8000),
+        ] {
+            let row = convert_arm64(
+                vec![
+                    CallFrameInstruction::Cfa(AArch64::SP, 32),
+                    CallFrameInstruction::Offset(AArch64::X29, fp),
+                    CallFrameInstruction::Offset(AArch64::X30, ra),
+                ],
+                vec![],
+            );
+            assert_eq!(row.rbp_type, kind);
+            assert_eq!({ row.rbp_offset }, packed as i16);
+        }
+        for (fp, ra) in [(-1032, -8), (-32768, 32760), (-16, 32768)] {
+            let row = convert_arm64(
+                vec![
+                    CallFrameInstruction::Cfa(AArch64::SP, 32),
+                    CallFrameInstruction::Offset(AArch64::X29, fp),
+                    CallFrameInstruction::Offset(AArch64::X30, ra),
+                ],
+                vec![],
+            );
+            assert_eq!(row.rbp_type, RbpType::OffsetDidNotFit);
+        }
+    }
+
+    #[test]
+    fn supported_ra_does_not_hide_unsupported_fp_rules() {
+        for fp in [
+            CallFrameInstruction::Offset(AArch64::X29, -40000),
+            CallFrameInstruction::Register(AArch64::X29, AArch64::X19),
+            CallFrameInstruction::Expression(AArch64::X29, unsupported_expression()),
+            CallFrameInstruction::ValOffset(AArch64::X29, -16),
+        ] {
+            for ra in [
+                CallFrameInstruction::SameValue(AArch64::X30),
+                CallFrameInstruction::Offset(AArch64::X30, -8),
+            ] {
+                let row = convert_arm64(
+                    vec![CallFrameInstruction::Cfa(AArch64::SP, 32), fp.clone(), ra],
+                    vec![],
+                );
+                assert!(matches!(
+                    row.rbp_type,
+                    RbpType::OffsetDidNotFit
+                        | RbpType::Register
+                        | RbpType::Expression
+                        | RbpType::Unsupported
+                ));
+            }
+        }
+        assert_eq!(
+            convert_x86(vec![(0, CallFrameInstruction::Offset(X86_64::RA, -16))]).rbp_type,
+            RbpType::Unsupported
+        );
+    }
+
+    #[test]
+    fn dereference_operands_and_width_are_checked_before_packing() {
+        for (offset, addition, size, kind, packed) in [
+            (-8, 8, 8, CfaType::DerefAndAddSigned, 0xf808),
+            (272, 8, 8, CfaType::DerefAndAddScaled, 0x2201),
+            (544, 8, 8, CfaType::DerefAndAddScaled, 0x4401),
+            (16, 256, 8, CfaType::DerefAndAddScaled, 0x0220),
+            (255, 255, 8, CfaType::DerefAndAdd, 0xffff),
+            (-128, 255, 8, CfaType::DerefAndAddSigned, 0x80ff),
+            (-1024, 2040, 8, CfaType::DerefAndAddScaled, 0x80ff),
+            (1016, 2040, 8, CfaType::DerefAndAddScaled, 0x7fff),
+            (16, 24, 1, CfaType::DerefAndAdd1, 0x1018),
+            (16, 24, 2, CfaType::DerefAndAdd2, 0x1018),
+            (16, 24, 4, CfaType::DerefAndAdd4, 0x1018),
+        ] {
+            let mut exp = WriteExpression::new();
+            exp.op_breg(X86_64::RSP, offset);
+            exp.op_deref_size(size);
+            exp.op_plus_uconst(addition);
+            let row = convert_x86(vec![(0, CallFrameInstruction::CfaExpression(exp))]);
+            assert_eq!(row.cfa_type, kind);
+            assert_eq!({ row.cfa_offset }, packed);
+        }
+        for (offset, addition, size) in [
+            (-129, 8, 8),
+            (257, 8, 8),
+            (1024, 8, 8),
+            (-1032, 8, 8),
+            (16, 2048, 8),
+            (16, 257, 8),
+            (16, 8, 3),
+            (16, 8, 0),
+            (i64::MIN, 8, 8),
+            (16, u64::MAX, 8),
+        ] {
+            let mut exp = WriteExpression::new();
+            exp.op_breg(X86_64::RSP, offset);
+            exp.op_deref_size(size);
+            exp.op_plus_uconst(addition);
+            let row = convert_x86(vec![(0, CallFrameInstruction::CfaExpression(exp))]);
+            assert_eq!(
+                row.cfa_type,
+                CfaType::UnsupportedExpression,
+                "{offset} {addition} {size}"
+            );
+        }
+        let mut exp = WriteExpression::new();
+        exp.op_breg(X86_64::RSP, 16);
+        exp.op_deref();
+        exp.op_plus_uconst(u64::MAX);
+        exp.op_plus_uconst(1);
+        assert_eq!(
+            convert_x86(vec![(0, CallFrameInstruction::CfaExpression(exp))]).cfa_type,
+            CfaType::UnsupportedExpression
+        );
+        // Typed and address-space dereferences are outside this encoding.
+        for raw in [
+            vec![0x77, 0x10, 0xa6, 8, 1, 0x23, 8],
+            vec![0x77, 0x10, 0x18, 0x23, 8],
+        ] {
+            assert_eq!(
+                convert_x86(vec![(
+                    0,
+                    CallFrameInstruction::CfaExpression(WriteExpression::raw(raw))
+                )])
+                .cfa_type,
+                CfaType::UnsupportedExpression
+            );
+        }
     }
 }
