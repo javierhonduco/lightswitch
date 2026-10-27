@@ -31,7 +31,7 @@ jobs:
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
             - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
-            - uses: DeterminateSystems/flakehub-cache-action@0975873945367f5239ebb5f49c133bf3543a08f6 # v2
+            - uses: DeterminateSystems/flakehub-cache-action@5a904648441896ace9bab97c70b321339eb127ed # v2
             - name: Show nix version
               run: nix --version
             - name: Set up nix dev env
@@ -94,7 +94,7 @@ jobs:
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
             - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
-            - uses: DeterminateSystems/flakehub-cache-action@0975873945367f5239ebb5f49c133bf3543a08f6 # v2
+            - uses: DeterminateSystems/flakehub-cache-action@5a904648441896ace9bab97c70b321339eb127ed # v2
             - name: Show nix version
               run: nix --version
             - name: Set up nix dev env
