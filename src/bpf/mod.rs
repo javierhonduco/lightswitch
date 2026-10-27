@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 pub mod profiler_bindings;
 pub mod profiler_skel {
     include!(concat!(env!("OUT_DIR"), "/profiler_skel.rs"));

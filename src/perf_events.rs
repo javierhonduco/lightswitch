@@ -22,7 +22,7 @@ pub unsafe fn setup_perf_event(cpu: i32, sample_freq: u64) -> Result<c_int, io::
             cpu, -1, /* group_fd */
             0,  /* flags */
         )
-    } as c_int;
+    };
 
     if ret < 0 {
         return Err(io::Error::last_os_error());

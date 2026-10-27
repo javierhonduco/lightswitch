@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use itertools::Itertools;
 use libbpf_rs::{MapCore, MapFlags, MapHandle, MapType};

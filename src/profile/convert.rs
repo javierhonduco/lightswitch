@@ -139,12 +139,10 @@ pub fn to_pprof(
                         .file_offset
                         .or_else(|| obj.normalized_address(virtual_address, mapping));
 
-                    if normalized_addr.is_none() {
+                    let Some(normalized_addr) = normalized_addr else {
                         debug!("normalized address is none");
                         continue;
-                    }
-
-                    let normalized_addr = normalized_addr.unwrap();
+                    };
 
                     let build_id = match &obj.build_id {
                         Some(build_id) => {
@@ -210,7 +208,10 @@ pub fn to_pprof(
             continue;
         };
         let labels = task_to_labels.entry(task_key).or_insert_with(|| {
-            let metadata = metadata_provider.lock().unwrap().get_metadata(task_key);
+            let metadata = metadata_provider
+                .lock()
+                .expect("lock collector")
+                .get_metadata(task_key);
             metadata
                 .into_iter()
                 .chain(vec![
@@ -299,7 +300,7 @@ pub fn fold_profile(
             },
             count
         )
-        .unwrap();
+        .expect("write folded profile");
     }
 
     folded
