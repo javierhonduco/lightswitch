@@ -13,7 +13,8 @@ use crate::types::CompactUnwindRowWire;
 // To identify this binary file type.
 const MAGIC_NUMBER: u32 = 0x1357531;
 // Any changes to the ABI / digest must bump the version.
-const VERSION: u32 = 5;
+// Regenerate older caches to include synthesized ARM64 PLT rules.
+const VERSION: u32 = 6;
 // Maximum entries that can be read.
 const MAX_UNWIND_ENTRIES: u64 = 10_000_000;
 

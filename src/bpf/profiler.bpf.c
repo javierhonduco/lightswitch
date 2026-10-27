@@ -71,7 +71,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, MAX_PROCESSES);
     __type(key, u64);
-    __type(value, bool);
+    __type(value, u64);
 } rate_limits SEC(".maps");
 
 // Binary search the unwind table to find the row index containing the unwind
@@ -146,8 +146,12 @@ find_page(mapping_t* mapping, u64 object_relative_pc, u64* low_index, u64* high_
 
 static __always_inline void send_event(Event* event, struct bpf_perf_event_data* ctx) {
     u64 event_id = ((u64)event->pid << 32 | event->type);
-    bool* is_rate_limited = bpf_map_lookup_elem(&rate_limits, &event_id);
-    if (is_rate_limited != NULL && *is_rate_limited) {
+    u64 now = bpf_ktime_get_ns();
+    u64* last_sent = bpf_map_lookup_elem(&rate_limits, &event_id);
+    // Mapping snapshots may race with exec or the loader. Let a later sample
+    // retry without waiting for the five-second userspace collection tick.
+    u64 interval = event->type == EVENT_NEED_PROCESS_INFO_REFRESH ? 100000000ULL : 5000000000ULL;
+    if (last_sent != NULL && now - *last_sent < interval) {
         LOG("[debug] send_event was rate limited for process %d", event->pid);
         return;
     }
@@ -166,12 +170,11 @@ static __always_inline void send_event(Event* event, struct bpf_perf_event_data*
         } else if (event->type == EVENT_NEED_UNWIND_INFO) {
             bump_unwind_error_sending_need_unwind_info_event();
         }
+        return;
     }
 
     LOG("[debug] event type %d sent for process %d", event->type, event->pid);
-    bool rate_limited = true;
-
-    bpf_map_update_elem(&rate_limits, &event_id, &rate_limited, BPF_ANY);
+    bpf_map_update_elem(&rate_limits, &event_id, &now, BPF_ANY);
 }
 
 // The return address points to the instruction at which execution

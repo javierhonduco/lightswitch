@@ -10,6 +10,7 @@ unsafe impl Plain for tracer_event_t {}
 impl From<tracer_event_t> for TracerEvent {
     fn from(event: tracer_event_t) -> Self {
         match event.type_ {
+            tracer_event_type_TRACER_EVENT_TYPE_EXEC => TracerEvent::Exec(event.pid),
             tracer_event_type_TRACER_EVENT_TYPE_PROCESS_EXIT => TracerEvent::ProcessExit(event.pid),
             tracer_event_type_TRACER_EVENT_TYPE_MUNMAP => {
                 TracerEvent::Munmap(event.pid, event.start_address, event.end_address)

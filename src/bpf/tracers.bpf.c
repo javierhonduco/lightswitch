@@ -47,6 +47,39 @@ struct munmap_entry_args {
     size_t len;
 };
 
+// Invalidate the PID marker synchronously on exec. The new image can reuse
+// addresses covered by the old maps, so waiting for a mapping miss is unsafe.
+SEC("tracepoint/sched/sched_process_exec")
+int tracer_process_exec(void* ctx) {
+    struct task_struct* task = current_task();
+    unsigned int level = lightswitch_config.userspace_pid_ns_level;
+    int pid = BPF_CORE_READ(task, group_leader, thread_pid, numbers[level].nr);
+    if (!process_is_known(pid)) {
+        return 0;
+    }
+    struct exec_mappings_key key = {
+        .prefix_len = 32,
+        .pid = __builtin_bswap32((u32)pid),
+        .data = 0,
+    };
+    bpf_map_delete_elem(&exec_mappings, &key);
+    tracer_event_t event = {
+        .type = TRACER_EVENT_TYPE_EXEC,
+        .pid = pid,
+    };
+    int ret;
+    if (lightswitch_config.use_ring_buffers) {
+        ret = bpf_ringbuf_output(&tracer_events_rb, &event, sizeof(event), 0);
+    } else {
+        ret = bpf_perf_event_output(ctx, &tracer_events, BPF_F_CURRENT_CPU, &event, sizeof(event));
+    }
+    if (ret < 0) {
+        // With the PID marker removed, normal discovery will retry too.
+        LOG("[error] failed to send process exec tracer event");
+    }
+    return 0;
+}
+
 SEC("tracepoint/sched/sched_process_exit")
 int tracer_process_exit(void* ctx) {
     struct task_struct* task = current_task();

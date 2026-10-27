@@ -345,8 +345,34 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
 
         let pc_and_fde_offset = pc_and_fde_offset(&bases, &eh_frame);
 
+        // Synthesize only PLTs with a recognized instruction sequence and no
+        // overlapping FDE. Existing DWARF always takes precedence.
+        let mut plts = crate::plt::unwind_info(&object_file);
+        for (_, offset) in &pc_and_fde_offset {
+            let fde = eh_frame.fde_from_offset(
+                &bases,
+                gimli::EhFrameOffset(*offset),
+                EhFrame::cie_from_offset,
+            )?;
+            plts.retain(|plt| fde.end_address() <= plt.start || fde.initial_address() >= plt.end);
+            if plts.is_empty() {
+                break;
+            }
+        }
+        let emit_plt = |plt: crate::plt::Plt, callback: &mut Box<dyn FnMut(&UnwindData) + 'a>| {
+            callback(&UnwindData::Function(plt.start, plt.end));
+            for row in plt.rows {
+                callback(&UnwindData::Instruction(row));
+            }
+        };
+        let mut plts = plts.into_iter().peekable();
         let mut ctx = Box::new(UnwindContext::new());
-        for (_, fde_offset) in pc_and_fde_offset {
+        for (pc, fde_offset) in pc_and_fde_offset {
+            while plts.peek().is_some_and(|plt| plt.start < pc) {
+                if let Some(plt) = plts.next() {
+                    emit_plt(plt, &mut self.callback);
+                }
+            }
             let fde = eh_frame.fde_from_offset(
                 &bases,
                 gimli::EhFrameOffset(fde_offset),
@@ -382,6 +408,9 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
 
                 (self.callback)(&UnwindData::Instruction(compact_row));
             }
+        }
+        for plt in plts {
+            emit_plt(plt, &mut self.callback);
         }
         Ok(())
     }

@@ -3,6 +3,7 @@
 enum tracer_event_type {
     TRACER_EVENT_TYPE_PROCESS_EXIT = 1,
     TRACER_EVENT_TYPE_MUNMAP = 2,
+    TRACER_EVENT_TYPE_EXEC = 3,
 };
 
 typedef struct {

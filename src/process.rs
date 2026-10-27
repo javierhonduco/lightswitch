@@ -65,7 +65,7 @@ pub struct ProcessInfo {
 /// Stores information for a executable mapping with all
 /// the information we need to do everything symbolization
 /// related.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExecutableMapping {
     pub executable_id: ExecutableId,
     pub kind: ExecutableMappingType,

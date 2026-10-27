@@ -120,7 +120,7 @@ impl Bpf {
             )
         };
 
-        info!("munmap and process exit tracing BPF programs loaded");
+        info!("munmap, exec and process exit tracing BPF programs loaded");
 
         Self {
             native_unwinder_open_object,
@@ -462,6 +462,16 @@ impl Bpf {
             unsafe { plain::as_bytes(mapping) },
             MapFlags::ANY,
         )
+    }
+
+    pub(crate) fn retry_process_discovery(&self, pid: Pid) {
+        let key = ((pid as u64) << 32)
+            | u64::from(crate::bpf::profiler_bindings::event_type_EVENT_NEW_PROCESS);
+        let _ = self
+            .native_unwinder
+            .maps
+            .rate_limits
+            .delete(&key.to_ne_bytes());
     }
 
     pub(crate) fn add_process(&self, pid: Pid) -> Result<(), libbpf_rs::Error> {

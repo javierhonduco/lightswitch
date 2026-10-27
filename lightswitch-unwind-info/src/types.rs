@@ -109,9 +109,9 @@ pub enum RbpType {
     OffsetDidNotFit = 5,
     // These tags describe both FP and RA recovery; rbp_offset is interpreted
     // according to the tag, never used for both independent offsets.
-    Arm64ReturnAddressLr = 6, // Keep FP; use live LR.
-    Arm64ReturnAddressFrame = 7, // FP at CFA+offset; RA eight bytes after FP.
-    Arm64ReturnAddressElsewhere = 8, // Keep FP; RA at CFA+offset.
+    Arm64ReturnAddressLr = 6,                 // Keep FP; use live LR.
+    Arm64ReturnAddressFrame = 7,              // FP at CFA+offset; RA eight bytes after FP.
+    Arm64ReturnAddressElsewhere = 8,          // Keep FP; RA at CFA+offset.
     Arm64ReturnAddressLrWithFramePointer = 9, // FP at CFA+offset; use live LR.
     // High byte: signed FP displacement. Low byte: signed RA displacement.
     Arm64IndependentOffsets = 10,

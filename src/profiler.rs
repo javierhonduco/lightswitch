@@ -68,9 +68,21 @@ use lightswitch_object::{ExecutableId, MappedObjectFile, Runtime};
 use lightswitch_unwind_info::manager::UnwindInfoManager;
 use lightswitch_unwind_info::types::CompactUnwindRow;
 
+fn executable_maps(
+    proc: &procfs::process::Process,
+) -> Result<Vec<procfs::process::MemoryMap>, AddProcessError> {
+    Ok(proc
+        .maps()
+        .map_err(|_| AddProcessError::ProcfsRace)?
+        .into_iter()
+        .filter(|map| map.perms.contains(procfs::process::MMPermissions::EXECUTE))
+        .collect())
+}
+
 const MAX_UNWIND_INFO_SIZE: usize = 7_000_000;
 
 pub enum TracerEvent {
+    Exec(Pid),
     ProcessExit(Pid),
     Munmap(Pid, u64, u64),
 }
@@ -579,6 +591,12 @@ impl Profiler {
                         Ok(TracerEvent::Munmap(pid, start_address, end_address)) => {
                                 self.handle_munmap(pid, start_address, end_address);
                         },
+                        Ok(TracerEvent::Exec(pid)) => {
+                            if let Err(e) = self.event_proc_info_refresh(pid) {
+                                debug!("failed to refresh exec'd process {pid}: {e:?}");
+                                self.bpf.retry_process_discovery(pid);
+                            }
+                        },
                         Ok(TracerEvent::ProcessExit(pid)) => {
                                 self.handle_process_exit(pid, false);
                         },
@@ -631,10 +649,14 @@ impl Profiler {
         for to_delete in &items_to_delete {
             match to_delete {
                 ToDelete::Process(_, pid) => {
-                    // Assumes that the PID hasn't been recycled, which can
-                    // happen in the wild. remove from
-                    // afficted
-                    let _ = procs.remove(pid);
+                    // A refreshed/reused PID may have become active again
+                    // since this deletion was scheduled.
+                    if procs
+                        .get(pid)
+                        .is_some_and(|proc| proc.status == ProcessStatus::Exited)
+                    {
+                        let _ = procs.remove(pid);
+                    }
                 }
                 ToDelete::ObjectFile(_, executable_id) => {
                     if let Entry::Occupied(entry) = object_files.entry(*executable_id) {
@@ -666,7 +688,12 @@ impl Profiler {
                 debug!("could not remove bpf process due to {:?}", e);
             }
 
-            for mapping in &mut proc_info.mappings.0 {
+            for mapping in proc_info
+                .mappings
+                .0
+                .iter_mut()
+                .filter(|mapping| !mapping.soft_delete)
+            {
                 self.bpf.delete_process_mapping(
                     pid,
                     mapping.start_addr,
@@ -700,7 +727,12 @@ impl Profiler {
                     debug!("could not remove bpf process due to {:?}", e);
                 }
 
-                for mapping in &mut proc_info.mappings.0 {
+                for mapping in proc_info
+                    .mappings
+                    .0
+                    .iter_mut()
+                    .filter(|mapping| !mapping.soft_delete)
+                {
                     self.bpf.delete_process_mapping(
                         pid,
                         mapping.start_addr,
@@ -734,7 +766,9 @@ impl Profiler {
         match procs.get_mut(&pid) {
             Some(proc_info) => {
                 let found_mapping = proc_info.mappings.0.iter_mut().find(|mapping| {
-                    mapping.start_addr <= start_address && start_address < mapping.end_addr
+                    !mapping.soft_delete
+                        && mapping.start_addr <= start_address
+                        && start_address < mapping.end_addr
                 });
 
                 match found_mapping {
@@ -797,12 +831,13 @@ impl Profiler {
 
     pub fn top_errors_per_process(&self) {
         let procs = self.procs.read();
-        for proc in procs.values() {
+        for (pid, proc) in procs.iter() {
             if !proc.unwind_errors.is_empty() {
                 println!(
-                    "- unwind errors for {}, count {} {:?}",
+                    "- unwind errors for {} (pid {}), cumulative samples {} {:?}",
                     proc.comm,
-                    proc.unwind_errors.len(),
+                    pid,
+                    proc.unwind_errors.values().sum::<usize>(),
                     proc.unwind_errors
                 )
             }
@@ -894,7 +929,7 @@ impl Profiler {
         let mut errored = false;
         let mut bpf_mappings = Vec::new();
         // Get unwind info
-        for mapping in mappings {
+        for mapping in mappings.into_iter().filter(|mapping| !mapping.soft_delete) {
             // There is no unwind information for anonymous (JIT) mappings, so
             // let's skip them. In the future we could either try to
             // synthesise the unwind information.
@@ -972,7 +1007,7 @@ impl Profiler {
 
         if errored {
             // Remove partially written data.
-            self.handle_process_exit(pid, true);
+            self.handle_process_eviction(pid, true);
             // Evict a process to make room for more.
             debug!("eviction result {}", self.maybe_evict_process(false));
         }
@@ -1069,8 +1104,8 @@ impl Profiler {
                 if needs_synthesis {
                     debug!("synthetising arm64 unwind information using frame pointers for vDSO");
                     Ok(UnwindInfo::Vec(vec![
-                        CompactUnwindRow::frame_pointer(start_address, is_arm64),
-                        CompactUnwindRow::stop_unwinding(end_address),
+                        CompactUnwindRow::frame_pointer(0, is_arm64),
+                        CompactUnwindRow::stop_unwinding(end_address - start_address),
                     ]))
                 } else {
                     let _span = span!(
@@ -1251,38 +1286,16 @@ impl Profiler {
     }
 
     fn event_proc_info_refresh(&mut self, pid: Pid) -> Result<(), AddProcessError> {
-        let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
-        let proc_name = proc.stat().map_err(|_| AddProcessError::ProcfsRace)?.comm;
-        let file_id =
-            FileId::new(format!("/proc/{pid}/exe")).map_err(|_| AddProcessError::ProcfsRace)?;
-
-        let same_executable = self.procs.read().get(&pid).map(|e| e.file_id == file_id);
-        match same_executable {
-            Some(true) => {
-                // If we end up here it could mean that either the process exec the same binary
-                // or that we don't know about this memory mapping. Neither option is being
-                // handled yet.
-                //
-                // The former can be problematic as ASLR will change location of the mappings in
-                // memory, but might be rarer that the latter, which all applications that call
-                // dlopen will hit.
-                debug!("unknown mapping for process {pid}: `{proc_name}`")
-            }
-            Some(false) => {
-                debug!("`exec` called for process {pid}: `{proc_name}`");
-                // Removing the information on the mappings before the exec took place will
-                // result in failures normalising said samples. This it not addressed yet and
-                // could be fixed either by normalising addresses with the  previous mappings
-                // before we delete them, or to keep multiple "generations" of a process across
-                // execs and pid reuse.
-                self.delete_process(pid, true, false);
-                self.add_proc(pid, proc_name)?;
-                self.add_unwind_info_for_process(pid);
-            }
-            None => {
-                error!("could not find process {pid} during refresh, this should never happen")
-            }
+        if !self.process_is_known(pid) {
+            return Ok(());
         }
+        // Executable identity alone says nothing about libraries mapped by the
+        // loader, dlopen, or another exec of the same binary.
+        match self.add_proc(pid, String::new()) {
+            Ok(()) | Err(AddProcessError::ProcfsRaceBestEffort) => {}
+            Err(e) => return Err(e),
+        }
+        self.add_unwind_info_for_process(pid);
 
         Ok(())
     }
@@ -1293,8 +1306,12 @@ impl Profiler {
         }
 
         if self.process_is_known(pid) {
-            // Eviction happened, but userspace still exists
-            self.add_unwind_info_for_process(pid);
+            // Refresh evicted entries too: the process may have exec'd while
+            // it was absent from BPF, or this PID may have been reused.
+            if let Err(e) = self.event_proc_info_refresh(pid) {
+                debug!("failed to reload process {pid}: {e:?}");
+                self.bpf.retry_process_discovery(pid);
+            }
             return;
         }
 
@@ -1305,9 +1322,8 @@ impl Profiler {
             Err(AddProcessError::Eviction) => {
                 debug!("could not evict a process to make room for process: {pid}");
             }
-            // Nothing to do in these two cases.
-            Err(AddProcessError::ProcfsRace) => {}
-            Err(AddProcessError::ProcfsRaceBestEffort) => {}
+            Err(AddProcessError::ProcfsRace) => self.bpf.retry_process_discovery(pid),
+            Err(AddProcessError::ProcfsRaceBestEffort) => self.add_unwind_info_for_process(pid),
         }
     }
 
@@ -1515,21 +1531,97 @@ impl Profiler {
         self.add_proc(pid, comm)
     }
 
-    pub fn add_proc(&mut self, pid: Pid, comm: String) -> Result<(), AddProcessError> {
+    pub fn add_proc(&mut self, pid: Pid, _comm: String) -> Result<(), AddProcessError> {
+        // A loader can change mappings during any of these reads. Retry a
+        // bounded number of times; leave the old snapshot intact on failure.
+        let mut snapshot = None;
+        for _ in 0..3 {
+            match self.read_proc_snapshot(pid) {
+                Ok(info) => {
+                    snapshot = Some(info);
+                    break;
+                }
+                Err(AddProcessError::ProcfsRace) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        let mut proc_info = snapshot.ok_or(AddProcessError::ProcfsRace)?;
+        let procs = self.procs.clone();
+        let mut procs = procs.write();
+        if let Some(old) = procs.get_mut(&pid) {
+            proc_info.unwind_errors = std::mem::take(&mut old.unwind_errors);
+            for mut mapping in std::mem::take(&mut old.mappings.0) {
+                let mut active_mapping = mapping.clone();
+                active_mapping.soft_delete = false;
+                let unchanged = proc_info.mappings.0.contains(&active_mapping);
+                if !mapping.soft_delete {
+                    if !unchanged {
+                        self.bpf.delete_process_mapping(
+                            pid,
+                            mapping.start_addr,
+                            mapping.end_addr,
+                            true,
+                        );
+                    }
+                    // The new snapshot acquired its own references. Release
+                    // the old ones without evicting unchanged unwind tables.
+                    self.release_mapping(&mut mapping);
+                }
+                if !unchanged {
+                    // Retain unmapped addresses for queued samples, just as
+                    // munmap does. Active mappings win on address reuse.
+                    proc_info.mappings.0.push(mapping);
+                }
+            }
+        }
+        procs.insert(pid, proc_info);
+        drop(procs);
+        self.afflicted_processes.pop(&pid);
+
+        if self.preload_thread_metadata {
+            let proc = procfs::process::Process::new(pid)
+                .map_err(|_| AddProcessError::ProcfsRaceBestEffort)?;
+            for thread in proc
+                .tasks()
+                .map_err(|_| AddProcessError::ProcfsRaceBestEffort)?
+                .flatten()
+            {
+                self.metadata_provider
+                    .lock()
+                    .expect("lock collector")
+                    .register_task(TaskKey {
+                        pid,
+                        tid: thread.tid,
+                    });
+            }
+        }
+        Ok(())
+    }
+
+    fn release_mapping(&mut self, mapping: &mut ExecutableMapping) {
+        if mapping.mark_as_deleted(&mut self.object_files.write()) {
+            self.deletion_scheduler
+                .add(ToDelete::ObjectFile(Instant::now(), mapping.executable_id));
+            if let Entry::Occupied(entry) = self.native_unwind_state.get(mapping.executable_id) {
+                self.bpf.delete_native_unwind_all(mapping, entry, true);
+            }
+        }
+    }
+
+    fn read_proc_snapshot(&mut self, pid: Pid) -> Result<ProcessInfo, AddProcessError> {
         let proc = procfs::process::Process::new(pid).map_err(|_| AddProcessError::ProcfsRace)?;
-        let maps = proc.maps().map_err(|_| AddProcessError::ProcfsRace)?;
+        // Read identity BEFORE maps, then validate both after opening map_files.
         let file_id =
             FileId::new(format!("/proc/{pid}/exe")).map_err(|_| AddProcessError::ProcfsRace)?;
+        let stat = proc.stat().map_err(|_| AddProcessError::ProcfsRace)?;
+        let maps = executable_maps(&proc)?;
 
         let mut mappings = vec![];
         // 64 bit kernels can run 32 bit executables in compatibility mode. We don't
         // support them and only the kernel stack will show up, with the
         // userspace frames erroring.
         let mut compatibility_mode = false;
-        for map in maps.iter() {
-            if !map.perms.contains(procfs::process::MMPermissions::EXECUTE) {
-                continue;
-            }
+        for map in &maps {
             match &map.pathname {
                 procfs::process::MMapPath::Path(mapping_path) => {
                     // These libraries don't have unwind information, they
@@ -1596,7 +1688,7 @@ impl Profiler {
                     });
                 }
                 procfs::process::MMapPath::Vdso | procfs::process::MMapPath::Vsyscall => {
-                    let temp_vdso_path = match tempfile::NamedTempFile::new() {
+                    let temp_vdso_path = match tempfile::NamedTempFile::new_in(&self.cache_dir) {
                         Ok(temp_vdso_path) => temp_vdso_path,
                         Err(e) => {
                             error!("failed to create temporary vDSO file due to {:?}", e);
@@ -1633,9 +1725,13 @@ impl Profiler {
                     }
                     let _ = create_dir(&vdso_path);
 
-                    let vdso_path = vdso_path.join(format!("{:x}", executable_id.0));
-                    if let Err(e) = std::fs::copy(&temp_vdso_path, &vdso_path) {
-                        warn!("copying temp vDSO to final destination failed with {:?}", e);
+                    // Older profilers overwrite the extensionless file in place.
+                    // Use a new name so they cannot truncate our live mmaps.
+                    let vdso_path = vdso_path.join(format!("{:x}.elf", executable_id.0));
+                    // Publish atomically: another profiler may be reading or
+                    // mmap'ing this shared cache file at the same time.
+                    if let Err(e) = temp_vdso_path.persist(&vdso_path) {
+                        warn!("publishing vDSO cache file failed with {:?}", e);
                         continue;
                     }
 
@@ -1660,41 +1756,34 @@ impl Profiler {
             }
         }
 
-        let proc_info = ProcessInfo {
-            comm: comm.to_owned(),
+        let consistent = (|| {
+            let current_maps = executable_maps(&proc)?;
+            let current_stat = proc.stat().map_err(|_| AddProcessError::ProcfsRace)?;
+            let current_id =
+                FileId::new(format!("/proc/{pid}/exe")).map_err(|_| AddProcessError::ProcfsRace)?;
+            Ok::<_, AddProcessError>(
+                file_id == current_id
+                    && stat.starttime == current_stat.starttime
+                    && stat.startstack == current_stat.startstack
+                    && maps == current_maps,
+            )
+        })();
+        if !matches!(consistent, Ok(true)) {
+            for mapping in &mut mappings {
+                self.release_mapping(mapping);
+            }
+            return Err(AddProcessError::ProcfsRace);
+        }
+
+        Ok(ProcessInfo {
+            comm: stat.comm,
             status: ProcessStatus::Running { evicted: false },
             mappings: ExecutableMappings(mappings),
             compatibility_mode,
             last_used: Instant::now(),
             file_id,
             unwind_errors: HashMap::new(),
-        };
-        self.procs.clone().write().insert(pid, proc_info);
-
-        if self.preload_thread_metadata {
-            // Best effort, failing here won't be an issue for profiling.
-            for thread in proc
-                .tasks()
-                .map_err(|_| AddProcessError::ProcfsRaceBestEffort)?
-            {
-                match thread {
-                    Ok(thread) => {
-                        self.metadata_provider
-                            .lock()
-                            .expect("lock collector")
-                            .register_task(TaskKey {
-                                pid,
-                                tid: thread.tid,
-                            });
-                    }
-                    Err(e) => {
-                        warn!("failed to get thread info due to {:?}", e);
-                    }
-                }
-            }
-        }
-
-        Ok(())
+        })
     }
 
     fn handle_sample(
@@ -1757,6 +1846,251 @@ mod tests {
     use libbpf_rs::MapCore;
 
     use crate::{bpf::profiler_skel::ProfilerMaps, profiler::*};
+
+    struct TestChild(std::process::Child);
+
+    impl Drop for TestChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn test_profiler(cache: &Path) -> Profiler {
+        let (_, receiver) = crossbeam_channel::bounded(1);
+        let system = lightswitch_capabilities::system_info::SystemInfo::new(None).unwrap();
+        Profiler::new(
+            ProfilerConfig {
+                cache_dir_base: cache.to_path_buf(),
+                userspace_pid_ns_level: system.available_bpf_features.userspace_pid_ns_level,
+                ..ProfilerConfig::default()
+            },
+            receiver,
+            Arc::new(Mutex::new(GlobalMetadataProvider::default())),
+        )
+    }
+
+    #[test]
+    fn refresh_loads_new_mappings_and_balances_references() {
+        use nix::libc;
+        use std::os::fd::AsRawFd;
+        let cache = tempfile::tempdir().unwrap();
+        let mut profiler = test_profiler(cache.path());
+        let pid = std::process::id() as Pid;
+        profiler.event_new_proc(pid, "old-name".into());
+        let refs: HashMap<_, _> = profiler
+            .object_files
+            .read()
+            .iter()
+            .map(|(id, obj)| (*id, obj.references))
+            .collect();
+        profiler
+            .procs
+            .write()
+            .get_mut(&pid)
+            .unwrap()
+            .unwind_errors
+            .insert(SampleResult::MappingDoesNotContainPC, 42);
+
+        // A new executable mapping of an already known object is enough to
+        // exercise the same-executable path used by dlopen and the loader.
+        let exe = File::open("/proc/self/exe").unwrap();
+        let len = exe.metadata().unwrap().len() as usize;
+        let address = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ | libc::PROT_EXEC,
+                libc::MAP_PRIVATE,
+                exe.as_raw_fd(),
+                0,
+            )
+        };
+        assert_ne!(address, libc::MAP_FAILED);
+        let address = address as u64;
+        assert!(
+            profiler.procs.read()[&pid]
+                .mappings
+                .for_address(&address)
+                .is_none()
+        );
+        profiler.event_proc_info_refresh(pid).unwrap();
+        let mapping = profiler.procs.read()[&pid]
+            .mappings
+            .for_address(&address)
+            .unwrap()
+            .clone();
+        assert!(!mapping.soft_delete);
+        let key = exec_mappings_key::new(pid, address, 96);
+        assert!(
+            profiler
+                .bpf
+                .native_unwinder
+                .maps
+                .exec_mappings
+                .lookup(unsafe { plain::as_bytes(&key) }, libbpf_rs::MapFlags::ANY)
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            profiler.object_files.read()[&mapping.executable_id].references,
+            refs[&mapping.executable_id] + 1
+        );
+
+        for _ in 0..3 {
+            profiler.event_proc_info_refresh(pid).unwrap();
+        }
+        assert_eq!(
+            profiler.procs.read()[&pid].unwind_errors[&SampleResult::MappingDoesNotContainPC],
+            42
+        );
+        assert_eq!(
+            profiler.object_files.read()[&mapping.executable_id].references,
+            refs[&mapping.executable_id] + 1
+        );
+        assert_ne!(profiler.procs.read()[&pid].comm, "old-name");
+
+        assert_eq!(
+            unsafe { libc::munmap(address as *mut libc::c_void, len) },
+            0
+        );
+        profiler.event_proc_info_refresh(pid).unwrap();
+        assert!(
+            profiler.procs.read()[&pid]
+                .mappings
+                .for_address(&address)
+                .unwrap()
+                .soft_delete
+        );
+        for (id, references) in refs {
+            assert_eq!(profiler.object_files.read()[&id].references, references);
+        }
+        // Retired mappings must not be inserted back into BPF on eviction/reload.
+        profiler.handle_process_eviction(pid, false);
+        profiler.event_new_proc(pid, "ignored".into());
+        let value = profiler
+            .bpf
+            .native_unwinder
+            .maps
+            .exec_mappings
+            .lookup(unsafe { plain::as_bytes(&key) }, libbpf_rs::MapFlags::ANY)
+            .unwrap()
+            .unwrap();
+        let mut bpf_mapping = mapping_t::default();
+        plain::copy_from_bytes(&mut bpf_mapping, &value).unwrap();
+        assert_eq!(bpf_mapping.begin, bpf_mapping.end); // only the PID sentinel
+    }
+
+    #[test]
+    fn exec_invalidates_bpf_before_userspace_refresh() {
+        let cache = tempfile::tempdir().unwrap();
+        let gate = cache.path().join("exec");
+        let ready = cache.path().join("ready");
+        let child = std::process::Command::new("sh")
+            .args([
+                "-c",
+                ": > \"$1\"; while [ ! -f \"$2\" ]; do :; done; exec sleep 60",
+                "sh",
+            ])
+            .arg(&ready)
+            .arg(&gate)
+            .spawn()
+            .unwrap();
+        let mut child = TestChild(child);
+        let pid = child.0.id() as Pid;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.exists() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+        let mut profiler = test_profiler(cache.path());
+        profiler.event_new_proc(pid, "sh".into());
+        profiler.bpf.attach_tracers();
+        let key = exec_mappings_key::new(pid, 0, 32);
+        let ready_in_bpf = || {
+            profiler
+                .bpf
+                .native_unwinder
+                .maps
+                .exec_mappings
+                .lookup(unsafe { plain::as_bytes(&key) }, libbpf_rs::MapFlags::ANY)
+                .unwrap()
+                .is_some()
+        };
+        assert!(ready_in_bpf());
+        fs::write(&gate, b"").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while ready_in_bpf() {
+            assert!(
+                Instant::now() < deadline,
+                "exec left the old image enabled for unwinding"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        // No userspace tracer events were polled in this test.
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+    }
+
+    #[test]
+    fn failed_refresh_preserves_previous_snapshot() {
+        let cache = tempfile::tempdir().unwrap();
+        let mut profiler = test_profiler(cache.path());
+        let child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let mut child = TestChild(child);
+        let pid = child.0.id() as Pid;
+        profiler.event_new_proc(pid, "sleep".into());
+        let mappings = profiler.procs.read()[&pid].mappings.0.clone();
+        let refs: HashMap<_, _> = profiler
+            .object_files
+            .read()
+            .iter()
+            .map(|(id, obj)| (*id, obj.references))
+            .collect();
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        assert_eq!(
+            profiler.event_proc_info_refresh(pid),
+            Err(AddProcessError::ProcfsRace)
+        );
+        assert_eq!(profiler.procs.read()[&pid].mappings.0, mappings);
+        for (id, references) in refs {
+            assert_eq!(profiler.object_files.read()[&id].references, references);
+        }
+    }
+
+    #[test]
+    #[cfg(target_arch = "aarch64")]
+    fn vdso_unwind_pages_are_object_relative() {
+        let cache = tempfile::tempdir().unwrap();
+        let mut profiler = test_profiler(cache.path());
+        let pid = std::process::id() as Pid;
+        profiler.event_new_proc(pid, "test".into());
+        let procs = profiler.procs.read();
+        let vdso = procs[&pid]
+            .mappings
+            .0
+            .iter()
+            .find(|m| m.kind == ExecutableMappingType::Vdso)
+            .unwrap();
+        let key = page_key_t {
+            executable_id: vdso.executable_id.into(),
+            file_offset: 0,
+        };
+        assert!(
+            profiler
+                .bpf
+                .native_unwinder
+                .maps
+                .executable_to_page
+                .lookup(unsafe { plain::as_bytes(&key) }, libbpf_rs::MapFlags::ANY)
+                .unwrap()
+                .is_some()
+        );
+    }
 
     #[test]
     fn test_process_eviction_and_added_again() {
