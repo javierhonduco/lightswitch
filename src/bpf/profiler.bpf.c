@@ -466,8 +466,8 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
         } else if (found_cfa_type == CFA_TYPE_RSP) {
             previous_rsp = unwind_state->sp + found_cfa_offset;
         } else if (found_cfa_type == CFA_TYPE_DEREF_AND_ADD) {
-            u8 offset = found_cfa_offset >> 8;
-            u8 addition = found_cfa_offset;
+            s16 offset = found_cfa_offset >> 8;
+            u16 addition = found_cfa_offset;
             LOG("dwarf exp: *($rsp + %d) + %d", offset, addition);
             int ret =
                 bpf_probe_read_user(&previous_rsp, 8, (void*)(unwind_state->sp + offset));

@@ -90,14 +90,16 @@ where
                             };
                             if let Some(addition) = addition {
                                 debug!("*(rsp+{offset})+{addition}");
-                                compact_row.cfa_type = CfaType::DerefAndAdd;
-                                // Assumes that both the offset and addition
-                                // will fit in 2
-                                // bytes, which seems to be
-                                // the case for many binaries I've tried but
-                                // would be good to
-                                // test against larger ones.
-                                compact_row.cfa_offset = ((offset as u16) << 8) | (addition as u16);
+
+                                if let (Ok(offset), Ok(addition)) =
+                                    (i16::try_from(offset), u16::try_from(addition))
+                                {
+                                    compact_row.cfa_type = CfaType::DerefAndAdd;
+                                    println!("deref offset {offset} addition {addition}");
+                                    compact_row.cfa_offset = ((offset as u16) << 8) | (addition);
+                                } else {
+                                    compact_row.cfa_type = CfaType::OffsetDidNotFit;
+                                }
                             }
                         }
                         _ => {}
