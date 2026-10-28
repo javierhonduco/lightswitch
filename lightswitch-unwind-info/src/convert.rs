@@ -2,8 +2,7 @@ use std::borrow::Cow;
 
 use anyhow::Result;
 use gimli::{
-    BaseAddresses, CfaRule, CieOrFde, EhFrame, Encoding, EndianSlice, Endianity, Format,
-    FrameDescriptionEntry,
+    BaseAddresses, CfaRule, CieOrFde, EhFrame, EndianSlice, Endianity, FrameDescriptionEntry,
     Operation::{Deref, PlusConstant, RegisterOffset},
     Register, StoreOnHeap, UnwindContext, UnwindSection, UnwindTableRow,
 };
@@ -68,12 +67,7 @@ where
                 } else if expression_data == *PLT2 {
                     compact_row.cfa_type = CfaType::Plt2;
                 } else {
-                    let mut ops = expression.operations(Encoding {
-                        format: Format::Dwarf64,
-                        version: 4,
-                        address_size: 8,
-                    });
-
+                    let mut ops = expression.operations(fde.cie().encoding());
                     match (ops.next(), ops.next(), ops.next(), ops.next(), ops.next()) {
                         (
                             Ok(Some(RegisterOffset {
