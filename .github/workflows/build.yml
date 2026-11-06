@@ -33,7 +33,7 @@ jobs:
             - name: Run `cargo fmt`
               run: nix develop --command cargo fmt --check
             - name: Run `cargo rustdoc`
-              run: nix develop --command cargo rustdoc --all-features -- -Zunstable-options --check -Dwarnings
+              run: nix develop --command cargo rustdoc -- -Zunstable-options --check -Dwarnings
             - name: Run `nix fmt`
               run: nix fmt -- --check .
             - name: Ensure C code is formatted

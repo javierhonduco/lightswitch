@@ -35,6 +35,7 @@ plain = "0.2.3"
 [features]
 default = ["libbpf-rs-static", "kubernetes", "live-tui", "deadlock-detector"]
 libbpf-rs-static = ["libbpf-rs/static"]
+libbpf-rs-vendored = ["libbpf-rs/vendored"]
 kubernetes = ["lightswitch-metadata/kubernetes", "rustls/aws_lc_rs"]
 live-tui = ["dep:flamelens"]
 deadlock-detector = ["parking_lot/deadlock_detection"]
