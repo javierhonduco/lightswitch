@@ -17,7 +17,7 @@ hack:
 ci: clippy test
     cargo fmt --check --all
     cargo shear
-    cargo rustdoc --all-features -- -Zunstable-options --check -Dwarnings
+    cargo rustdoc -- -Zunstable-options --check -Dwarnings
 
 ci-full: ci hack
 

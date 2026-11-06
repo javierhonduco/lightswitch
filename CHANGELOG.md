@@ -1,3 +1,7 @@
+Unreleased
+----------
+- Add feature to enable libbpf-rs' vendored feature
+
 v0.7.0
 ------
 - Significantly reduce memory footprint of reading and writing cached unwind information to / from disk
