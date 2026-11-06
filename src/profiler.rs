@@ -1459,6 +1459,14 @@ impl Profiler {
             }
             Entry::Occupied(mut entry) => {
                 let obj = entry.get_mut();
+                // If a object file had no references at some point, a deletion got scheduled.
+                // This can cause the object file to be removed too soon and cause samples to be
+                // dropped. Remove the pending scheduled deletions in this case, as a deletion
+                // will be scheduled once it drops to zero again.
+                if obj.references == 0 {
+                    self.deletion_scheduler
+                        .remove_by_executable_id(executable_id)
+                }
                 obj.references += 1;
                 let Some(first_load_segment) = obj.elf_load_segments.first() else {
                     return Err(anyhow::anyhow!("empty load segments"));

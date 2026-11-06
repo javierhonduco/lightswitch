@@ -5,16 +5,16 @@ use std::time::Duration;
 use std::time::Instant;
 
 #[derive(Default)]
-pub struct DeletionScheduler {
+pub(crate) struct DeletionScheduler {
     heap: BinaryHeap<ToDelete>,
 }
 
 impl DeletionScheduler {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub fn add(&mut self, item: ToDelete) {
+    pub(crate) fn add(&mut self, item: ToDelete) {
         self.heap.push(item)
     }
 
@@ -26,9 +26,16 @@ impl DeletionScheduler {
         self.heap.pop()
     }
 
+    pub(crate) fn remove_by_executable_id(&mut self, exe_id: ExecutableId) {
+        self.heap.retain(|el| match el {
+            ToDelete::ObjectFile(_, executable_id) => *executable_id != exe_id,
+            _ => true,
+        });
+    }
+
     /// Pop and return all the elements pending for longer than the
     /// given duration.
-    pub fn pop_pending(&mut self, older_than: Duration) -> Vec<ToDelete> {
+    pub(crate) fn pop_pending(&mut self, older_than: Duration) -> Vec<ToDelete> {
         let mut r = Vec::new();
 
         while let Some(ToDelete::Process(time, _)) | Some(ToDelete::ObjectFile(time, _)) =
