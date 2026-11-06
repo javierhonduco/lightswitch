@@ -1,6 +1,7 @@
 Unreleased
 ----------
 - Add feature to enable libbpf-rs' vendored feature
+- Move debug info backend uploads to background threads
 
 v0.7.0
 ------
