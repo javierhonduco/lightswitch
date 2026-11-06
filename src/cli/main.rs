@@ -298,7 +298,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             token.clone(),
             server_url.clone(),
             Duration::from_millis(500),
-            Duration::from_secs(15),
+            Duration::from_secs(30),
+            2,
         )?),
     };
 

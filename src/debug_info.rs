@@ -1,14 +1,21 @@
 use std::fs::File;
 use std::io::BufReader;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::thread;
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use crossbeam_channel::{Receiver, Sender, bounded};
 use reqwest::StatusCode;
+use reqwest::blocking::Client;
+use tracing::debug;
 use tracing::instrument;
 
 use lightswitch_object::BuildId;
+use tracing::warn;
 
 use crate::NAME_AND_VERSION;
 
@@ -21,7 +28,7 @@ use crate::NAME_AND_VERSION;
 /// windows.
 pub trait DebugInfoManager {
     fn add_if_not_present(
-        &self,
+        &mut self,
         name: &str,
         build_id: &BuildId,
         debug_info: &Path,
@@ -32,7 +39,7 @@ pub trait DebugInfoManager {
 pub struct DebugInfoBackendNull {}
 impl DebugInfoManager for DebugInfoBackendNull {
     fn add_if_not_present(
-        &self,
+        &mut self,
         _name: &str,
         _build_id: &BuildId,
         _debug_info: &Path,
@@ -50,9 +57,9 @@ pub struct DebugInfoBackendFilesystem {
     pub path: PathBuf,
 }
 impl DebugInfoManager for DebugInfoBackendFilesystem {
-    #[instrument]
+    #[instrument(level = "debug")]
     fn add_if_not_present(
-        &self,
+        &mut self,
         _name: &str,
         build_id: &BuildId,
         debug_info: &Path,
@@ -88,50 +95,123 @@ impl DebugInfoBackendFilesystem {
 
 #[derive(Debug)]
 pub struct DebugInfoBackendRemote {
-    pub token: Option<String>,
-    pub server_url: String,
-    pub query_client: reqwest::blocking::Client,
-    pub upload_client: reqwest::blocking::Client,
+    server_url: String,
+    query_client: reqwest::blocking::Client,
+    sender: Sender<JobArguments>,
+    _threads: Vec<JoinHandle<()>>,
 }
 
+struct JobArguments {
+    name: String,
+    build_id: BuildId,
+    file: File,
+}
+
+/// This implementation is lossy and might result in some debug infos not being
+/// uploaded, either because the queue is full, or during shutdown as the queue
+/// is not drained. This set of trade-offs were chosen in the name of using as
+/// little memory as possible.
 impl DebugInfoBackendRemote {
+    fn spawn_worker(
+        i: usize,
+        receiver: Receiver<JobArguments>,
+        upload_client: Client,
+        token: Option<String>,
+        server_url: String,
+    ) -> std::io::Result<JoinHandle<()>> {
+        thread::Builder::new()
+            .name(format!("debug-upload-{i}"))
+            .spawn(move || {
+                loop {
+                    match receiver.recv() {
+                        Ok(arg) => {
+                            let ret = Self::upload_to_backend(
+                                &upload_client,
+                                &token,
+                                &server_url,
+                                &arg.name,
+                                &arg.build_id,
+                                arg.file,
+                            );
+                            if let Err(e) = ret {
+                                warn!("failed to upload to backend due to {:?}", e);
+                            }
+                        }
+                        Err(e) => {
+                            debug!("debug info worker failed with {:?}", e);
+                            break;
+                        }
+                    };
+                }
+            })
+    }
+
     pub fn new(
         token: Option<String>,
         server_url: String,
         query_timeout: Duration,
         upload_timeout: Duration,
+        workers: usize,
     ) -> anyhow::Result<Self> {
+        let query_client = reqwest::blocking::Client::builder()
+            .timeout(query_timeout)
+            .user_agent(NAME_AND_VERSION)
+            .build()?;
+        let upload_client = reqwest::blocking::Client::builder()
+            .timeout(upload_timeout)
+            .user_agent(NAME_AND_VERSION)
+            .build()?;
+
+        let (sender, receiver) = bounded(200);
+        let _threads = (0..workers)
+            .map(|i| {
+                let receiver: Receiver<JobArguments> = receiver.clone();
+                let upload_client = upload_client.clone();
+                let token = token.clone();
+                let server_url = server_url.clone();
+
+                Self::spawn_worker(i, receiver, upload_client, token, server_url)
+            })
+            .collect::<std::io::Result<Vec<_>>>()?;
         Ok(DebugInfoBackendRemote {
-            token,
             server_url,
-            query_client: reqwest::blocking::Client::builder()
-                .timeout(query_timeout)
-                .user_agent(NAME_AND_VERSION)
-                .build()?,
-            upload_client: reqwest::blocking::Client::builder()
-                .timeout(upload_timeout)
-                .user_agent(NAME_AND_VERSION)
-                .build()?,
+            query_client,
+            sender,
+            _threads,
         })
+    }
+
+    /// Enqueues a debug info upload in a best-effort fashion, since the queue
+    /// is bounded and we'll drop entries if we are lagging behind uploads
+    /// and it fills up.
+    fn enqueue(&mut self, name: &str, build_id: &BuildId, file: File) {
+        let ret = self.sender.try_send(JobArguments {
+            name: name.to_string(),
+            build_id: build_id.clone(),
+            file,
+        });
+
+        if let Err(e) = ret {
+            debug!("enqueueing debug info failed with {:?}", e);
+        }
     }
 }
 
 impl DebugInfoManager for DebugInfoBackendRemote {
     #[instrument(level = "debug")]
     fn add_if_not_present(
-        &self,
+        &mut self,
         name: &str,
         build_id: &BuildId,
         debug_info: &Path,
     ) -> anyhow::Result<()> {
-        // TODO: add a local cache to not have to reach to the backend
-        // unnecessarily.
         if self.find_in_backend(build_id)? {
             return Ok(());
         }
 
-        // TODO: do this in another thread.
-        self.upload_to_backend(name, build_id, debug_info)?;
+        // Open the file as fast as possible to reduce the window for race conditions.
+        let file = File::open(debug_info)?;
+        self.enqueue(name, build_id, file);
         Ok(())
     }
 
@@ -157,24 +237,26 @@ impl DebugInfoBackendRemote {
     }
 
     /// Send the debug information to the backend.
-    #[instrument]
+    #[instrument(level = "debug")]
     fn upload_to_backend(
-        &self,
+        upload_client: &Client,
+        token: &Option<String>,
+        server_url: &str,
         name: &str,
         build_id: &BuildId,
-        debug_info: &Path,
+        file: File,
     ) -> anyhow::Result<()> {
-        let mut request = self
-            .upload_client
+        let size = file.metadata()?.size();
+        let reader = BufReader::new(file);
+        let body = reqwest::blocking::Body::sized(reader, size);
+        let mut request = upload_client
             .post(format!(
                 "{}/debuginfo/new/{}/{}",
-                self.server_url.clone(),
-                name,
-                build_id
+                server_url, name, build_id
             ))
-            .body(File::open(debug_info)?);
+            .body(body);
 
-        if let Some(token) = &self.token {
+        if let Some(token) = &token {
             request = request.bearer_auth(token);
         }
 
