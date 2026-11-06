@@ -1,3 +1,7 @@
+Unreleased
+----------
+- Check that the offset and "addition" fit within their type
+
 v0.2.0
 ------
 - Do not allocate the whole unwind information in memory when writing it to disk
