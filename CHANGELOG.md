@@ -2,6 +2,7 @@ Unreleased
 ----------
 - Add feature to enable libbpf-rs' vendored feature
 - Move debug info backend uploads to background threads
+- Fix for object file delayed delation when it's seen again
 
 v0.7.0
 ------
