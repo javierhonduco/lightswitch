@@ -217,7 +217,10 @@ impl RawAggregatedSample {
 
         for virtual_address in &self.sample.ustack {
             let Some(mapping) = info.mappings.for_address(virtual_address) else {
-                // TODO: add a frame here for diagnostics
+                processed_sample.ustack.push(Frame::with_error(
+                    *virtual_address,
+                    "mapping not found".to_string(),
+                ));
                 continue;
             };
 
@@ -242,6 +245,10 @@ impl RawAggregatedSample {
 
         for virtual_address in &self.sample.kstack {
             let Some(mapping) = info.mappings.for_address(virtual_address) else {
+                processed_sample.kstack.push(Frame::with_error(
+                    *virtual_address,
+                    "mapping not found".to_string(),
+                ));
                 continue;
             };
 
