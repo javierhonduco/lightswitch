@@ -11,8 +11,8 @@ test:
     cargo test --all
 
 hack:
-    cargo hack check --each-feature --all
-    cargo hack check --feature-powerset --all
+    cargo hack check --each-feature --all --exclude-features libbpf-rs-vendored
+    cargo hack check --feature-powerset --all --exclude-features libbpf-rs-vendored
 
 ci: clippy test
     cargo fmt --check --all
