@@ -1,3 +1,8 @@
+v0.4.0
+------
+- Add option to enable libbpf logging
+- Improved error handling
+
 v0.3.2
 ------
 - Add `has_btf` helper to probe the paths that libbpf probes for kernel BTF
