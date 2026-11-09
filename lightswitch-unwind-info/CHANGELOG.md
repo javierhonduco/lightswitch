@@ -1,5 +1,5 @@
-Unreleased
-----------
+v0.3.0
+------
 - Check that the offset and "addition" fit within their type
 
 v0.2.0
