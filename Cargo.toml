@@ -58,7 +58,7 @@ crossbeam-channel = "0.5.15"
 itertools = "0.15.0"
 lightswitch-metadata = { path = "lightswitch-metadata", version = "0.3.1" }
 lightswitch-proto = { path = "lightswitch-proto", version = "0.3.1" }
-lightswitch-capabilities = { path = "lightswitch-capabilities", version = "0.3.2" }
+lightswitch-capabilities = { path = "lightswitch-capabilities", version = "0.4.0" }
 lightswitch-unwind-info = { path = "lightswitch-unwind-info", version = "0.3.0" }
 lightswitch-object = { workspace = true }
 memmap2 = { workspace = true }
