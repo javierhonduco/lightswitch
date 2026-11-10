@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::BuildHasher, time::Duration};
+use std::{collections::HashMap, hash::BuildHasher};
 
 use tracing::debug;
 
@@ -8,20 +8,13 @@ use crate::profile::{RawAggregatedProfile, RawAggregatedSample, RawSample};
 pub struct Aggregator {}
 
 impl Aggregator {
-    pub fn aggregate(
-        &self,
-        raw_samples: Vec<RawSample>,
-    ) -> (Option<Duration>, RawAggregatedProfile) {
+    pub fn aggregate(&self, raw_samples: Vec<RawSample>) -> RawAggregatedProfile {
         if raw_samples.is_empty() {
-            return (None, Vec::new());
+            return Vec::new();
         }
 
-        let mut min = u64::MAX;
-        let mut max = u64::MIN;
         let mut sample_hash_to_aggregated: HashMap<u64, RawAggregatedSample> = HashMap::new();
         for sample in raw_samples {
-            min = std::cmp::min(sample.collected_at, min);
-            max = std::cmp::max(sample.collected_at, max);
             if sample.ustack.is_empty() && sample.kstack.is_empty() {
                 debug!(
                     "No stack present in provided sample for process {} with result {:?}",
@@ -36,8 +29,7 @@ impl Aggregator {
                 .and_modify(|aggregated_sample| aggregated_sample.count += 1)
                 .or_insert(RawAggregatedSample { sample, count: 1 });
         }
-        let duration = max.checked_sub(min).map(Duration::from_nanos);
-        (duration, sample_hash_to_aggregated.into_values().collect())
+        sample_hash_to_aggregated.into_values().collect()
     }
 }
 
@@ -79,7 +71,7 @@ mod tests {
         let aggregator = Aggregator::default();
 
         // When
-        let raw_aggregated_profile = aggregator.aggregate(raw_samples).1;
+        let raw_aggregated_profile = aggregator.aggregate(raw_samples);
 
         // Then
         assert_eq!(raw_aggregated_profile.len(), 2);
@@ -121,7 +113,7 @@ mod tests {
         let aggregator = Aggregator::default();
 
         // When
-        let raw_aggregated_profile = aggregator.aggregate(raw_samples).1;
+        let raw_aggregated_profile = aggregator.aggregate(raw_samples);
 
         // Then
         assert_eq!(raw_aggregated_profile.len(), 2);
@@ -165,7 +157,7 @@ mod tests {
         let aggregator = Aggregator::default();
 
         // When
-        let raw_aggregated_profile = aggregator.aggregate(raw_samples).1;
+        let raw_aggregated_profile = aggregator.aggregate(raw_samples);
 
         // Then
         assert_eq!(raw_aggregated_profile.len(), 2);
@@ -215,7 +207,7 @@ mod tests {
         let aggregator = Aggregator::default();
 
         // When
-        let raw_aggregated_profile = aggregator.aggregate(raw_samples).1;
+        let raw_aggregated_profile = aggregator.aggregate(raw_samples);
 
         // Then
         assert_eq!(raw_aggregated_profile.len(), 3);
