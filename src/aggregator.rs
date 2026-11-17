@@ -1,5 +1,4 @@
-use std::hash::DefaultHasher;
-use std::{collections::HashMap, hash::Hash, hash::Hasher};
+use std::{collections::HashMap, hash::BuildHasher};
 
 use tracing::debug;
 
@@ -23,9 +22,7 @@ impl Aggregator {
                 );
             }
 
-            let mut hasher = DefaultHasher::new();
-            sample.hash(&mut hasher);
-            let sample_hash = hasher.finish();
+            let sample_hash = sample_hash_to_aggregated.hasher().hash_one(&sample);
 
             sample_hash_to_aggregated
                 .entry(sample_hash)

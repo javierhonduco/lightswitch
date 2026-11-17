@@ -1,6 +1,6 @@
 [package]
 name = "lightswitch"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
 description = "CPU profiler as a library for Linux suitable for on-demand and continuous profiling"
 license = "MIT"

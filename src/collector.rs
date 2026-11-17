@@ -8,7 +8,7 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{Level, debug, span, warn};
 use uuid::Uuid;
 
@@ -82,17 +82,32 @@ impl Collector for NullCollector {
     }
 }
 
-#[derive(Default)]
 pub struct StreamingCollector {
     client: reqwest::blocking::Client,
     token: Option<String>,
     local_symbolizer: bool,
     pprof_ingest_url: String,
-    profile_duration: Duration,
     profile_frequency_hz: u64,
     procs: HashMap<i32, ProcessInfo>,
     objs: HashMap<ExecutableId, ObjectFileInfo>,
     metadata_provider: ThreadSafeGlobalMetadataProvider,
+    profile_start: Instant,
+}
+
+impl Default for StreamingCollector {
+    fn default() -> Self {
+        Self {
+            client: Default::default(),
+            token: Default::default(),
+            local_symbolizer: Default::default(),
+            pprof_ingest_url: Default::default(),
+            profile_frequency_hz: Default::default(),
+            procs: Default::default(),
+            objs: Default::default(),
+            metadata_provider: Default::default(),
+            profile_start: Instant::now(),
+        }
+    }
 }
 
 impl StreamingCollector {
@@ -100,7 +115,7 @@ impl StreamingCollector {
         token: Option<String>,
         local_symbolizer: bool,
         pprof_ingest_url: &str,
-        profile_duration: Duration,
+        _: Duration,
         profile_frequency_hz: u64,
         metadata_provider: ThreadSafeGlobalMetadataProvider,
     ) -> Self {
@@ -116,7 +131,6 @@ impl StreamingCollector {
             token,
             local_symbolizer,
             pprof_ingest_url: format!("{pprof_ingest_url}/v2/pprof/new"),
-            profile_duration,
             profile_frequency_hz,
             metadata_provider,
             ..Default::default()
@@ -134,17 +148,20 @@ impl Collector for StreamingCollector {
     ) {
         let _span = span!(Level::DEBUG, "StreamingCollector.collect").entered();
 
-        let mut profile = raw_to_processed(&Aggregator::default().aggregate(profile), procs, objs);
+        let profile = Aggregator::default().aggregate(profile);
+        let mut profile = raw_to_processed(&profile, procs, objs);
         if self.local_symbolizer {
             profile = symbolize_profile(&profile, procs, objs);
         }
 
+        let profile_duration = self.profile_start.elapsed();
+        self.profile_start = Instant::now();
         let pprof_profile = to_pprof(
             profile,
             procs,
             objs,
             &self.metadata_provider,
-            self.profile_duration,
+            profile_duration,
             self.profile_frequency_hz,
         );
 
@@ -447,11 +464,8 @@ impl Collector for AggregatorCollector {
         procs: &HashMap<i32, ProcessInfo>,
         objs: &HashMap<ExecutableId, ObjectFileInfo>,
     ) {
-        self.profiles.push(raw_to_processed(
-            &Aggregator::default().aggregate(raw_profile),
-            procs,
-            objs,
-        ));
+        let profile = Aggregator::default().aggregate(raw_profile);
+        self.profiles.push(raw_to_processed(&profile, procs, objs));
 
         for (k, v) in procs {
             self.procs.insert(*k, v.clone());
@@ -524,7 +538,8 @@ impl Collector for LiveCollector {
     ) {
         let _span = span!(Level::DEBUG, "LiveCollector.collect").entered();
 
-        let profile = raw_to_processed(&Aggregator::default().aggregate(raw_profile), procs, objs);
+        let aggregated = Aggregator::default().aggregate(raw_profile);
+        let profile = raw_to_processed(&aggregated, procs, objs);
         let profile = symbolize_profile(&profile, procs, objs);
         let folded = fold_profile(procs, profile, true);
 
