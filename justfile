@@ -21,6 +21,11 @@ ci: clippy test
 
 ci-full: ci hack
 
+publish-dry-run:
+    cargo publish --workspace --dry-run --allow-dirty
+
+release-prep: c-fmt ci-full publish-dry-run
+
 cov:
     cargo llvm-cov --open --workspace --ignore-filename-regex "(_skel)\.rs"
 
