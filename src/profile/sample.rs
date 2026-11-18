@@ -34,6 +34,12 @@ pub enum SampleResult {
     PageNotFound,
 }
 
+impl SampleResult {
+    fn mem_error(&self) -> bool {
+        self == &SampleResult::MemReadFaultError || self == &SampleResult::MemReadGenericError
+    }
+}
+
 impl From<sample_result> for SampleResult {
     #[allow(non_upper_case_globals)]
     #[allow(non_snake_case)]
@@ -69,6 +75,8 @@ pub struct RawSample {
     pub pid: Pid,
     pub tid: Pid,
     pub result: SampleResult,
+    // Populated if there's a memory read error with the address that was used.
+    pub last_errored_address: Option<u64>,
     pub collected_at: u64,
     pub ustack: Vec<u64>,
     pub kstack: Vec<u64>,
@@ -107,10 +115,25 @@ impl RawSample {
 
         let pid = i32::from_ne_bytes(data[0..4].try_into().unwrap());
         let tid = i32::from_ne_bytes(data[4..8].try_into().unwrap());
-        let result = u64::from_ne_bytes(data[8..16].try_into().unwrap()) as u32;
+        let raw_result = u64::from_ne_bytes(data[8..16].try_into().unwrap()) as u32;
+        let result: SampleResult = raw_result.into();
+        let mut last_errored_address = None;
         let collected_at = u64::from_ne_bytes(data[16..24].try_into().unwrap());
-        let ulen = u32::from_ne_bytes(data[24..28].try_into().unwrap()) as usize;
+        let mut ulen = u32::from_ne_bytes(data[24..28].try_into().unwrap()) as usize;
         let klen = u32::from_ne_bytes(data[28..32].try_into().unwrap()) as usize;
+
+        if result.mem_error() {
+            ulen -= 1;
+
+            let last_element_start = FIELD_SIZE_BEFORE_STACK + ulen * 8;
+            let last_element_end = FIELD_SIZE_BEFORE_STACK + (ulen + 1) * 8;
+
+            last_errored_address = Some(u64::from_ne_bytes(
+                data[last_element_start..last_element_end]
+                    .try_into()
+                    .unwrap(),
+            ));
+        }
 
         let user_stack_size = ulen * 8;
         let combined_stack_size = (ulen + klen) * 8;
@@ -136,7 +159,8 @@ impl RawSample {
         Ok(RawSample {
             pid,
             tid,
-            result: result.into(),
+            result,
+            last_errored_address,
             collected_at,
             ustack,
             kstack,
@@ -150,6 +174,7 @@ impl std::hash::Hash for RawSample {
             pid,
             tid,
             result,
+            last_errored_address,
             // The collected_at field is excluded when hashing
             // the samples for aggregation.
             collected_at: _,
@@ -160,6 +185,7 @@ impl std::hash::Hash for RawSample {
         pid.hash(state);
         tid.hash(state);
         result.hash(state);
+        last_errored_address.hash(state);
         ustack.hash(state);
         kstack.hash(state);
     }
@@ -407,6 +433,7 @@ mod tests {
                 pid: 234,
                 tid: 987,
                 result: SampleResult::Started,
+                last_errored_address: None,
                 collected_at: 0xDEADBEEF,
                 ustack: vec![0xFFFBBBDDD, 0x113355770],
                 kstack: vec![0xBBBAAADDD]
@@ -422,6 +449,7 @@ mod tests {
                 pid: 1234,
                 tid: 1235,
                 result: SampleResult::Started,
+                last_errored_address: None,
                 collected_at: 1748865070,
                 ustack: vec![0xffff, 0xdeadbeef],
                 kstack: vec![],
@@ -436,6 +464,7 @@ mod tests {
                 pid: 1234,
                 tid: 1235,
                 result: SampleResult::Started,
+                last_errored_address: None,
                 collected_at: 1748865170,
                 ustack: vec![],
                 kstack: vec![],

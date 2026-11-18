@@ -43,6 +43,7 @@ use anyhow::Result;
 use crossbeam_channel::{Receiver, Sender, bounded, select, tick, unbounded};
 use itertools::Itertools;
 use procfs;
+use procfs::process::{MemoryPageFlags, PageInfo};
 use tracing::{Level, debug, error, info, span, warn};
 
 use crate::bpf::profiler_bindings::*;
@@ -568,6 +569,64 @@ impl Profiler {
                 },
                 recv(self.raw_sample_receive) -> raw_sample => {
                     if let Ok(raw_sample) = raw_sample {
+                        if raw_sample.result == SampleResult::MemReadFaultError
+                            // && tracing::enabled!(Level::DEBUG)
+                        {
+                            // These are instruction addresses, not the stack-memory
+                            // addresses read by the unwinder. Pagemap observes their
+                            // current state without faulting the target pages in.
+                            error!(
+                                pid = raw_sample.pid,
+                                tid = raw_sample.tid,
+                                collected_at = raw_sample.collected_at,
+                                user_frames = raw_sample.ustack.len(),
+                                "Checking user stack instruction page residency after a memory read fault"
+                            );
+                            match procfs::process::Process::new(raw_sample.pid)
+                                .and_then(|process| process.pagemap())
+                            {
+                                Ok(mut pagemap) => {
+                                    let page_size = page_size() as u64;
+                                    if let Some(address) =  raw_sample.ustack.last() {
+                                        let page_index = (address / page_size) as usize;
+                                        match pagemap.get_info(page_index) {
+                                            Ok(page_info) => {
+                                                let residency = match page_info {
+                                                    PageInfo::SwapPage(_) => "swapped",
+                                                    PageInfo::MemoryPage(flags)
+                                                        if flags.contains(MemoryPageFlags::PRESENT) => "present",
+                                                    PageInfo::MemoryPage(_) => "not_present_not_swapped",
+                                                };
+                                                error!(
+                                                    pid = raw_sample.pid,
+                                                    tid = raw_sample.tid,
+                                                    address = %format_args!("{address:#x}"),
+                                                    residency,
+                                                    "User stack instruction page residency at receipt"
+                                                );
+                                            }
+                                            Err(err) => {
+                                                error!(
+                                                    pid = raw_sample.pid,
+                                                    tid = raw_sample.tid,
+                                                    address = %format_args!("{address:#x}"),
+                                                    error = %err,
+                                                    "Failed to read user stack instruction pagemap entry"
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(err) => {
+                                    debug!(
+                                        pid = raw_sample.pid,
+                                        tid = raw_sample.tid,
+                                        error = %err,
+                                        "Failed to open pagemap for stack residency diagnostics"
+                                    );
+                                }
+                            }
+                        }
                         self.raw_samples.push(raw_sample);
                     }
                     else {

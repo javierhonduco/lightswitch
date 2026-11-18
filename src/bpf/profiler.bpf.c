@@ -251,6 +251,16 @@ static __always_inline bool retrieve_task_registers(u64* ip, u64* sp, u64* bp, u
     return true;
 }
 
+// Add address to stack if there's enough capacity left
+void add_frame(native_stack_t* stack, u64 address) {
+    u32 ulen = stack->ulen;
+    // Appease the verifier.
+    if (ulen < MAX_STACK_DEPTH) {
+        stack->addresses[ulen] = address;
+        stack->ulen++;
+    }
+}
+
 void send_sample_impl(struct bpf_perf_event_data* ctx, sample_t* sample) {
     u32 sample_size = sizeof(sample_t)
                       // Remove the actual stack buffer which was doubled to appease the verifier.
@@ -444,12 +454,7 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
         }
 
         // Add address to stack.
-        u32 ulen = unwind_state->sample.stack.ulen;
-        // Appease the verifier.
-        if (ulen < MAX_STACK_DEPTH) {
-            unwind_state->sample.stack.addresses[ulen] = unwind_state->ip;
-            unwind_state->sample.stack.ulen++;
-        }
+        add_frame(&unwind_state->sample.stack, unwind_state->ip);
 
         if (found_rbp_type == RBP_TYPE_REGISTER ||
             found_rbp_type == RBP_TYPE_EXPRESSION) {
@@ -474,6 +479,7 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
             if (ret < 0) {
                 LOG("[error] reading previous rsp failed with %d", ret);
                 bump_unwind_error_previous_rsp_read();
+                add_frame(&unwind_state->sample.stack, unwind_state->sp + offset);
                 unwind_state->sample.result = ret == -EFAULT ? SAMPLE_MEM_READ_FAULT_ERROR : SAMPLE_MEM_READ_GENERIC_ERROR;
                 break;
             }
@@ -517,6 +523,7 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
             if (ret < 0) {
                 LOG("[error] previous_rbp read failed with %d", ret);
                 bump_unwind_error_previous_rbp_read();
+                add_frame(&unwind_state->sample.stack, previous_rbp_addr);
                 unwind_state->sample.result = ret == -EFAULT ? SAMPLE_MEM_READ_FAULT_ERROR : SAMPLE_MEM_READ_GENERIC_ERROR;
                 break;
             }
@@ -557,6 +564,7 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
             LOG("[error] previous_rip read failed, ret=%d @ %llx",
                 err, previous_rip_addr);
             bump_unwind_error_previous_rip_read();
+            add_frame(&unwind_state->sample.stack, previous_rip_addr);
             unwind_state->sample.result = err == -EFAULT ? SAMPLE_MEM_READ_FAULT_ERROR : SAMPLE_MEM_READ_GENERIC_ERROR;
             break;
         }
