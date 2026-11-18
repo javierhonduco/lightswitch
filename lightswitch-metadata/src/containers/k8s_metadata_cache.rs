@@ -72,7 +72,7 @@ impl K8sMetadataCache {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap();
+                .expect("tokio enable i/o and time handlers");
             if let Err(e) = runtime.block_on(run_kubeapi_stream(
                 node_name_clone,
                 container_to_pod_clone,
@@ -228,7 +228,8 @@ async fn run_kubeapi_stream(
               _ = tokio::time::sleep(Duration::from_secs(1)) => continue
         };
         match event {
-            //  pod was just created or updated, pod already existed, pod was deleted.
+            //  pod was just created or updated, pod already existed, pod was
+            // deleted.
             watcher::Event::Apply(pod) | watcher::Event::InitApply(pod) => {
                 handle_pod_event(&container_to_pod, &pod_metadata, pod, false);
             }

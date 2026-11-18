@@ -209,7 +209,8 @@ impl DebugInfoManager for DebugInfoBackendRemote {
             return Ok(());
         }
 
-        // Open the file as fast as possible to reduce the window for race conditions.
+        // Open the file as fast as possible to reduce the window for race
+        // conditions.
         let file = File::open(debug_info)?;
         self.enqueue(name, build_id, file);
         Ok(())

@@ -189,8 +189,8 @@ impl<'a> Reader<'a> {
         let wire_slice = plain::slice_from_bytes::<CompactUnwindRowWire>(unwind_info_data)
             .map_err(|e| ReaderError::Generic(format!("{:?}", e)))?;
 
-        // The header's len field should match the actual number of unwind information
-        // entries
+        // The header's len field should match the actual number of unwind
+        // information entries
         if unwind_info_len != wire_slice.len() {
             return Err(ReaderError::OutOfRange);
         }

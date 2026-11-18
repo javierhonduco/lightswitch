@@ -22,3 +22,6 @@ k8s-openapi = { version = "0.28.0", features = ["latest"], optional = true }
 kube = { version = "4.2.0", default-features = false, features = ["runtime", "client", "derive", "rustls-tls", "aws-lc-rs"], optional = true }
 tokio = { version = "1", features = ["rt", "time", "macros"], optional = true }
 mini-moka = "0.10"
+
+[lints]
+workspace = true
