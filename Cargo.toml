@@ -111,13 +111,13 @@ path = "src/cli/main.rs"
 
 
 [workspace.lints.rust]
-trivial-numeric-casts = "warn"
-unsafe-op-in-unsafe-fn = "warn"
+trivial_numeric_casts = "warn"
+unsafe_op_in_unsafe_fn = "warn"
 unused = "warn"
 
 [workspace.lints.clippy]
 unwrap_used = "warn"
-join-absolute-paths = "warn"
+join_absolute_paths = "warn"
 
 [lints]
 workspace = true
