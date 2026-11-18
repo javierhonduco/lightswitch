@@ -65,8 +65,8 @@ impl MmapedUnwindInfo {
         let reader = Reader::new(&mmap[..], check_digest)?;
         let unwind_info = reader.unwind_info()?;
 
-        // Validate the whole unwind information, to ensure it's re-generated if the
-        // wire values are invalid
+        // Validate the whole unwind information, to ensure it's re-generated if
+        // the wire values are invalid
         Self::validate(unwind_info)?;
 
         let len = unwind_info.len();

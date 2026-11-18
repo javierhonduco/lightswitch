@@ -471,8 +471,8 @@ impl Bpf {
         self.add_mapping(
             &key,
             &mapping_t {
-                // Special values to know if it's a process entry in case of failures
-                // while finding a mapping.
+                // Special values to know if it's a process entry in case of
+                // failures while finding a mapping.
                 begin: 0xb40c,
                 end: 0xb40c,
                 ..mapping_t::default()

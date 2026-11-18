@@ -80,9 +80,9 @@ where
                         ) if register == *stack_pointer => {
                             let addition = match last_instr {
                                 None => Some(addition1),
-                                // OCaml has a couple of expressions with two                     //
-                                // additions which their backend is not folding,
-                                // so we do it here.
+                                // OCaml has a couple of expressions with two
+                                // // additions which their backend is not
+                                // folding, so we do it here.
                                 Some(PlusConstant { value: addition2 }) => {
                                     Some(addition1 + addition2)
                                 }

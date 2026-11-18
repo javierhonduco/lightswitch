@@ -38,7 +38,8 @@ impl ProfileFileFormat {
     pub fn default_port(self) -> u16 {
         match self {
             Self::Firefox => 3000,
-            // Perfetto's official local trace helper uses this CSP-compatible port.
+            // Perfetto's official local trace helper uses this CSP-compatible
+            // port.
             Self::Perfetto => 9001,
         }
     }

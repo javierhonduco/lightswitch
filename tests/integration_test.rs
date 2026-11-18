@@ -147,6 +147,163 @@ fn stack_strings_for_pid(symbolized_profile: &AggregatedProfile, expected_pid: i
 }
 
 #[test]
+fn cli_help() {
+    #[allow(deprecated)]
+    let mut cmd = assert_cmd::Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+
+    cmd.arg("--help");
+    cmd.assert().success();
+    let actual = String::from_utf8(cmd.unwrap().stdout).unwrap();
+    insta::assert_snapshot!(actual, @"
+    Usage: lightswitch [OPTIONS] [COMMAND]
+
+    Commands:
+      object-info  
+      show-unwind  
+      system-info  
+      server       
+      help         Print this message or the help of the given subcommand(s)
+
+    Options:
+          --pids <PIDS>
+              Specific PIDs to profile
+
+      -D, --duration <DURATION>
+              How long this agent will run in seconds
+              
+              [default: 18446744073709551615]
+
+          --libbpf-debug
+              Enable libbpf logs. This includes the BPF verifier output
+
+          --bpf-logging
+              Enable BPF programs logging
+
+          --btf-custom-path <BTF_CUSTOM_PATH>
+              Alternative BTF file
+
+          --logging <LOGGING>
+              Set lightswitch's logging level
+              
+              [default: info]
+              [possible values: trace, debug, info, warn, error]
+
+          --sample-freq <SAMPLE_FREQ_IN_HZ>
+              Per-CPU Sampling Frequency in Hz
+              
+              [default: 19]
+
+          --profile-format <PROFILE_FORMAT>
+              Output file for Flame Graph in SVG format
+              
+              [default: flame-graph]
+              [possible values: none, flame-graph, firefox, perfetto, pprof]
+
+          --flamegraph-aggregation <FLAMEGRAPH_AGGREGATION>
+              What information to show in the flamegraph. Won't do anything for other profile formats
+              
+              [default: function]
+              [possible values: function, all]
+
+          --profile-path <PROFILE_PATH>
+              Path for the generated profile
+
+          --profile-name <PROFILE_NAME>
+              Name for the generated profile
+
+          --sender <SENDER>
+              Where to write the profile
+
+              Possible values:
+              - none:       Discard the profile. Used for kernel tests
+              - local-disk
+              - remote
+              - pyroscope
+              
+              [default: local-disk]
+
+          --server-url <SERVER_URL>
+              
+
+          --token <TOKEN>
+              
+
+          --pyroscope-app-name <PYROSCOPE_APP_NAME>
+              Application name for Pyroscope
+              
+              [default: lightswitch]
+
+          --pyroscope-tenant-id <PYROSCOPE_TENANT_ID>
+              Tenant ID for multi-tenant Pyroscope (sets `X-Scope-OrgID` header)
+
+          --perf-buffer-bytes <PERF_BUFFER_BYTES>
+              Size of each profiler perf buffer, in bytes (must be a power of 2)
+              
+              [default: 524288]
+
+          --mapsize-info
+              Print eBPF map sizes after creation
+
+          --mapsize-rate-limits <MAPSIZE_RATE_LIMITS>
+              max number of rate limit entries
+              
+              [default: 5000]
+
+          --exclude-self
+              Do not profile the profiler (myself)
+
+          --symbolizer <SYMBOLIZER>
+              [default: local]
+              [possible values: local, none]
+
+          --debug-info-backend <DEBUG_INFO_BACKEND>
+              [default: none]
+              [possible values: none, copy, remote]
+
+          --max-native-unwind-info-size-mb <MAX_NATIVE_UNWIND_INFO_SIZE_MB>
+              approximate max size in megabytes used for the BPF maps that hold unwind information
+              
+              [default: 2147483647]
+
+          --enable-deadlock-detector
+              enable parking_lot's deadlock detector
+
+          --cache-dir-base <CACHE_DIR_BASE>
+              [default: /tmp]
+
+          --killswitch-path-override <KILLSWITCH_PATH_OVERRIDE>
+              Override the default path to the killswitch file (/tmp/lightswitch/killswitch) which prevents the profiler from starting
+
+          --unsafe-start
+              Force the profiler to start even if the system killswitch is enabled
+
+          --force-perf-buffer
+              force perf buffers even if ring buffers can be used
+
+          --no-prealloc-bpf-hash-maps
+              Do not preallocate BPF hash maps
+
+          --preload-thread-metadata
+              Read metadata for all threads when a new process is detected. This might be slow in older kernels.
+
+          --live
+              Launch live flamegraph TUI
+
+          --kubernetes
+              Enable Kubernetes pod-level profiling
+
+          --node-name <NODE_NAME>
+              Node name for Kubernetes metadata (required with --kubernetes)
+
+      -h, --help
+              Print help (see a summary with '-h')
+
+      -V, --version
+              Print version
+    ");
+}
+
+#[test]
 fn test_integration() {
     let bpf_test_debug = std::env::var("TEST_LIBBPF_DEBUG").is_ok();
     let system_info = SystemInfo::new(None, bpf_test_debug).expect("failed to detect system info");
@@ -289,7 +446,8 @@ fn test_integration_exec() {
                 "--noprofile",
                 "--norc",
                 "-c",
-                // Use builtins to keep Bash itself waiting, without spawning children.
+                // Use builtins to keep Bash itself waiting, without spawning
+                // children.
                 r#": > "$1"; while [[ ! -e "$2" ]]; do :; done; exec "$3""#,
                 "bash",
             ])
@@ -329,7 +487,8 @@ fn test_integration_exec() {
     let metadata_provider = Arc::new(Mutex::new(GlobalMetadataProvider::default()));
     let mut profiler = Profiler::new(config, stop_signal_receive, metadata_provider);
     profiler.profile_pids(vec![process.pid()]);
-    // Cache Bash's mappings before exec replaces its address space at the same PID.
+    // Cache Bash's mappings before exec replaces its address space at the same
+    // PID.
     profiler
         .add_proc(process.pid(), "bash".into())
         .expect("failed to add Bash");

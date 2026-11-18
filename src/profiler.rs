@@ -686,8 +686,9 @@ impl Profiler {
         let mut procs = self.procs.write();
         match procs.get_mut(&pid) {
             Some(proc_info) => {
-                // Not all deletions should remove the process, for example during a refresh
-                // call we'll remove everything except the process itself.
+                // Not all deletions should remove the process, for example
+                // during a refresh call we'll remove everything except the
+                // process itself.
                 if from_userspace {
                     proc_info.status = ProcessStatus::Exited;
                     self.deletion_scheduler
@@ -1228,21 +1229,22 @@ impl Profiler {
         let same_executable = self.procs.read().get(&pid).map(|e| e.file_id == file_id);
         match same_executable {
             Some(true) => {
-                // If we end up here it could mean that either the process exec the same binary
-                // or that we don't know about this memory mapping. Neither option is being
-                // handled yet.
+                // If we end up here it could mean that either the process exec
+                // the same binary or that we don't know about this memory
+                // mapping. Neither option is being handled yet.
                 //
-                // The former can be problematic as ASLR will change location of the mappings in
-                // memory, but might be rarer that the latter, which all applications that call
-                // dlopen will hit.
+                // The former can be problematic as ASLR will change location of
+                // the mappings in memory, but might be rarer that the latter,
+                // which all applications that call dlopen will hit.
                 debug!("unknown mapping for process {pid}: `{proc_name}`")
             }
             Some(false) => {
                 debug!("`exec` called for process {pid}: `{proc_name}`");
-                // Removing the information on the mappings before the exec took place will
-                // result in failures normalising said samples. This it not addressed yet and
-                // could be fixed either by normalising addresses with the  previous mappings
-                // before we delete them, or to keep multiple "generations" of a process across
+                // Removing the information on the mappings before the exec took
+                // place will result in failures normalising said samples. This
+                // it not addressed yet and could be fixed either by normalising
+                // addresses with the  previous mappings before we delete them,
+                // or to keep multiple "generations" of a process across
                 // execs and pid reuse.
                 self.delete_process(pid, true, false);
                 self.add_proc(pid, proc_name)?;
@@ -1459,9 +1461,10 @@ impl Profiler {
             }
             Entry::Occupied(mut entry) => {
                 let obj = entry.get_mut();
-                // If a object file had no references at some point, a deletion got scheduled.
-                // This can cause the object file to be removed too soon and cause samples to be
-                // dropped. Remove the pending scheduled deletions in this case, as a deletion
+                // If a object file had no references at some point, a deletion
+                // got scheduled. This can cause the object file to be removed
+                // too soon and cause samples to be dropped. Remove the pending
+                // scheduled deletions in this case, as a deletion
                 // will be scheduled once it drops to zero again.
                 if obj.references == 0 {
                     self.deletion_scheduler
@@ -1499,8 +1502,8 @@ impl Profiler {
             FileId::new(format!("/proc/{pid}/exe")).map_err(|_| AddProcessError::ProcfsRace)?;
 
         let mut mappings = vec![];
-        // 64 bit kernels can run 32 bit executables in compatibility mode. We don't
-        // support them and only the kernel stack will show up, with the
+        // 64 bit kernels can run 32 bit executables in compatibility mode. We
+        // don't support them and only the kernel stack will show up, with the
         // userspace frames erroring.
         let mut compatibility_mode = false;
         for map in maps.iter() {
@@ -1600,10 +1603,11 @@ impl Profiler {
                         continue;
                     };
 
-                    // Previously there was a single vDSO file that was written to disk. If further
-                    // vDSO executables would show up (i.e. 32 bit binaries running in compatibility
-                    // mode) they would be overriden. Process every vDSO mapping and store it a file
-                    // indexed by its executable id.
+                    // Previously there was a single vDSO file that was written
+                    // to disk. If further vDSO executables would show up (i.e.
+                    // 32 bit binaries running in compatibility mode) they would
+                    // be overriden. Process every vDSO mapping and store it a
+                    // file indexed by its executable id.
                     let vdso_path = self.cache_dir.join("dumped-vdso");
                     if vdso_path.is_file() {
                         let _ = std::fs::remove_file(&vdso_path);
@@ -1632,7 +1636,8 @@ impl Profiler {
                         soft_delete: false,
                     });
                 }
-                // Skip every other mapping we don't care about: Heap, Stack, Vsys, Vvar, etc
+                // Skip every other mapping we don't care about: Heap, Stack,
+                // Vsys, Vvar, etc
                 _ => {}
             }
         }
