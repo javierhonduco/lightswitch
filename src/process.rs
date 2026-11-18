@@ -1,3 +1,5 @@
+use itertools::Itertools;
+use procfs::process::{MMPermissions, MemoryMap};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -195,9 +197,82 @@ pub(crate) fn opened_exe_path(pid: Pid, start_address: u64, end_address: u64) ->
     ))
 }
 
+/// Compute a bias at a byte shared by the VMA and each executable PT_LOAD.
+fn load_bias_candidates<'a>(
+    map: &MemoryMap,
+    elf_loads: &'a [ElfLoad],
+    page_size: u64,
+) -> impl Iterator<Item = u64> + Clone + use<'a> {
+    let (start, end) = map.address;
+    let offset = map.offset;
+    let file_end = end
+        .checked_sub(start)
+        .and_then(|len| offset.checked_add(len));
+    let candidates = elf_loads.iter().filter_map(move |segment| {
+        let file_end = file_end?;
+        let segment_end = segment.p_offset.checked_add(segment.p_filesz)?;
+        let overlap = offset.max(segment.p_offset);
+        if overlap >= file_end.min(segment_end) {
+            return None;
+        }
+        let runtime_pc = start + (overlap - offset);
+        let object_pc = segment.p_vaddr.checked_add(overlap - segment.p_offset)?;
+        // The VMA may be split, or it may include adjacent segments after
+        // mprotect. Only the latter requires accepting a partial match.
+        let covers_vma = segment.p_offset / page_size <= offset / page_size
+            && (segment_end - 1) / page_size >= (file_end - 1) / page_size;
+        Some((runtime_pc.wrapping_sub(object_pc), covers_vma))
+    });
+    let has_full_match = candidates.clone().any(|(_, full)| full);
+    candidates.filter_map(move |(bias, full)| (full == has_full_match).then_some(bias))
+}
+
+pub(crate) fn executable_mapping_load_address(
+    map: &MemoryMap,
+    maps: &[MemoryMap],
+    elf_loads: &[ElfLoad],
+    page_size: u64,
+) -> Option<u64> {
+    let candidates = load_bias_candidates(map, elf_loads, page_size);
+    let mut biases = candidates.clone();
+    let first = biases.next()?;
+    if biases.all(|bias| bias == first) {
+        return Some(first);
+    }
+
+    // Two PT_LOADs can expose the same file page at different addresses.
+    // Only accept a bias corroborated by an unambiguous VMA of this file.
+    maps.iter()
+        .filter(|other| {
+            other.dev == map.dev
+                && other.inode == map.inode
+                && other.perms.contains(MMPermissions::EXECUTE)
+        })
+        .filter_map(|other| {
+            load_bias_candidates(other, elf_loads, page_size)
+                .all_equal_value()
+                .ok()
+        })
+        .filter(|bias| candidates.clone().any(|candidate| candidate == *bias))
+        .all_equal_value()
+        .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn executable_vma(start: u64, offset: u64, length: u64) -> MemoryMap {
+        MemoryMap {
+            address: (start, start + length),
+            offset,
+            dev: (8, 1),
+            inode: 1,
+            perms: MMPermissions::EXECUTE,
+            pathname: procfs::process::MMapPath::Path("/test".into()),
+            extension: Default::default(),
+        }
+    }
 
     #[test]
     fn test_address_normalization() {
@@ -250,6 +325,166 @@ mod tests {
             object_file_info
                 .normalized_address(0x110, &mapping)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn mapping_load_address_matches_each_executable_segment() {
+        // Captured from librustc_driver on x86_64. Using the first segment for
+        // the second VMA selects unrelated unwind rules at 0x20fdb70.
+        let segments = [
+            ElfLoad {
+                p_offset: 0x116ce40,
+                p_vaddr: 0x116de40,
+                p_filesz: 0x3b06030,
+            },
+            ElfLoad {
+                p_offset: 0x5000000,
+                p_vaddr: 0x5000000,
+                p_filesz: 0x2bd824c,
+            },
+        ];
+        let first = executable_mapping_load_address(
+            &executable_vma(0x7ffff0f6d000, 0x116c000, 4096),
+            &[],
+            &segments,
+            4096,
+        );
+        let second = executable_mapping_load_address(
+            &executable_vma(0x7ffff4e00000, 0x5000000, 4096),
+            &[],
+            &segments,
+            4096,
+        );
+        assert_eq!(first, Some(0x7fffefe00000));
+        assert_eq!(second, first);
+        assert_eq!(0x7ffff5d90b70 - second.unwrap(), 0x5f90b70);
+    }
+
+    #[test]
+    fn mapping_load_address_accounts_for_split_vmas() {
+        let segments = [ElfLoad {
+            p_offset: 0,
+            p_vaddr: 0,
+            p_filesz: 0x2426a70,
+        }];
+        // libnvidia-glcore's executable segment is split into several VMAs.
+        assert_eq!(
+            executable_mapping_load_address(
+                &executable_vma(0x771a5ea00000, 0x400000, 4096),
+                &[],
+                &segments,
+                4096
+            ),
+            Some(0x771a5e600000),
+        );
+        assert_eq!(
+            executable_mapping_load_address(
+                &executable_vma(0x771a5e600000, 0, 4096),
+                &[],
+                &segments,
+                4096
+            ),
+            Some(0x771a5e600000),
+        );
+    }
+
+    #[test]
+    fn mapping_load_address_handles_fixed_executables_and_large_pages() {
+        let segments = [ElfLoad {
+            p_offset: 0x12340,
+            p_vaddr: 0x412340,
+            p_filesz: 0x20000,
+        }];
+        assert_eq!(
+            executable_mapping_load_address(
+                &executable_vma(0x412000, 0x12000, 4096),
+                &[],
+                &segments,
+                4096
+            ),
+            Some(0),
+        );
+        assert_eq!(
+            executable_mapping_load_address(
+                &executable_vma(0x410000, 0x10000, 65536),
+                &[],
+                &segments,
+                65536
+            ),
+            Some(0),
+        );
+        assert_eq!(
+            executable_mapping_load_address(
+                &executable_vma(0x420000, 0x20000, 65536),
+                &[],
+                &segments,
+                65536
+            ),
+            Some(0),
+        );
+        assert_eq!(
+            executable_mapping_load_address(
+                &executable_vma(0, 0x12000, 4096),
+                &[],
+                &segments,
+                4096
+            ),
+            Some(0u64.wrapping_sub(0x412000)),
+        );
+        assert_eq!(
+            executable_mapping_load_address(
+                &executable_vma(0x500000, 0x40000, 4096),
+                &[],
+                &segments,
+                4096
+            ),
+            None,
+        );
+    }
+
+    #[test]
+    fn merged_header_and_text_vma() {
+        let segment = ElfLoad {
+            p_offset: 0x1000,
+            p_vaddr: 0x401000,
+            p_filesz: 0xff0,
+        };
+        let map = executable_vma(0x400000, 0, 0x2000);
+        assert_eq!(
+            executable_mapping_load_address(&map, &[], &[segment], 4096),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn shared_file_page_uses_extent_or_another_vma() {
+        let segments = [
+            ElfLoad {
+                p_offset: 0,
+                p_vaddr: 0,
+                p_filesz: 0x2800,
+            },
+            ElfLoad {
+                p_offset: 0x2800,
+                p_vaddr: 0x5800,
+                p_filesz: 0x1800,
+            },
+        ];
+        let first = executable_vma(0x10000, 0, 0x3000);
+        let second = executable_vma(0x15000, 0x2000, 0x2000);
+        assert_eq!(
+            executable_mapping_load_address(&second, &[], &segments, 4096),
+            Some(0x10000)
+        );
+        let page = executable_vma(0x15000, 0x2000, 0x1000);
+        assert_eq!(
+            executable_mapping_load_address(&page, &[], &segments, 4096),
+            None
+        );
+        assert_eq!(
+            executable_mapping_load_address(&page, &[first], &segments, 4096),
+            Some(0x10000)
         );
     }
 }

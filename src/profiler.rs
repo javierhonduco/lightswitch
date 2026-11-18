@@ -8,6 +8,7 @@ use crate::native_unwind_state::KnownExecutableInfo;
 use crate::native_unwind_state::NativeUnwindState;
 use crate::native_unwind_state::unwind_info_size_bytes;
 use crate::perf_events::setup_perf_event;
+use crate::process::executable_mapping_load_address;
 use crate::process::opened_exe_path;
 use crate::util::FileId;
 use crate::util::get_online_cpus;
@@ -1373,8 +1374,25 @@ impl Profiler {
         exe_path: &Path,
         is_vdso: bool,
     ) -> Result<(Option<BuildId>, ElfLoad, bool)> {
+        let elf_loads = object_file.object().elf_load_segments()?;
+        let first = elf_loads
+            .first()
+            .context("empty elf load segments")?
+            .clone();
         let build_id = object_file.build_id();
-        let executable_id = build_id.id()?;
+        self.store_object_file(build_id.id()?, object_file, exe_path, is_vdso, elf_loads);
+        Ok((Some(build_id.clone()), first, object_file.object().is_64()))
+    }
+
+    fn store_object_file(
+        &mut self,
+        executable_id: ExecutableId,
+        object_file: &MappedObjectFile,
+        exe_path: &Path,
+        is_vdso: bool,
+        elf_loads: Vec<ElfLoad>,
+    ) {
+        let build_id = object_file.build_id();
 
         // If the object file has debug info, add it to our store.
         if object_file.object().has_debug_info() {
@@ -1403,16 +1421,6 @@ impl Profiler {
             );
         }
 
-        let Ok(elf_loads) = object_file.object().elf_load_segments() else {
-            return Err(anyhow::anyhow!("no elf load segments"));
-        };
-
-        let Some(first_elf_load) = elf_loads.first().cloned() else {
-            return Err(anyhow::anyhow!("empty elf load segments"));
-        };
-
-        let is_64 = object_file.object().is_64();
-
         self.object_files.write().insert(
             executable_id,
             ObjectFileInfo {
@@ -1424,11 +1432,9 @@ impl Profiler {
                 native_unwind_info_size: None,
                 is_vdso,
                 runtime: object_file.object().runtime(),
-                is_64,
+                is_64: object_file.object().is_64(),
             },
         );
-
-        Ok((Some(build_id.clone()), first_elf_load, is_64))
     }
 
     /// Returns the information needed to fill in a process
@@ -1438,7 +1444,8 @@ impl Profiler {
         opened_exe_path: &Path,
         exe_path: &Path,
         is_vdso: bool,
-    ) -> Result<(Option<BuildId>, ElfLoad, bool)> {
+        load_address: impl FnOnce(&[ElfLoad]) -> Option<u64>,
+    ) -> Result<(ExecutableId, u64, bool)> {
         let file_id = FileId::new(opened_exe_path)?;
         let cached_executable_id = self.file_id_to_info.get(&file_id);
         let (object, executable_id) = match cached_executable_id {
@@ -1454,13 +1461,21 @@ impl Profiler {
         let mut object_file = object_files_clone.write();
         let info = match object_file.entry(executable_id) {
             Entry::Vacant(_) => {
-                let object = object.unwrap_or(self.get_object_file(opened_exe_path)?);
-                // Release the write lock as it's locked in `insert_object_file`
                 drop(object_file);
-                self.insert_object_file(&object, exe_path, is_vdso)
+                let object = match object {
+                    Some(object) => object,
+                    None => self.get_object_file(opened_exe_path)?,
+                };
+                let segments = object.object().elf_load_segments()?;
+                let bias = load_address(&segments).context("no matching executable segment")?;
+                let is_64 = object.object().is_64();
+                self.store_object_file(executable_id, &object, exe_path, is_vdso, segments);
+                (executable_id, bias, is_64)
             }
             Entry::Occupied(mut entry) => {
                 let obj = entry.get_mut();
+                let bias = load_address(&obj.elf_load_segments)
+                    .context("no matching executable segment")?;
                 // If a object file had no references at some point, a deletion
                 // got scheduled. This can cause the object file to be removed
                 // too soon and cause samples to be dropped. Remove the pending
@@ -1471,16 +1486,13 @@ impl Profiler {
                         .remove_by_executable_id(executable_id)
                 }
                 obj.references += 1;
-                let Some(first_load_segment) = obj.elf_load_segments.first() else {
-                    return Err(anyhow::anyhow!("empty load segments"));
-                };
 
-                Ok((obj.build_id.clone(), first_load_segment.clone(), obj.is_64))
+                (executable_id, bias, obj.is_64)
             }
         };
 
         self.file_id_to_info.put(file_id, executable_id);
-        info
+        Ok(info)
     }
 
     pub fn add_proc_with_eviction(
@@ -1524,40 +1536,34 @@ impl Profiler {
                         continue;
                     };
                     let exe_path = executable_path(pid, &link);
-                    let info = self.get_or_insert_object_file(&opened_exe_path, &exe_path, false);
+                    let info = self.get_or_insert_object_file(
+                        &opened_exe_path,
+                        &exe_path,
+                        false,
+                        |segments| {
+                            executable_mapping_load_address(
+                                map,
+                                &maps.0,
+                                segments,
+                                page_size() as u64,
+                            )
+                        },
+                    );
                     debug!(
                         "adding executable at path {} to the mappings of process {}",
                         mapping_path.display(),
                         pid
                     );
 
-                    // mmap'ed data is always page aligned but the load segment
-                    // information might not be. As we need
-                    // to account for any randomisation
-                    // added by ASLR, by subtracting the
-                    // virtual address from the first load
-                    // segment once it's been page aligned we'll get the offset
-                    // at which the executable has been loaded.
-                    //
-                    // Note: this doesn't take into consideration the mmap'ed or
-                    // load offsets.
-                    let load_address = |map_start: u64, first_elf_load: &ElfLoad| {
-                        let page_mask = !(page_size() - 1) as u64;
-                        map_start.saturating_sub(first_elf_load.p_vaddr & page_mask)
-                    };
-
-                    if let Ok((Some(build_id), first_elf_load, is_64)) = info {
-                        if !is_64 {
-                            compatibility_mode = true;
-                        }
-
+                    if let Ok((executable_id, load_address, is_64)) = info {
+                        compatibility_mode |= !is_64;
                         mappings.push(ExecutableMapping {
-                            executable_id: build_id.id().expect("executable id"),
+                            executable_id,
                             kind: ExecutableMappingType::FileBacked,
                             start_addr: map.address.0,
                             end_addr: map.address.1,
                             offset: map.offset,
-                            load_address: load_address(map.address.0, &first_elf_load),
+                            load_address,
                             soft_delete: false,
                         });
                     } else {
@@ -1620,8 +1626,11 @@ impl Profiler {
                         continue;
                     }
 
-                    let info = self.get_or_insert_object_file(&vdso_path, &vdso_path, true);
-                    let Ok((Some(_build_id), _elf_load, _is_64)) = info else {
+                    let info =
+                        self.get_or_insert_object_file(&vdso_path, &vdso_path, true, |segments| {
+                            segments.first().map(|_| map.address.0)
+                        });
+                    let Ok((executable_id, load_address, _)) = info else {
                         error!("could not insert vDSO object file due to {:?}", info);
                         continue;
                     };
@@ -1632,7 +1641,7 @@ impl Profiler {
                         start_addr: map.address.0,
                         end_addr: map.address.1,
                         offset: map.offset,
-                        load_address: map.address.0,
+                        load_address,
                         soft_delete: false,
                     });
                 }
@@ -1738,6 +1747,55 @@ mod tests {
     use libbpf_rs::MapCore;
 
     use crate::{bpf::profiler_skel::ProfilerMaps, profiler::*};
+
+    #[test]
+    fn rejected_mapping_does_not_acquire_an_object_file() {
+        let (_stop, receive) = bounded(1);
+        let mut profiler = Profiler::new(
+            ProfilerConfig {
+                use_task_pt_regs_helper: false,
+                ..Default::default()
+            },
+            receive,
+            Arc::new(Mutex::new(GlobalMetadataProvider::default())),
+        );
+        let path = Path::new("tests/testdata/main_cpp_clang_03_with_inlined_3s");
+        assert!(
+            profiler
+                .get_or_insert_object_file(path, path, false, |_| None)
+                .is_err()
+        );
+        assert!(profiler.object_files.read().is_empty());
+
+        let object = profiler.get_object_file(path).unwrap();
+        let (build_id, first, _) = profiler.insert_object_file(&object, path, false).unwrap();
+        assert_eq!(
+            first.p_vaddr,
+            object.object().elf_load_segments().unwrap()[0].p_vaddr
+        );
+        let id = build_id.unwrap().id().unwrap();
+        profiler
+            .object_files
+            .write()
+            .get_mut(&id)
+            .unwrap()
+            .references = 0;
+        let deleted_at = Instant::now();
+        profiler
+            .deletion_scheduler
+            .add(ToDelete::ObjectFile(deleted_at, id));
+
+        assert!(
+            profiler
+                .get_or_insert_object_file(path, path, false, |_| None)
+                .is_err()
+        );
+        assert_eq!(profiler.object_files.read()[&id].references, 0);
+        assert_eq!(
+            profiler.deletion_scheduler.pop_pending(Duration::ZERO),
+            [ToDelete::ObjectFile(deleted_at, id)]
+        );
+    }
 
     #[test]
     fn test_process_eviction_and_added_again() {
