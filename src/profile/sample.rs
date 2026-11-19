@@ -119,14 +119,13 @@ impl RawSample {
         let result: SampleResult = raw_result.into();
         let mut last_errored_address = None;
         let collected_at = u64::from_ne_bytes(data[16..24].try_into().unwrap());
-        let mut ulen = u32::from_ne_bytes(data[24..28].try_into().unwrap()) as usize;
+        let ulen = u32::from_ne_bytes(data[24..28].try_into().unwrap()) as usize;
+        let ulen_actual = if result.mem_error() { ulen - 1 } else { ulen };
         let klen = u32::from_ne_bytes(data[28..32].try_into().unwrap()) as usize;
 
         if result.mem_error() {
-            ulen -= 1;
-
-            let last_element_start = FIELD_SIZE_BEFORE_STACK + ulen * 8;
-            let last_element_end = FIELD_SIZE_BEFORE_STACK + (ulen + 1) * 8;
+            let last_element_start = FIELD_SIZE_BEFORE_STACK + (ulen - 1) * 8;
+            let last_element_end = FIELD_SIZE_BEFORE_STACK + (ulen) * 8;
 
             last_errored_address = Some(u64::from_ne_bytes(
                 data[last_element_start..last_element_end]
@@ -135,7 +134,7 @@ impl RawSample {
             ));
         }
 
-        let user_stack_size = ulen * 8;
+        let user_stack_size = ulen_actual * 8;
         let combined_stack_size = (ulen + klen) * 8;
 
         if sample_len < FIELD_SIZE_BEFORE_STACK + combined_stack_size {
