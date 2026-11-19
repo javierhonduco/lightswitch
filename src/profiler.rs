@@ -8,6 +8,7 @@ use crate::native_unwind_state::KnownExecutableInfo;
 use crate::native_unwind_state::NativeUnwindState;
 use crate::native_unwind_state::unwind_info_size_bytes;
 use crate::perf_events::setup_perf_event;
+use crate::process::executable_mapping_load_address;
 use crate::process::opened_exe_path;
 use crate::util::FileId;
 use crate::util::get_online_cpus;
@@ -1372,7 +1373,7 @@ impl Profiler {
         object_file: &MappedObjectFile,
         exe_path: &Path,
         is_vdso: bool,
-    ) -> Result<(Option<BuildId>, ElfLoad, bool)> {
+    ) -> Result<(Option<BuildId>, Vec<ElfLoad>, bool)> {
         let build_id = object_file.build_id();
         let executable_id = build_id.id()?;
 
@@ -1407,10 +1408,6 @@ impl Profiler {
             return Err(anyhow::anyhow!("no elf load segments"));
         };
 
-        let Some(first_elf_load) = elf_loads.first().cloned() else {
-            return Err(anyhow::anyhow!("empty elf load segments"));
-        };
-
         let is_64 = object_file.object().is_64();
 
         self.object_files.write().insert(
@@ -1418,7 +1415,7 @@ impl Profiler {
             ObjectFileInfo {
                 build_id: Some(build_id.clone()),
                 path: exe_path.to_path_buf(),
-                elf_load_segments: elf_loads,
+                elf_load_segments: elf_loads.clone(),
                 is_dyn: object_file.object().is_dynamic(),
                 references: 1,
                 native_unwind_info_size: None,
@@ -1428,7 +1425,7 @@ impl Profiler {
             },
         );
 
-        Ok((Some(build_id.clone()), first_elf_load, is_64))
+        Ok((Some(build_id.clone()), elf_loads, is_64))
     }
 
     /// Returns the information needed to fill in a process
@@ -1438,7 +1435,7 @@ impl Profiler {
         opened_exe_path: &Path,
         exe_path: &Path,
         is_vdso: bool,
-    ) -> Result<(Option<BuildId>, ElfLoad, bool)> {
+    ) -> Result<(Option<BuildId>, Vec<ElfLoad>, bool)> {
         let file_id = FileId::new(opened_exe_path)?;
         let cached_executable_id = self.file_id_to_info.get(&file_id);
         let (object, executable_id) = match cached_executable_id {
@@ -1471,11 +1468,12 @@ impl Profiler {
                         .remove_by_executable_id(executable_id)
                 }
                 obj.references += 1;
-                let Some(first_load_segment) = obj.elf_load_segments.first() else {
-                    return Err(anyhow::anyhow!("empty load segments"));
-                };
 
-                Ok((obj.build_id.clone(), first_load_segment.clone(), obj.is_64))
+                Ok((
+                    obj.build_id.clone(),
+                    obj.elf_load_segments.clone(),
+                    obj.is_64,
+                ))
             }
         };
 
@@ -1531,33 +1529,35 @@ impl Profiler {
                         pid
                     );
 
-                    // mmap'ed data is always page aligned but the load segment
-                    // information might not be. As we need
-                    // to account for any randomisation
-                    // added by ASLR, by subtracting the
-                    // virtual address from the first load
-                    // segment once it's been page aligned we'll get the offset
-                    // at which the executable has been loaded.
-                    //
-                    // Note: this doesn't take into consideration the mmap'ed or
-                    // load offsets.
-                    let load_address = |map_start: u64, first_elf_load: &ElfLoad| {
-                        let page_mask = !(page_size() - 1) as u64;
-                        map_start.saturating_sub(first_elf_load.p_vaddr & page_mask)
-                    };
-
-                    if let Ok((Some(build_id), first_elf_load, is_64)) = info {
+                    if let Ok((Some(build_id), elf_load_segments, is_64)) = info {
                         if !is_64 {
                             compatibility_mode = true;
                         }
 
+                        let executable_id = build_id.id().expect("executable id");
+                        let load_address = executable_mapping_load_address(
+                            map.address.0,
+                            map.offset,
+                            &elf_load_segments,
+                            page_size() as u64,
+                        );
+                        let Some(load_address) = load_address else {
+                            warn!(
+                                pid,
+                                path = %mapping_path.display(),
+                                offset = %format_args!("{:#x}", map.offset),
+                                "Could not match executable mapping to an ELF load segment"
+                            );
+                            continue;
+                        };
+
                         mappings.push(ExecutableMapping {
-                            executable_id: build_id.id().expect("executable id"),
+                            executable_id,
                             kind: ExecutableMappingType::FileBacked,
                             start_addr: map.address.0,
                             end_addr: map.address.1,
                             offset: map.offset,
-                            load_address: load_address(map.address.0, &first_elf_load),
+                            load_address,
                             soft_delete: false,
                         });
                     } else {

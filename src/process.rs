@@ -195,9 +195,104 @@ pub(crate) fn opened_exe_path(pid: Pid, start_address: u64, end_address: u64) ->
     ))
 }
 
+/// Find the load address or bias using the ELF segment backing this
+/// mapping's file offset
+///
+/// A segment can be split across multiple mappings, and its headers don't have
+/// to be page aligned
+pub(crate) fn executable_mapping_load_address(
+    mapping_start: u64,
+    mapping_offset: u64,
+    elf_loads: &[ElfLoad],
+    page_size: u64,
+) -> Option<u64> {
+    let page_mask = !(page_size - 1);
+    elf_loads.iter().find_map(|segment| {
+        let file_start = segment.p_offset & page_mask;
+        let file_end = segment.p_offset.checked_add(segment.p_filesz)?;
+        if segment.p_filesz == 0 || !(file_start..file_end).contains(&mapping_offset) {
+            return None;
+        }
+
+        let virtual_start =
+            (segment.p_vaddr & page_mask).checked_add(mapping_offset - file_start)?;
+        mapping_start.checked_sub(virtual_start)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mapping_load_address_matches_each_executable_segment() {
+        // Captured from librustc_driver on x86_64. Using the first segment for
+        // the second VMA selects unrelated unwind unwind. Seems like BOLT might
+        // have been reponsible for this layour
+        let segments = [
+            ElfLoad {
+                p_offset: 0x116ce40,
+                p_vaddr: 0x116de40,
+                p_filesz: 0x3b06030,
+            },
+            ElfLoad {
+                p_offset: 0x5000000,
+                p_vaddr: 0x5000000,
+                p_filesz: 0x2bd824c,
+            },
+        ];
+        let first = executable_mapping_load_address(0x7ffff0f6d000, 0x116c000, &segments, 4096);
+        let second = executable_mapping_load_address(0x7ffff4e00000, 0x5000000, &segments, 4096);
+        assert_eq!(first, Some(0x7fffefe00000));
+        assert_eq!(second, first);
+    }
+
+    #[test]
+    fn mapping_load_address_accounts_for_split_vmas() {
+        let segments = [ElfLoad {
+            p_offset: 0,
+            p_vaddr: 0,
+            p_filesz: 0x2426a70,
+        }];
+        // libnvidia-glcore's executable segment is split into several VMAs
+        assert_eq!(
+            executable_mapping_load_address(0x771a5ea00000, 0x400000, &segments, 4096),
+            Some(0x771a5e600000),
+        );
+        assert_eq!(
+            executable_mapping_load_address(0x771a5e600000, 0, &segments, 4096),
+            Some(0x771a5e600000),
+        );
+    }
+
+    #[test]
+    fn mapping_load_address_handles_fixed_executables_and_large_pages() {
+        let segments = [ElfLoad {
+            p_offset: 0x12340,
+            p_vaddr: 0x412340,
+            p_filesz: 0x20000,
+        }];
+        assert_eq!(
+            executable_mapping_load_address(0x412000, 0x12000, &segments, 4096),
+            Some(0),
+        );
+        assert_eq!(
+            executable_mapping_load_address(0x410000, 0x10000, &segments, 65536),
+            Some(0),
+        );
+        assert_eq!(
+            executable_mapping_load_address(0x420000, 0x20000, &segments, 65536),
+            Some(0),
+        );
+        assert_eq!(
+            executable_mapping_load_address(0, 0x12000, &segments, 4096),
+            None,
+        );
+        assert_eq!(
+            executable_mapping_load_address(0x500000, 0x40000, &segments, 4096),
+            None,
+        );
+    }
 
     #[test]
     fn test_address_normalization() {
