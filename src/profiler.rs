@@ -587,7 +587,7 @@ impl Profiler {
                             {
                                 Ok(mut pagemap) => {
                                     let page_size = page_size() as u64;
-                                    if let Some(address) =  raw_sample.ustack.last() {
+                                    if let Some(address) =  raw_sample.last_errored_address {
                                         let page_index = (address / page_size) as usize;
                                         match pagemap.get_info(page_index) {
                                             Ok(page_info) => {

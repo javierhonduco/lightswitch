@@ -354,6 +354,7 @@ pub type AggregatedProfile = Vec<AggregatedSample>;
 #[cfg(test)]
 mod tests {
     use crate::bpf::profiler_bindings::native_stack_t;
+    use crate::bpf::profiler_bindings::sample_result_SAMPLE_MEM_READ_FAULT_ERROR;
     use crate::bpf::profiler_bindings::sample_t;
     use crate::profile::SymbolizedFrame;
 
@@ -523,5 +524,33 @@ mod tests {
             count: 1001,
         };
         insta::assert_snapshot!(format!("{}", sample), @r#"AggregatedSample { pid: 98765, tid: 98766, result: Started, ustack: "[NONE]", kstack: "[  0: kfunc2,  1: kfunc1]", count: 1001 }"#);
+    }
+
+    #[test]
+    fn test_sample_with_error_address() {
+        let mut c_sample = sample_t {
+            pid: 234,
+            tid: 987,
+            result: sample_result_SAMPLE_MEM_READ_FAULT_ERROR,
+            collected_at: 0xDEADBEEF,
+            stack: native_stack_t {
+                ulen: 2,
+                klen: 1,
+                addresses: [0; 400],
+            },
+        };
+
+        c_sample.stack.addresses[0] = 0x00000000F;
+        c_sample.stack.addresses[1] = 0xBADBADBAD;
+        c_sample.stack.addresses[2] = 0xFFFFFFFFF;
+
+        let raw_sample = RawSample::from_bytes(&unsafe { plain::as_bytes(&c_sample) }).unwrap();
+        assert_eq!(raw_sample.ustack.len(), 1);
+        assert_eq!(raw_sample.ustack[0], 0x00000000F);
+
+        assert_eq!(raw_sample.kstack.len(), 1);
+        assert_eq!(raw_sample.kstack[0], 0xFFFFFFFFF);
+
+        assert_eq!(raw_sample.last_errored_address, Some(0xBADBADBAD));
     }
 }
