@@ -1,3 +1,10 @@
+v0.9.0
+------
+- Fix build for Linux 7.3+
+- Set the actual duration of the profiler session in the pprof collector
+- Fix load address calculation: take into account the offset and that multiple ELF LOAD might exist
+- Increase the unified stack size to 256 frames
+
 v0.8.0
 ------
 - Add feature to enable libbpf-rs' vendored feature

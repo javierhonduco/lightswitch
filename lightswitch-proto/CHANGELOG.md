@@ -1,3 +1,7 @@
+v0.3.2
+------
+- Set the actual duration of the profiler session in the pprof collector
+
 v0.3.1
 ------
 - pprof: Add public API to add comments
