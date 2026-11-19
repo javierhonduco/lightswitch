@@ -1,11 +1,11 @@
 #include "basic_types.h"
 
 // Number of frames to walk per tail call iteration.
-#define MAX_STACK_DEPTH_PER_PROGRAM 7
+#define MAX_STACK_DEPTH_PER_PROGRAM 9
 // Number of BPF tail calls that will be attempted.
 #define MAX_TAIL_CALLS 30
 // Maximum number of frames.
-#define MAX_STACK_DEPTH 200
+#define MAX_STACK_DEPTH 256
 _Static_assert(MAX_TAIL_CALLS* MAX_STACK_DEPTH_PER_PROGRAM >= MAX_STACK_DEPTH,
                "enough iterations to traverse the whole stack");
 // Number of unique stacks.
