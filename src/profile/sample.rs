@@ -95,7 +95,7 @@ pub enum RawSampleParsingError {
 impl RawSample {
     pub fn from_bytes(data: &[u8]) -> Result<Self, RawSampleParsingError> {
         const FIELD_SIZE_BEFORE_STACK: usize = 32;
-        const MAX_STACK_SIZE: usize = 200 * 2 * 8;
+        const MAX_STACK_SIZE: usize = 256 * 2 * 8;
 
         let sample_len = data.len();
         if sample_len < FIELD_SIZE_BEFORE_STACK {
@@ -349,7 +349,7 @@ mod tests {
             stack: native_stack_t {
                 ulen: 2,
                 klen: 1,
-                addresses: [0; 400],
+                addresses: [0; 512],
             },
         };
         assert_eq!(
@@ -368,7 +368,7 @@ mod tests {
             stack: native_stack_t {
                 ulen: 2,
                 klen: 1,
-                addresses: [0; 400],
+                addresses: [0; 512],
             },
         };
         let bytes = unsafe { plain::as_bytes(&c_sample) };
@@ -391,7 +391,7 @@ mod tests {
             stack: native_stack_t {
                 ulen: 2,
                 klen: 1,
-                addresses: [0; 400],
+                addresses: [0; 512],
             },
         };
 
