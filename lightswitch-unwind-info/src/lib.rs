@@ -3,6 +3,7 @@ mod elf;
 pub mod manager;
 mod optimize;
 pub mod pages;
+mod pclntab;
 pub mod persist;
 pub mod types;
 

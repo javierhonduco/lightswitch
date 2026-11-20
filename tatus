@@ -1,0 +1,583 @@
+[1m[93mCargo.lock[39m[0m[2m --- 1/2 --- TOML[0m
+[2m2285 [0m[2m2285 [0m[1mdependencies[0m [1m=[0m [
+[2m2286 [0m[2m2286 [0m [95m"anyhow"[0m,
+[2m2287 [0m[2m2287 [0m [95m"data-encoding"[0m,
+[2m.... [0m[92;1m2288 [0m [92m"lightswitch-unwind-info",[0m
+[2m2288 [0m[2m2289 [0m [95m"memmap2"[0m,
+[2m2289 [0m[2m2290 [0m [95m"object 0.40.0"[0m,
+[2m2290 [0m[2m2291 [0m [95m"ring"[0m,
+
+[1mCargo.lock[0m[2m --- 2/2 --- TOML[0m
+[2m2308 [0m[2m2309 [0m [95m"anyhow"[0m,
+[2m2309 [0m[2m2310 [0m [95m"gimli"[0m,
+[2m2310 [0m[2m2311 [0m [95m"lazy_static"[0m,
+[91;1m2311 [0m[2m.... [0m [91m"lightswitch-object",[0m
+[2m2312 [0m[2m2312 [0m [95m"memmap2"[0m,
+[2m2313 [0m[2m2313 [0m [95m"object 0.40.0"[0m,
+[2m2314 [0m[2m2314 [0m [95m"plain"[0m,
+
+[1m[93mlightswitch-object/Cargo.toml[39m[0m[2m --- TOML[0m
+[2m 7 [0m[2m 7 [0m[1mrepository[0m [1m=[0m [95m"https://github.com/javierhonduco/lightswitch"[0m
+[2m 8 [0m[2m 8 [0m
+[2m 9 [0m[2m 9 [0m[[1mdependencies[0m]
+[2m . [0m[92;1m10 [0m[92;1mlightswitch-unwind-info[0m [92;1m=[0m [92;1m{[0m [92;1mpath[0m [92;1m=[0m [92m"../lightswitch-unwind-info",[0m [92;1mversion[0m [92;1m=[0m [92m"0.3.0"[0m [92;1m}[0m
+[2m10 [0m[2m11 [0m[1mdata-encoding[0m [1m=[0m [95m"2.10.0"[0m
+[2m11 [0m[2m12 [0m[1mring[0m [1m=[0m { [1mworkspace[0m [1m=[0m [1mtrue[0m }
+[2m12 [0m[2m13 [0m[1mmemmap2[0m [1m=[0m { [1mworkspace[0m [1m=[0m [1mtrue[0m }
+
+[1m[93mlightswitch-object/src/object.rs[39m[0m[2m --- 1/6 --- Rust[0m
+[2m 16 [0m[2m 16 [0m[1muse[0m object::read::elf::{[1mFileHeader[0m, [1mNoteIterator[0m, [1mProgramHeader[0m};
+[2m 17 [0m[2m 17 [0m
+[2m 18 [0m[2m 18 [0m[1muse[0m [1mcrate[0m::{[1mBuildId[0m, [1mExecutableId[0m};
+[2m .. [0m[92;1m 19 [0m[92;1muse[0m [92mlightswitch_unwind_info::pclntab::[0m[92;1mPclnTab[0m[92m;[0m
+[2m .. [0m[92;1m 20 [0m[92;1mpub[0m [92;1muse[0m [92mlightswitch_unwind_info::pclntab::[0m[92;1mStopUnwindingFrames[0m[92m;[0m
+[2m 19 [0m[2m 21 [0m
+[2m 20 [0m[2m 22 [0m[94;3m/// Elf load segments used during address normalization to find the ELF segment[0m
+[2m 21 [0m[2m 23 [0m[94;3m/// where an address falls into.[0m
+
+[1mlightswitch-object/src/object.rs[0m[2m --- 2/6 --- Rust[0m
+[2m 65 [0m[2m 67 [0m    }
+[2m 66 [0m[2m 68 [0m}
+[91;1m 67 [0m[2m .. [0m
+[91;1m 68 [0m[2m .. [0m[91m#[0m[91;1m[[0m[91mderive[0m[91;1m(Debug[0m[91m,[0m [91;1mClone[0m[91m,[0m [91;1mPartialEq)][0m
+[91;1m 69 [0m[2m .. [0m[91;1mpub[0m [91;1mstruct[0m [91;1mStopUnwindingFrames[0m [91;1m{[0m
+[91;1m 70 [0m[2m .. [0m    [91;1mpub[0m [91mname:[0m [91;1mString[0m[91m,[0m
+[91;1m 71 [0m[2m .. [0m    [91;1mpub[0m [91mstart_address:[0m [91;1mu64[0m[91m,[0m
+[91;1m 72 [0m[2m .. [0m    [91;1mpub[0m [91mend_address:[0m [91;1mu64[0m[91m,[0m
+[91;1m 73 [0m[2m .. [0m[91;1m}[0m
+[2m 74 [0m[2m 69 [0m
+[2m 75 [0m[2m 70 [0m#[derive([1mDebug[0m)]
+[2m 76 [0m[2m 71 [0m[1mpub[0m [1mstruct[0m [1mObjectFile[0m<[1m'a[0m> {
+
+[1mlightswitch-object/src/object.rs[0m[2m --- 3/6 --- Rust[0m
+[2m183 [0m[2m178 [0m            [1mif[0m [1mlet[0m [1mOk[0m(section_name) = section.name_bytes()
+[2m184 [0m[2m179 [0m                && (section_name == [95mb".gosymtab"[0m
+[2m185 [0m[2m180 [0m                    || section_name == [95mb".gopclntab"[0m
+[2m... [0m[92;1m181 [0m                    [92m||[0m [92msection_name[0m [92m==[0m [92mb".data.rel.ro.gopclntab"[0m
+[2m186 [0m[2m182 [0m                    || section_name == [95mb".note.go.buildid"[0m)
+[2m187 [0m[2m183 [0m            {
+[2m188 [0m[2m184 [0m                [1mreturn[0m [1mtrue[0m;
+
+[1mlightswitch-object/src/object.rs[0m[2m --- 4/6 --- Rust[0m
+[2m191 [0m        [1mfalse[0m                                                              [2m187 [0m        [1mfalse[0m
+[2m192 [0m    }                                                                      [2m188 [0m    }
+[2m... [0m                                                                           [92;1m189 [0m
+[2m... [0m                                                                           [92;1m190 [0m    [92;1mpub[0m [92;1mfn[0m [92mgo_pclntab[0m[92;1m(&[0m[92mself[0m[92;1m)[0m [92m->[0m [92;1mResult<Option<PclnTab<'a>>>[0m [92;1m{[0m
+[2m... [0m                                                                           [92;1m191 [0m        [92;1mPclnTab[0m[92m::from_object[0m[92;1m(&[0m[92mself.object[0m[92;1m)[0m
+[2m... [0m                                                                           [92;1m192 [0m    [92;1m}[0m
+[2m193 [0m                                                                           [2m193 [0m
+[2m194 [0m    [1mpub[0m [1mfn[0m go_stop_unwinding_frames([1m&[0mself) -> [1mVec[0m<[1mStopUnwindingFrames[0m> {   [2m194 [0m    [1mpub[0m [1mfn[0m go_stop_unwinding_frames([1m&[0mself) -> [1mVec[0m<[1mStopUnwindingFrames[0m> {
+[91;1m195 [0m        [91;1mlet[0m [91;1mmut[0m [91mr[0m [91m=[0m [91;1mVec[0m[91m::new[0m[91;1m()[0m[91m;[0m                                            [2m... [0m
+[91;1m196 [0m                                                                           [2m... [0m
+[91;1m197 [0m        [91;1mfor[0m [91msymbol[0m [91;1min[0m [91mself.object.symbols[0m[91;1m()[0m [91;1m{[0m                              [2m... [0m
+[91;1m198 [0m            [91;1mlet[0m [91;1mOk([0m[91mname[0m[91;1m)[0m [91m=[0m [91msymbol.name_bytes[0m[91;1m()[0m [91;1melse[0m [91;1m{[0m                      [2m... [0m
+[91;1m199 [0m                [91;1mcontinue[0m[91m;[0m                                                  [2m... [0m
+[91;1m200 [0m            [91;1m}[0m[91m;[0m                                                             [2m... [0m
+[91;1m201 [0m            [91;1mfor[0m [91mfunc[0m [91;1min[0m [91;1m[[0m                                                  [2m... [0m
+[91;1m202 [0m                [91mb"runtime.mcall"[0m.[91mas_slice[0m()[91m,[0m                               [92;1m195 [0m        [92mself[0m.[92mgo_pclntab[0m[92;1m()[0m
+[2m... [0m                                                                           [92;1m196 [0m            [92m.ok[0m()
+[91;1m203 [0m                [91mb"runtime.goexit".as_slice[0m()[91m,[0m                              [92;1m197 [0m            [92m.flatten[0m()
+[91;1m204 [0m                [91mb"runtime.mstart"[0m.[91mas_slice[0m[91;1m()[0m[91m,[0m                              [92;1m198 [0m            .[92mand_then[0m([92;1m|[0m[92mtable[0m[92;1m|[0m [92mtable[0m.[92mstop_frames[0m().[92mok[0m[92;1m()[0m)
+[91;1m205 [0m                [91mb"runtime.systemstack".as_slice[0m[91;1m()[0m[91m,[0m                         [92;1m199 [0m            [92m.unwrap_or_default[0m[92;1m()[0m
+[91;1m206 [0m            [91;1m][0m [91;1m{[0m                                                            [2m... [0m
+[91;1m207 [0m                [91;3m// In some occasions functions might get some suffixes ad[0m  [2m... [0m
+[91;1m[2m... [0m[0m[91;3mded to[0m                                                                     [2m... [0m
+[91;1m208 [0m                [91;3m// them like `runtime.mcall0`.[0m                             [2m... [0m
+[91;1m209 [0m                [91;1mif[0m [91mname.starts_with[0m[91;1m([0m[91mfunc[0m[91;1m)[0m [91;1m{[0m                                [2m... [0m
+[91;1m210 [0m                    [91mr.push[0m([91;1mStopUnwindingFrames[0m [91;1m{[0m                           [2m... [0m
+[91;1m211 [0m                        [91mname:[0m [91;1mString[0m[91m::from_utf8_lossy[0m[91;1m([0m[91mname[0m[91;1m)[0m[91m.into_owned[0m[91;1m()[0m[91m,[0m  [2m... [0m
+[91;1m212 [0m                        [91mstart_address:[0m [91msymbol.address[0m[91;1m()[0m[91m,[0m                   [2m... [0m
+[91;1m213 [0m                        [91mend_address:[0m [91msymbol[0m.[91maddress[0m() [91m+[0m [91msymbol[0m.[91msize[0m[91;1m()[0m[91m,[0m     [2m... [0m
+[91;1m214 [0m                    [91;1m}[0m)[91m;[0m                                                    [2m... [0m
+[91;1m215 [0m                [91;1m}[0m                                                          [2m... [0m
+[91;1m216 [0m            [91;1m}[0m                                                              [2m... [0m
+[91;1m217 [0m        [91;1m}[0m                                                                  [2m... [0m
+[91;1m218 [0m                                                                           [2m... [0m
+[91;1m219 [0m        [91mr[0m                                                                  [2m... [0m
+[2m220 [0m    }                                                                      [2m200 [0m    }
+[2m221 [0m                                                                           [2m201 [0m
+[2m222 [0m    [94;3m/// Retrieves the executable load segments. These are used to convert[0m  [2m202 [0m    [94;3m/// Retrieves the executable load segments. These are used to convert[0m
+
+[1mlightswitch-object/src/object.rs[0m[2m --- 5/6 --- Rust[0m
+[2m426 [0m                    end_address: [1m4454320[0m                                   [2m406 [0m                    end_address: [1m4454320[0m
+[2m427 [0m                },                                                         [2m407 [0m                },
+[2m428 [0m                [1mStopUnwindingFrames[0m {                                      [2m408 [0m                [1mStopUnwindingFrames[0m {
+[91;1m429 [0m                    name: [91m"runtime.mstart[0m[91;1;4m.abi0[0m[91m"[0m.to_string(),               [92;1m409 [0m                    name: [92m"runtime.mstart"[0m.to_string(),
+[2m430 [0m                    start_address: [1m4596448[0m,                                [2m410 [0m                    start_address: [1m4596448[0m,
+[2m431 [0m                    end_address: [1m4596480[0m                                   [2m411 [0m                    end_address: [1m4596480[0m
+[2m432 [0m                },                                                         [2m412 [0m                },
+
+[1mlightswitch-object/src/object.rs[0m[2m --- 6/6 --- Rust[0m
+[2m436 [0m                    end_address: [1m4596592[0m                                   [2m416 [0m                    end_address: [1m4596592[0m
+[2m437 [0m                },                                                         [2m417 [0m                },
+[2m438 [0m                [1mStopUnwindingFrames[0m {                                      [2m418 [0m                [1mStopUnwindingFrames[0m {
+[91;1m439 [0m                    name: [91m"runtime.systemstack_switch[0m[91;1;4m.abi0[0m[91m"[0m.to_string(),   [92;1m419 [0m                    name: [92m"runtime.systemstack_switch"[0m.to_string(),
+[2m440 [0m                    start_address: [1m4596592[0m,                                [2m420 [0m                    start_address: [1m4596592[0m,
+[2m441 [0m                    end_address: [1m4596624[0m                                   [2m421 [0m                    end_address: [1m4596624[0m
+[2m442 [0m                },                                                         [2m422 [0m                },
+[2m443 [0m                [1mStopUnwindingFrames[0m {                                      [2m423 [0m                [1mStopUnwindingFrames[0m {
+[91;1m444 [0m                    name: [91m"runtime.systemstack[0m[91;1;4m.abi0[0m[91m"[0m.to_string(),          [92;1m424 [0m                    name: [92m"runtime.systemstack"[0m.to_string(),
+[2m445 [0m                    start_address: [1m4596624[0m,                                [2m425 [0m                    start_address: [1m4596624[0m,
+[2m446 [0m                    end_address: [1m4596800[0m                                   [2m426 [0m                    end_address: [1m4596800[0m
+[2m447 [0m                },                                                         [2m427 [0m                },
+[2m448 [0m                [1mStopUnwindingFrames[0m {                                      [2m428 [0m                [1mStopUnwindingFrames[0m {
+[91;1m449 [0m                    name: [91m"runtime.goexit[0m[91;1;4m.abi0[0m[91m"[0m.to_string(),               [92;1m429 [0m                    name: [92m"runtime.goexit"[0m.to_string(),
+[2m450 [0m                    start_address: [1m4606112[0m,                                [2m430 [0m                    start_address: [1m4606112[0m,
+[2m451 [0m                    end_address: [1m4606128[0m                                   [2m431 [0m                    end_address: [1m4606128[0m
+[2m452 [0m                },                                                         [2m432 [0m                },
+[2m453 [0m                [1mStopUnwindingFrames[0m {                                      [2m433 [0m                [1mStopUnwindingFrames[0m {
+[91;1m454 [0m                    name: [91m"runtime.mstart0[0m[91;1;4m.abi0[0m[91m"[0m.to_string(),              [92;1m434 [0m                    name: [92m"runtime.mstart0"[0m.to_string(),
+[2m455 [0m                    start_address: [1m4613040[0m,                                [2m435 [0m                    start_address: [1m4613040[0m,
+[2m456 [0m                    end_address: [1m4613056[0m                                   [2m436 [0m                    end_address: [1m4613056[0m
+[2m457 [0m                },                                                         [2m437 [0m                },
+[2m458 [0m                [1mStopUnwindingFrames[0m {                                      [2m438 [0m                [1mStopUnwindingFrames[0m {
+[91;1m459 [0m                    name: [91m"runtime.goexit1[0m[91;1;4m.abi0[0m[91m"[0m.to_string(),              [92;1m439 [0m                    name: [92m"runtime.goexit1"[0m.to_string(),
+[2m460 [0m                    start_address: [1m4613088[0m,                                [2m440 [0m                    start_address: [1m4613088[0m,
+[2m461 [0m                    end_address: [1m4613104[0m                                   [2m441 [0m                    end_address: [1m4613104[0m
+[2m462 [0m                }                                                          [2m442 [0m                }
+
+[1m[93mlightswitch-unwind-info/Cargo.toml[39m[0m[2m --- TOML[0m
+[2m10 [0m[2m10 [0m[1mgimli[0m [1m=[0m [95m"0.34.0"[0m
+[2m11 [0m[2m11 [0m[1mlazy_static[0m [1m=[0m [95m"1.5.0"[0m
+[2m12 [0m[2m12 [0m[1mobject[0m [1m=[0m { [1mworkspace[0m [1m=[0m [1mtrue[0m }
+[91;1m13 [0m[2m.. [0m[91;1mlightswitch-object[0m [91;1m=[0m [91;1m{[0m [91;1mworkspace[0m [91;1m=[0m [91;1mtrue[0m [91;1m}[0m
+[2m14 [0m[2m13 [0m[1mplain[0m [1m=[0m { [1mworkspace[0m [1m=[0m [1mtrue[0m }
+[2m15 [0m[2m14 [0m[1mmemmap2[0m [1m=[0m { [1mworkspace[0m [1m=[0m [1mtrue[0m }
+[2m16 [0m[2m15 [0m[1manyhow[0m [1m=[0m { [1mworkspace[0m [1m=[0m [1mtrue[0m }
+
+[1m[93mlightswitch-unwind-info/src/convert.rs[39m[0m[2m --- 1/2 --- Rust[0m
+[2m  7 [0m    [1mRegister[0m, [1mStoreOnHeap[0m, [1mUnwindContext[0m, [1mUnwindSection[0m, [1mUnwindTableRow[0m,
+[2m  8 [0m};
+[2m  9 [0m[1muse[0m object::[1mArchitecture[0m;
+[92;1m 10 [0m[1muse[0m object::{[1mObject[0m, [1mObjectSection[0m[92m,[0m [92;1mObjectSegment[0m};
+[2m 11 [0m[1muse[0m thiserror::[1mError[0m;
+[2m 12 [0m[1muse[0m tracing::{[1mLevel[0m, debug, span};
+[2m 13 [0m
+
+[1mlightswitch-unwind-info/src/convert.rs[0m[2m --- 2/2 --- Rust[0m
+[2m288 [0m[2m288 [0m        [1mlet[0m object_file = object::[1mFile[0m::parse(self.object_bytes)
+[2m289 [0m[2m289 [0m            .map_err(|e| [1mUnwindInfoError[0m::[1mParsingObjectFile[0m(e.to_string()))?;
+[2m... [0m[92;1m290 [0m
+[2m... [0m[92;1m291 [0m        [92;1mif[0m [92;1mlet[0m [92;1mSome([0m[92mtable[0m[92;1m)[0m [92m=[0m [92;1mcrate[0m[92m::pclntab::[0m[92;1mPclnTab[0m[92m::from_object[0m[92;1m(&[0m[92mobject_file[0m[92;1m)[0m[92m?[0m [92;1m{[0m
+[2m... [0m[92;1m292 [0m            [92;1mlet[0m [92mloads[0m [92m=[0m [92mobject_file[0m
+[2m... [0m[92;1m293 [0m                [92m.segments[0m[92;1m()[0m
+[2m... [0m[92;1m294 [0m                [92m.filter[0m[92;1m(|[0m[92ms[0m[92;1m|[0m [92ms.permissions[0m[92;1m()[0m[92m.executable[0m[92;1m())[0m
+[2m... [0m[92;1m295 [0m                [92m.map[0m[92;1m(|[0m[92ms[0m[92;1m|[0m [92;1m([0m[92ms.address[0m[92;1m()[0m[92m,[0m [92ms.file_range[0m[92;1m()[0m[92m.[0m[92;1m1))[0m[92m;[0m
+[2m... [0m[92;1m296 [0m            [92;1mlet[0m [92mrows[0m [92m=[0m [92;1mcrate[0m[92m::pclntab::unwind_rows[0m[92;1m([0m
+[2m... [0m[92;1m297 [0m                [92mloads,[0m
+[2m... [0m[92;1m298 [0m                [92;1m&[0m[92mtable.stop_frames[0m[92;1m()[0m[92m?,[0m
+[2m... [0m[92;1m299 [0m                [92mobject_file.architecture[0m[92;1m()[0m [92m==[0m [92;1mArchitecture[0m[92m::[0m[92;1mAarch64[0m[92m,[0m
+[2m... [0m[92;1m300 [0m            [92;1m)[0m[92m?;[0m
+[2m... [0m[92;1m301 [0m            [92;1mif[0m [92;1mlet[0m [92;1m[[0m[92mfirst,[0m [92m..,[0m [92mlast[0m[92;1m][0m [92m=[0m [92mrows.as_slice[0m[92;1m()[0m [92;1m{[0m
+[2m... [0m[92;1m302 [0m                [92;1m([0m[92mself.callback[0m[92;1m)(&UnwindData[0m[92m::[0m[92;1mFunction([0m[92mfirst.pc,[0m [92mlast.pc[0m[92;1m))[0m[92m;[0m
+[2m... [0m[92;1m303 [0m                [92;1mfor[0m [92mrow[0m [92;1min[0m [92;1m&[0m[92mrows[0m[92;1m[[0m[92m..rows.len[0m[92;1m()[0m [92m-[0m [92;1m1][0m [92;1m{[0m
+[2m... [0m[92;1m304 [0m                    [92;1m([0m[92mself.callback[0m[92;1m)(&UnwindData[0m[92m::[0m[92;1mInstruction(*[0m[92mrow[0m[92;1m))[0m[92m;[0m
+[2m... [0m[92;1m305 [0m                [92;1m}[0m
+[2m... [0m[92;1m306 [0m            [92;1m}[0m
+[2m... [0m[92;1m307 [0m            [92;1mreturn[0m [92;1mOk(())[0m[92m;[0m
+[2m... [0m[92;1m308 [0m        [92;1m}[0m
+[2m290 [0m[2m309 [0m
+[2m291 [0m[2m310 [0m        [1mlet[0m endian = [1mif[0m object_file.is_little_endian() {
+[2m292 [0m[2m311 [0m            gimli::[1mRunTimeEndian[0m::[1mLittle[0m
+
+[1m[93mlightswitch-unwind-info/src/lib.rs[39m[0m[2m --- Rust[0m
+[2m 3 [0m[2m 3 [0m[1mpub[0m [1mmod[0m manager;
+[2m 4 [0m[2m 4 [0m[1mmod[0m optimize;
+[2m 5 [0m[2m 5 [0m[1mpub[0m [1mmod[0m pages;
+[2m . [0m[92;1m 6 [0m[92;1mpub[0m [92;1mmod[0m [92mpclntab;[0m
+[2m 6 [0m[2m 7 [0m[1mpub[0m [1mmod[0m persist;
+[2m 7 [0m[2m 8 [0m[1mpub[0m [1mmod[0m types;
+[2m 8 [0m[2m 9 [0m
+
+[1m[93mlightswitch-unwind-info/src/manager.rs[39m[0m[2m --- 1/14 --- Rust[0m
+[91;1m  1 [0m[2m  . [0m[91;1muse[0m [91mlightswitch_object::[0m[91;1mExecutableId[0m[91m;[0m
+[91;1m  2 [0m[2m  . [0m
+[2m  3 [0m[2m  1 [0m[1muse[0m memmap2::[1mMmap[0m;
+[2m  4 [0m[2m  2 [0m[1muse[0m std::collections::[1mBinaryHeap[0m;
+
+[1mlightswitch-unwind-info/src/manager.rs[0m[2m --- 2/14 --- Rust[0m
+[2m  8 [0m[2m  6 [0m[1muse[0m std::io::[1mErrorKind[0m;
+[2m  9 [0m[2m  7 [0m[1muse[0m std::path::[1mPath[0m;
+[2m 10 [0m[2m  8 [0m[1muse[0m std::path::[1mPathBuf[0m;
+[91;1m 11 [0m[2m  . [0m[91;1muse[0m [91mstd::str::[0m[91;1mFromStr[0m[91m;[0m
+[2m 12 [0m[2m  9 [0m[1muse[0m std::time::[1mInstant[0m;
+[2m 13 [0m[2m 10 [0m[1muse[0m tempfile::[1mNamedTempFile[0m;
+[2m 14 [0m[2m 11 [0m
+
+[1mlightswitch-unwind-info/src/manager.rs[0m[2m --- 3/14 --- Rust[0m
+[2m 24 [0m                                                                           [2m 21 [0m
+[2m 25 [0m#[derive([1mDebug[0m, [1mPartialEq[0m, [1mEq[0m)]                                            [2m 22 [0m#[derive([1mDebug[0m, [1mPartialEq[0m, [1mEq[0m)]
+[2m 26 [0m[1mstruct[0m [1mUsage[0m {                                                             [2m 23 [0m[1mstruct[0m [1mUsage[0m {
+[91;1m 27 [0m    executable_id: [91;1mExecutableId[0m,                                           [92;1m 24 [0m    executable_id: [92;1mu64[0m,
+[2m 28 [0m    instant: [1mInstant[0m,                                                      [2m 25 [0m    instant: [1mInstant[0m,
+[2m 29 [0m}                                                                          [2m 26 [0m}
+[2m 30 [0m                                                                           [2m 27 [0m
+
+[1mlightswitch-unwind-info/src/manager.rs[0m[2m --- 4/14 --- Rust[0m
+[2m210 [0m    [1mpub[0m [1mfn[0m fetch_unwind_info(                                              [2m207 [0m    [1mpub[0m [1mfn[0m fetch_unwind_info(
+[2m211 [0m        [1m&mut[0m self,                                                         [2m208 [0m        [1m&mut[0m self,
+[2m212 [0m        executable: [1m&[0m[[1mu8[0m],                                                 [2m209 [0m        executable: [1m&[0m[[1mu8[0m],
+[91;1m213 [0m        executable_id: [91;1mExecutableId[0m,                                       [92;1m210 [0m        executable_id: [92;1mimpl[0m [92;1mInto<u64>[0m,
+[2m214 [0m        first_frame_override: [1mOption[0m<([1mu64[0m, [1mu64[0m)>,                          [2m211 [0m        first_frame_override: [1mOption[0m<([1mu64[0m, [1mu64[0m)>,
+[2m215 [0m        check_digest: [1mbool[0m,                                                [2m212 [0m        check_digest: [1mbool[0m,
+[2m216 [0m    ) -> [1mResult[0m<[1mUnwindInfo[0m, [1mFetchUnwindInfoError[0m> {                        [2m213 [0m    ) -> [1mResult[0m<[1mUnwindInfo[0m, [1mFetchUnwindInfoError[0m> {
+[2m... [0m                                                                           [92;1m214 [0m        [92;1mlet[0m [92mexecutable_id[0m [92m=[0m [92mexecutable_id.into[0m[92;1m()[0m[92m;[0m
+[2m217 [0m        [1mmatch[0m self.read_from_cache(executable_id, check_digest) {          [2m215 [0m        [1mmatch[0m self.read_from_cache(executable_id, check_digest) {
+[2m218 [0m            [1mOk[0m(unwind_info) => [1mOk[0m(unwind_info),                            [2m216 [0m            [1mOk[0m(unwind_info) => [1mOk[0m(unwind_info),
+[2m219 [0m            [1mErr[0m(e) => {                                                    [2m217 [0m            [1mErr[0m(e) => {
+
+[1mlightswitch-unwind-info/src/manager.rs[0m[2m --- 5/14 --- Rust[0m
+[2m230 [0m                                                                           [2m228 [0m
+[2m231 [0m    [1mfn[0m read_from_cache(                                                    [2m229 [0m    [1mfn[0m read_from_cache(
+[2m232 [0m        [1m&[0mself,                                                             [2m230 [0m        [1m&[0mself,
+[91;1m233 [0m        executable_id: [91;1mExecutableId[0m,                                       [92;1m231 [0m        executable_id: [92;1mu64[0m,
+[2m234 [0m        check_digest: [1mbool[0m,                                                [2m232 [0m        check_digest: [1mbool[0m,
+[2m235 [0m    ) -> [1mResult[0m<[1mUnwindInfo[0m, [1mFetchUnwindInfoError[0m> {                        [2m233 [0m    ) -> [1mResult[0m<[1mUnwindInfo[0m, [1mFetchUnwindInfoError[0m> {
+[2m236 [0m        [1mlet[0m unwind_info_path = self.path_for(executable_id);               [2m234 [0m        [1mlet[0m unwind_info_path = self.path_for(executable_id);
+
+[1mlightswitch-unwind-info/src/manager.rs[0m[2m --- 6/14 --- Rust[0m
+[2m250 [0m    [1mfn[0m write_to_cache(                                                     [2m248 [0m    [1mfn[0m write_to_cache(
+[2m251 [0m        [1m&[0mself,                                                             [2m249 [0m        [1m&[0mself,
+[2m252 [0m        executable: [1m&[0m[[1mu8[0m],                                                 [2m250 [0m        executable: [1m&[0m[[1mu8[0m],
+[91;1m253 [0m        executable_id: [91;1mExecutableId[0m,                                       [92;1m251 [0m        executable_id: [92;1mu64[0m,
+[2m254 [0m        first_frame_override: [1mOption[0m<([1mu64[0m, [1mu64[0m)>,                          [2m252 [0m        first_frame_override: [1mOption[0m<([1mu64[0m, [1mu64[0m)>,
+[2m255 [0m    ) -> [1mResult[0m<(), [1mFetchUnwindInfoError[0m> {                                [2m253 [0m    ) -> [1mResult[0m<(), [1mFetchUnwindInfoError[0m> {
+[2m256 [0m        [1mlet[0m unwind_info_writer = [1mWriter[0m::new(executable, first_frame_over  [2m254 [0m        [1mlet[0m unwind_info_writer = [1mWriter[0m::new(executable, first_frame_over
+[2m[2m... [0m[0mride);                                                                     [2m[2m... [0m[0mride);
+
+[1mlightswitch-unwind-info/src/manager.rs[0m[2m --- 7/14 --- Rust[0m
+[2m270 [0m        [1mOk[0m(())                                                             [2m268 [0m        [1mOk[0m(())
+[2m271 [0m    }                                                                      [2m269 [0m    }
+[2m272 [0m                                                                           [2m270 [0m
+[91;1m273 [0m    [1mfn[0m path_for([1m&[0mself, executable_id: [91;1mExecutableId[0m) -> [1mPathBuf[0m {           [92;1m271 [0m    [1mfn[0m path_for([1m&[0mself, executable_id: [92;1mu64[0m) -> [1mPathBuf[0m {
+[91;1m274 [0m        self.cache_dir.join(format!([91m"{executable_id}"[0m))                    [92;1m272 [0m        self.cache_dir.join(format!([92m"{executable_id[0m[92;1;4m:x[0m[92m}"[0m))
+[2m275 [0m    }                                                                      [2m273 [0m    }
+[2m276 [0m                                                                           [2m274 [0m
+[2m277 [0m    [1mpub[0m [1mfn[0m bump_already_present([1m&mut[0m self) -> anyhow::[1mResult[0m<()> {         [2m275 [0m    [1mpub[0m [1mfn[0m bump_already_present([1m&mut[0m self) -> anyhow::[1mResult[0m<()> {
+
+[1mlightswitch-unwind-info/src/manager.rs[0m[2m --- 8/14 --- Rust[0m
+[2m282 [0m            [1mif[0m name.starts_with([95m".tmp"[0m) {                                  [2m280 [0m            [1mif[0m name.starts_with([95m".tmp"[0m) {
+[2m283 [0m                [1mcontinue[0m;                                                  [2m281 [0m                [1mcontinue[0m;
+[2m284 [0m            };                                                             [2m282 [0m            };
+[91;1m285 [0m            [1mlet[0m executable_id = [91;1mExecutableId[0m::[91mfrom_str[0m(name)?;             [92;1m283 [0m            [1mlet[0m executable_id = [92mu64[0m::[92mfrom_str_radix[0m(name[92m,[0m [92;1m16[0m)?;
+[2m286 [0m                                                                           [2m284 [0m
+[2m287 [0m            [1mlet[0m metadata = fs::metadata(direntry.path())?;                 [2m285 [0m            [1mlet[0m metadata = fs::metadata(direntry.path())?;
+[2m288 [0m            [1mlet[0m modified = metadata.created()?;                            [2m286 [0m            [1mlet[0m modified = metadata.created()?;
+
+[1mlightswitch-unwind-info/src/manager.rs[0m[2m --- 9/14 --- Rust[0m
+[2m293 [0m        [1mOk[0m(())                                                             [2m291 [0m        [1mOk[0m(())
+[2m294 [0m    }                                                                      [2m292 [0m    }
+[2m295 [0m                                                                           [2m293 [0m
+[91;1m296 [0m    [1mfn[0m bump([1m&mut[0m self, executable_id: [91;1mExecutableId[0m, instant: [1mOption[0m<[1mInsta[0m  [92;1m294 [0m    [1mfn[0m bump([1m&mut[0m self, executable_id: [92;1mu64[0m, instant: [1mOption[0m<[1mInstant[0m>) {
+[91;1m[2m... [0m[0m[1mnt[0m>) {                                                                     [92;1m[2m... [0m[0m
+[2m297 [0m        [1mlet[0m instant = instant.unwrap_or([1mInstant[0m::now());                   [2m295 [0m        [1mlet[0m instant = instant.unwrap_or([1mInstant[0m::now());
+[2m298 [0m                                                                           [2m296 [0m
+[2m299 [0m        self.usage_tracking.push([1mUsage[0m {                                   [2m297 [0m        self.usage_tracking.push([1mUsage[0m {
+
+[1mlightswitch-unwind-info/src/manager.rs[0m[2m --- 10/14 --- Rust[0m
+[2m330 [0m    [1mfn[0m test_custom_usage_ordering() {                                      [2m328 [0m    [1mfn[0m test_custom_usage_ordering() {
+[2m331 [0m        [1mlet[0m now = [1mInstant[0m::now();                                          [2m329 [0m        [1mlet[0m now = [1mInstant[0m::now();
+[2m332 [0m        [1mlet[0m before = [1mUsage[0m {                                               [2m330 [0m        [1mlet[0m before = [1mUsage[0m {
+[91;1m333 [0m            executable_id: [91;1mExecutableId[0m([1m0xBAD[0m),                            [92;1m331 [0m            executable_id: [92mu64[0m([1m0xBAD[0m),
+[2m334 [0m            instant: now,                                                  [2m332 [0m            instant: now,
+[2m335 [0m        };                                                                 [2m333 [0m        };
+[2m336 [0m        [1mlet[0m after = [1mUsage[0m {                                                [2m334 [0m        [1mlet[0m after = [1mUsage[0m {
+[91;1m337 [0m            executable_id: [91;1mExecutableId[0m([1m0xFAD[0m),                            [92;1m335 [0m            executable_id: [92mu64[0m([1m0xFAD[0m),
+[2m338 [0m            instant: now + [1mDuration[0m::from_secs([1m10[0m),                        [2m336 [0m            instant: now + [1mDuration[0m::from_secs([1m10[0m),
+[2m339 [0m        };                                                                 [2m337 [0m        };
+[2m340 [0m                                                                           [2m338 [0m
+[2m341 [0m        [94;3m// `BinaryHeap::pop()` returns the max element so the ordering is[0m  [2m339 [0m        [94;3m// `BinaryHeap::pop()` returns the max element so the ordering is[0m
+[2m342 [0m        [94;3m// switched.[0m                                                       [2m340 [0m        [94;3m// switched.[0m
+[2m343 [0m        assert_eq!(                                                        [2m341 [0m        assert_eq!([[1m&[0mbefore, [1m&[0mafter].iter().max().unwrap().executable_id,
+[2m[2m... [0m[0m                                                                           [2m[2m... [0m[0m [1m0xBAD[0m);
+[2m344 [0m            [[1m&[0mbefore, [1m&[0mafter].iter().max().unwrap().executable_id,         [2m... [0m
+[91;1m345 [0m            [91;1mExecutableId([0m[1m0xBAD[0m[91;1m)[0m                                            [2m... [0m
+[2m346 [0m        );                                                                 [2m... [0m
+[2m347 [0m        [94;3m// Ensure that `Ord` and `PartialOrd` agree.[0m                       [2m342 [0m        [94;3m// Ensure that `Ord` and `PartialOrd` agree.[0m
+[2m348 [0m        assert_eq!(before.cmp([1m&[0mafter), before.partial_cmp([1m&[0mafter).unwrap(  [2m343 [0m        assert_eq!(before.cmp([1m&[0mafter), before.partial_cmp([1m&[0mafter).unwrap(
+[2m[2m... [0m[0m));                                                                        [2m[2m... [0m[0m));
+
+[1mlightswitch-unwind-info/src/manager.rs[0m[2m --- 11/14 --- Rust[0m
+[2m359 [0m        [94;3m// The unwind info fetched with the manager should be correct[0m      [2m354 [0m        [94;3m// The unwind info fetched with the manager should be correct[0m
+[2m360 [0m        [94;3m// both when it's a cache miss and a cache hit.[0m                    [2m355 [0m        [94;3m// both when it's a cache miss and a cache hit.[0m
+[2m361 [0m        [1mfor[0m _ [1min[0m [1m0[0m..[1m2[0m {                                                    [2m356 [0m        [1mfor[0m _ [1min[0m [1m0[0m..[1m2[0m {
+[2m362 [0m            [1mlet[0m manager_unwind_info =                                      [92;1m357 [0m            [1mlet[0m manager_unwind_info = manager.fetch_unwind_info([1m&[0mmmap, [92;1m0x[0m
+[2m[2m... [0m[0m                                                                           [92;1m[2m... [0m[0m[92;1mFABADA_u64[0m, [1mNone[0m, [1mtrue[0m);
+[91;1m363 [0m                manager.fetch_unwind_info([1m&[0mmmap, [91;1mExecutableId(0xFABADA)[0m,   [2m... [0m
+[91;1m[2m... [0m[0m[1mNone[0m, [1mtrue[0m);                                                               [2m... [0m
+[2m364 [0m            [1mlet[0m manager_unwind_info = manager_unwind_info.unwrap();        [2m358 [0m            [1mlet[0m manager_unwind_info = manager_unwind_info.unwrap();
+[2m365 [0m            assert_eq!(unwind_info, manager_unwind_info.to_vec().unwrap()  [2m359 [0m            assert_eq!(unwind_info, manager_unwind_info.to_vec().unwrap()
+[2m[2m... [0m[0m);                                                                         [2m[2m... [0m[0m);
+[2m366 [0m        }                                                                  [2m360 [0m        }
+
+[1mlightswitch-unwind-info/src/manager.rs[0m[2m --- 12/14 --- Rust[0m
+[2m375 [0m        [1mlet[0m [1mmut[0m manager = [1mUnwindInfoManager[0m::new(tmpdir.path(), [1mNone[0m);     [2m369 [0m        [1mlet[0m [1mmut[0m manager = [1mUnwindInfoManager[0m::new(tmpdir.path(), [1mNone[0m);
+[2m376 [0m                                                                           [2m370 [0m
+[2m377 [0m        [94;3m// Cache unwind info.[0m                                              [2m371 [0m        [94;3m// Cache unwind info.[0m
+[2m378 [0m        [1mlet[0m manager_unwind_info =                                          [92;1m372 [0m        [1mlet[0m manager_unwind_info = manager.fetch_unwind_info([1m&[0mmmap, [92;1m0xFABA[0m
+[2m[2m... [0m[0m                                                                           [92;1m[2m... [0m[0m[92;1mDA_u64[0m, [1mNone[0m, [1mtrue[0m);
+[91;1m379 [0m            manager.fetch_unwind_info([1m&[0mmmap, [91;1mExecutableId(0xFABADA)[0m, [1mNone[0m  [2m... [0m
+[91;1m[2m... [0m[0m, [1mtrue[0m);                                                                   [2m... [0m
+[2m380 [0m        assert!(manager_unwind_info.is_ok());                              [2m373 [0m        assert!(manager_unwind_info.is_ok());
+[2m381 [0m        [1mlet[0m manager_unwind_info = manager_unwind_info.unwrap();            [2m374 [0m        [1mlet[0m manager_unwind_info = manager_unwind_info.unwrap();
+[2m382 [0m        assert_eq!(unwind_info, manager_unwind_info.to_vec().unwrap());    [2m375 [0m        assert_eq!(unwind_info, manager_unwind_info.to_vec().unwrap());
+
+[1mlightswitch-unwind-info/src/manager.rs[0m[2m --- 13/14 --- Rust[0m
+[2m391 [0m                                                                           [2m384 [0m
+[2m392 [0m        [94;3m// Make sure the corrupted one gets replaced and things work.[0m      [2m385 [0m        [94;3m// Make sure the corrupted one gets replaced and things work.[0m
+[2m393 [0m        [1mlet[0m manager_unwind_info = manager                                  [2m386 [0m        [1mlet[0m manager_unwind_info = manager
+[91;1m394 [0m            .fetch_unwind_info([1m&[0mmmap, [91;1mExecutableId(0xFABADA)[0m, [1mNone[0m, [1mtrue[0m)  [92;1m387 [0m            .fetch_unwind_info([1m&[0mmmap, [92;1m0xFABADA_u64[0m, [1mNone[0m, [1mtrue[0m)
+[2m395 [0m            .unwrap();                                                     [2m388 [0m            .unwrap();
+[2m396 [0m        assert_eq!(unwind_info, manager_unwind_info.to_vec().unwrap());    [2m389 [0m        assert_eq!(unwind_info, manager_unwind_info.to_vec().unwrap());
+[2m397 [0m    }                                                                      [2m390 [0m    }
+
+[1mlightswitch-unwind-info/src/manager.rs[0m[2m --- 14/14 --- Rust[0m
+[2m403 [0m        assert!(expected.len() > [1m2[0m);                                       [2m396 [0m        assert!(expected.len() > [1m2[0m);
+[2m404 [0m        [1mlet[0m tmpdir = tempfile::[1mTempDir[0m::new().unwrap();                    [2m397 [0m        [1mlet[0m tmpdir = tempfile::[1mTempDir[0m::new().unwrap();
+[2m405 [0m        [1mlet[0m [1mmut[0m manager = [1mUnwindInfoManager[0m::new(tmpdir.path(), [1mNone[0m);     [2m398 [0m        [1mlet[0m [1mmut[0m manager = [1mUnwindInfoManager[0m::new(tmpdir.path(), [1mNone[0m);
+[91;1m406 [0m        [1mlet[0m executable_id = [91;1mExecutableId(0xFABADA)[0m;                        [92;1m399 [0m        [1mlet[0m executable_id = [92;1m0xFABADA_u64[0m;
+[2m407 [0m        manager                                                            [2m400 [0m        manager
+[2m408 [0m            .fetch_unwind_info([1m&[0mexecutable, executable_id, [1mNone[0m, [1mfalse[0m)    [2m401 [0m            .fetch_unwind_info([1m&[0mexecutable, executable_id, [1mNone[0m, [1mfalse[0m)
+[2m409 [0m            .unwrap();                                                     [2m402 [0m            .unwrap();
+
+[1m[93msrc/profile/convert.rs[39m[0m[2m --- 1/3 --- Rust[0m
+[2m  6 [0m
+[2m  7 [0m[1muse[0m lightswitch_proto::profile::pprof::[1mLabel[0m;
+[2m  8 [0m[1muse[0m lightswitch_proto::profile::{[1mLabelStringOrNumber[0m, [1mPprofBuilder[0m, pprof};
+[92;1m  9 [0m[1muse[0m std::collections::[92;1m{[0m[1mHashMap[0m[92m,[0m [92;1mHashSet}[0m;
+[2m 10 [0m[1muse[0m std::fmt::[1mWrite[0m;
+[2m 11 [0m[1muse[0m std::path::[1mPathBuf[0m;
+[2m 12 [0m[1muse[0m std::time::[1mDuration[0m;
+
+[1msrc/profile/convert.rs[0m[2m --- 2/3 --- Rust[0m
+[2m 22 [0m    [1mAggregatedProfile[0m, [1mAggregatedSample[0m, [1mFrame[0m, [1mFrameAddress[0m, [1mRawAggregatedProfile[0m, [1mSampleResult[0m,
+[2m 23 [0m    [1mSymbolizedFrame[0m,
+[2m 24 [0m};
+[92;1m 25 [0m[1muse[0m [1mcrate[0m::usym::[92;1m{[0m[92msymbolize_missing_go_frames,[0m symbolize_native_stack_blaze[92;1m}[0m;
+[2m 26 [0m[1muse[0m lightswitch_object::[1mExecutableId[0m;
+[2m 27 [0m
+[2m 28 [0m[1mstruct[0m [1mProfileLabel[0m {
+
+[1msrc/profile/convert.rs[0m[2m --- 3/3 --- Rust[0m
+[2m413 [0m        }                                                                  [2m413 [0m        }
+[2m414 [0m    }                                                                      [2m414 [0m    }
+[2m415 [0m                                                                           [2m415 [0m
+[91;1m416 [0m    [91;3m// second pass, symbolize[0m                                              [92;1m416 [0m    [92;1mlet[0m [92mgo_paths:[0m [92;1mHashSet<_>[0m [92m=[0m [92mobjs[0m
+[2m... [0m                                                                           [92;1m417 [0m        [92m.values[0m[92;1m()[0m
+[2m... [0m                                                                           [92;1m418 [0m        [92m.filter[0m[92;1m(|[0m[92mobj[0m[92;1m|[0m [92mmatches![0m[92;1m([0m[92mobj.runtime,[0m [92mlightswitch_object::[0m[92;1mRuntime[0m[92m::[0m
+[2m... [0m                                                                           [92;1m[2m... [0m[0m[92;1mGo([0m[92m_[0m[92;1m)))[0m
+[2m... [0m                                                                           [92;1m419 [0m        [92m.map[0m[92;1m(|[0m[92mobj[0m[92;1m|[0m [92;1m&[0m[92mobj.path[0m[92;1m)[0m
+[2m... [0m                                                                           [92;1m420 [0m        [92m.collect[0m[92;1m()[0m[92m;[0m
+[91;1m417 [0m    [1mfor[0m (path, [91maddr_to_symbol_mapping[0m) [1min[0m addresses_per_sample[91m.iter_mut[0m[91;1m()[0m  [92;1m421 [0m    [1mfor[0m (path, [92mframes[0m) [1min[0m [92;1m&mut[0m addresses_per_sample {
+[91;1m[2m... [0m[0m {                                                                         [92;1m[2m... [0m[0m
+[91;1m418 [0m        [1mlet[0m [91mframe_addresses[0m = [91maddr_to_symbol_mapping[0m.keys().copied().coll  [92;1m422 [0m        [1mlet[0m [92maddresses[0m = [92mframes[0m.keys().copied().collect();
+[91;1m[2m... [0m[0mect();                                                                     [92;1m[2m... [0m[0m
+[91;1m419 [0m        [1mlet[0m [91msymbolized_frames[0m = symbolize_native_stack_blaze([91mframe_addres[0m  [92;1m423 [0m        [1mlet[0m [92msymbolized[0m = symbolize_native_stack_blaze([92maddresses[0m, path);
+[91;1m[2m... [0m[0m[91mses[0m, path);                                                                [92;1m[2m... [0m[0m
+[91;1m420 [0m        [1mfor[0m ([91;1m([0m[91mframe_address,[0m [91m_[0m[91;1m)[0m, [91msymbolized_frame[0m) [1min[0m [91maddr_to_symbol_mapp[0m  [92;1m424 [0m        [1mfor[0m ([92mslot[0m, [92msymbols[0m) [1min[0m [92mframes[0m.[92mvalues_mut[0m().zip([92msymbolized[0m) {
+[91;1m[2m... [0m[0m[91ming[0m                                                                        [92;1m[2m... [0m[0m
+[91;1m421 [0m            [91m.clone[0m[91;1m()[0m                                                       [2m... [0m
+[91;1m422 [0m            .[91miter_mut[0m()                                                    [2m... [0m
+[91;1m423 [0m            .zip([91msymbolized_frames[0m)                                        [2m... [0m
+[2m424 [0m        {                                                                  [2m... [0m
+[91;1m425 [0m            [91maddr_to_symbol_mapping.insert[0m[91;1m([0m[1m*[0m[91mframe_address,[0m [91msymbolized_fram[0m  [92;1m425 [0m            [1m*[0m[92mslot[0m [92m=[0m [92msymbols[0m;
+[91;1m[2m... [0m[0m[91me[0m[91;1m)[0m;                                                                        [92;1m[2m... [0m[0m
+[2m426 [0m        }                                                                  [2m426 [0m        }
+[2m... [0m                                                                           [92;1m427 [0m        [92;1mif[0m [92mgo_paths.contains[0m[92;1m([0m[92mpath[0m[92;1m)[0m [92;1m{[0m
+[2m... [0m                                                                           [92;1m428 [0m            [92msymbolize_missing_go_frames[0m[92;1m([0m[92mpath,[0m [92mframes[0m[92;1m)[0m[92m;[0m
+[2m... [0m                                                                           [92;1m429 [0m        [92;1m}[0m
+[2m427 [0m    }                                                                      [2m430 [0m    }
+[2m428 [0m                                                                           [2m431 [0m
+[2m429 [0m    addresses_per_sample                                                   [2m432 [0m    addresses_per_sample
+
+[1m[93msrc/profiler.rs[39m[0m[2m --- 1/4 --- Rust[0m
+[2m 247 [0m    [1mEviction[0m,                                                             [2m247 [0m    [1mEviction[0m,
+[2m 248 [0m    #[error([95m"unwind information too large for executable: {0} which has [0m  [2m248 [0m    #[error([95m"unwind information too large for executable: {0} which has [0m
+[2m[2m ... [0m[0m[95m{1} unwind rows"[0m)]                                                        [2m[2m... [0m[0m[95m{1} unwind rows"[0m)]
+[2m 249 [0m    [1mTooLarge[0m([1mString[0m, [1musize[0m),                                              [2m249 [0m    [1mTooLarge[0m([1mString[0m, [1musize[0m),
+[91;1m 250 [0m    #[error([91m"generic error: {0} for executable: {1}"[0m)]                    [92;1m250 [0m    #[error([92m"failed to generate Go unwind information: {0}"[0m)]
+[91;1m 251 [0m    [91;1mGeneric[0m([91;1mString[0m[91m,[0m [91;1mString[0m),                                              [92;1m251 [0m    [92;1mGo[0m([92m#[0m[92;1m[[0m[92msource[0m[92;1m][0m [92manyhow::[0m[92;1mError[0m),
+[2m 252 [0m    #[error([95m"unwind information contains no entries"[0m)]                    [2m252 [0m    #[error([95m"unwind information contains no entries"[0m)]
+[2m 253 [0m    [1mEmpty[0m,                                                                [2m253 [0m    [1mEmpty[0m,
+[2m 254 [0m    #[error([95m"failed to create BPF map that stores unwind information"[0m)]   [2m254 [0m    #[error([95m"failed to create BPF map that stores unwind information"[0m)]
+
+[1msrc/profiler.rs[0m[2m --- 2/4 --- Rust[0m
+[2m 257 [0m[2m257 [0m    [1mBpfUnwindWrite[0m { source: anyhow::[1mError[0m },
+[2m 258 [0m[2m258 [0m    #[error([95m"failed to write to BPF map that stores pages"[0m)]
+[2m 259 [0m[2m259 [0m    [1mBpfPages[0m { source: [1mAddPagesError[0m },
+[91;1m 260 [0m[2m... [0m    [91m#[0m[91;1m[[0m[91merror[0m[91;1m([0m[91m"stripped Go binaries aren't supported yet"[0m[91;1m)][0m
+[91;1m 261 [0m[2m... [0m    [91;1mStrippedGo[0m[91m,[0m
+[2m 262 [0m[2m260 [0m    #[error([95m"failed to fetch unwind info"[0m)]
+[2m 263 [0m[2m261 [0m    [1mFetchUnwind[0m(#[from] [1mFetchUnwindInfoError[0m),
+[2m 264 [0m[2m262 [0m    #[error([95m"object file not found"[0m)]
+
+[1msrc/profiler.rs[0m[2m --- 3/4 --- Rust[0m
+[2m 964 [0m[2m962 [0m            [1mreturn[0m [1mErr[0m([1mAddUnwindInformationError[0m::[1mMissingObjectFile[0m(executable_id));
+[2m 965 [0m[2m963 [0m        };
+[2m 966 [0m[2m964 [0m        [1mlet[0m executable_path = executable_info.path.clone();
+[91;1m 967 [0m[2m965 [0m        [1mlet[0m [91;1mmut[0m elf_loads = executable_info.elf_load_segments.clone();
+[2m 968 [0m[2m966 [0m        [1mlet[0m opened_exe_path = [1mif[0m executable_info.is_vdso {
+[2m 969 [0m[2m967 [0m            executable_info.path.clone()
+[2m 970 [0m[2m968 [0m        } [1melse[0m {
+
+[1msrc/profiler.rs[0m[2m --- 4/4 --- Rust[0m
+[2m 977 [0m                                                                          [2m975 [0m
+[2m 978 [0m        [1mlet[0m unwind_info = [1mmatch[0m runtime {                                 [2m976 [0m        [1mlet[0m unwind_info = [1mmatch[0m runtime {
+[2m 979 [0m            [1mRuntime[0m::[1mGo[0m(stop_frames) => {                                 [2m977 [0m            [1mRuntime[0m::[1mGo[0m(stop_frames) => {
+[91;1m 980 [0m                [91;1mif[0m [91mstop_frames.is_empty[0m[91;1m()[0m [91;1m{[0m                               [2m... [0m
+[91;1m 981 [0m                    [91mself.afflicted_processes.put[0m[91;1m([0m[91mpid,[0m [91;1m())[0m[91m;[0m                [2m... [0m
+[91;1m 982 [0m                    [91;1mreturn[0m [91;1mErr(AddUnwindInformationError[0m[91m::[0m[91;1mStrippedGo)[0m[91m;[0m    [2m... [0m
+[91;1m 983 [0m                [91;1m}[0m                                                         [2m... [0m
+[91;1m 984 [0m                [1mlet[0m [91;1mmut[0m [91munwind_info[0m = [91;1mVec[0m[91m::new[0m[91;1m()[0m[91m;[0m                         [92;1m978 [0m                [1mlet[0m [92mloads[0m = [92melf_loads[0m.[92miter[0m()[92m.map[0m([92;1m|[0m[92mload[0m[92;1m|[0m ([92mload[0m.[92mp_vaddr[0m, [92ml[0m
+[91;1m[2m ... [0m[0m                                                                          [92;1m[2m... [0m[0m[92moad.p_filesz[0m));
+[91;1m 985 [0m                                                                          [2m... [0m
+[91;1m 986 [0m                [91;3m// For each bottom frame, add a end of function marker t[0m  [2m... [0m
+[91;1m[2m ... [0m[0m[91;3mo stop[0m                                                                    [2m... [0m
+[91;1m 987 [0m                [91;3m// unwinding covering the exact size of the[0m               [2m... [0m
+[91;1m 988 [0m                [91;3m// function, assuming the function after it[0m               [2m... [0m
+[91;1m 989 [0m                [91;3m// has frame pointers.[0m                                    [2m... [0m
+[91;1m 990 [0m                [91;1mfor[0m [91mstop_frame[0m [91;1min[0m [91mstop_frames[0m [91;1m{[0m                           [2m... [0m
+[91;1m 991 [0m                    [91munwind_info[0m.[91mpush[0m([91;1mCompactUnwindRow[0m[91m::stop_unwinding[0m[91;1m([0m[91mst[0m  [2m... [0m
+[91;1m[2m ... [0m[0m[91mop_frame.start_address[0m[91;1m)[0m)[91m;[0m                                                 [2m... [0m
+[91;1m 992 [0m                    [91munwind_info.push[0m([91;1mCompactUnwindRow[0m[91m::frame_pointer[0m(     [2m... [0m
+[91;1m 993 [0m                        [91mstop_frame[0m.[91mend_address[0m,                           [2m... [0m
+[91;1m 994 [0m                        [91mis_arm64,[0m                                         [2m... [0m
+[91;1m 995 [0m                    ))[91m;[0m                                                   [2m... [0m
+[91;1m 996 [0m                [91;1m}[0m                                                         [2m... [0m
+[91;1m 997 [0m                                                                          [2m... [0m
+[91;1m 998 [0m                [91;3m// Go since pretty early on compiles with frame pointers[0m  [2m... [0m
+[91;1m[2m ... [0m[0m[91;3m by[0m                                                                       [2m... [0m
+[91;1m 999 [0m                [91;3m// default.[0m                                               [2m... [0m
+[91;1m1000 [0m                [91melf_loads.sort_by_key[0m[91;1m(|[0m[91me[0m[91;1m|[0m [91me.p_vaddr[0m[91;1m)[0m;                     [2m... [0m
+[91;1m1001 [0m                [91;1mif[0m [1mlet[0m [91;1mSome([0m[91mcode_elf_load[0m[91;1m)[0m = [91melf_loads.first[0m[91;1m()[0m [91;1m{[0m          [92;1m979 [0m                [1mlet[0m [92mrows[0m =
+[91;1m1002 [0m                    [91munwind_info.push[0m[91;1m(CompactUnwindRow[0m::[91mframe_pointer[0m(     [92;1m980 [0m                    [92mlightswitch_unwind_info[0m::[92mpclntab::unwind_rows[0m([92mloads,[0m
+[91;1m[2m.... [0m[0m                                                                          [92;1m[2m... [0m[0m [92;1m&[0m[92mstop_frames[0m, is_arm64)
+[91;1m1003 [0m                        [91mcode_elf_load.p_vaddr[0m,                            [2m... [0m
+[91;1m1004 [0m                        is_arm64[91m,[0m                                         [2m... [0m
+[91;1m1005 [0m                    )[91;1m)[0m[91m;[0m                                                   [2m... [0m
+[91;1m1006 [0m                    [91munwind_info.push[0m[91;1m(CompactUnwindRow[0m[91m::stop_unwinding[0m[91;1m([0m    [2m... [0m
+[91;1m1007 [0m                        [91mcode_elf_load.p_vaddr[0m [91m+[0m [91mcode_elf_load.p_filesz,[0m   [2m... [0m
+[91;1m1008 [0m                    [91;1m))[0m;                                                   [92;1m981 [0m                        [92m.map_err[0m[92;1m(AddUnwindInformationError[0m[92m::[0m[92;1mGo)[0m[92m?[0m;
+[91;1m1009 [0m                [91;1m}[0m [91;1melse[0m [91;1m{[0m                                                  [2m... [0m
+[91;1m1010 [0m                    [91;1mreturn[0m [91;1mErr(AddUnwindInformationError[0m[91m::[0m[91;1mGeneric([0m        [2m... [0m
+[91;1m1011 [0m                        [91m"Go binary has no elf load segments".into[0m[91;1m()[0m[91m,[0m      [2m... [0m
+[91;1m1012 [0m                        [91m"".into[0m[91;1m()[0m[91m,[0m                                        [2m... [0m
+[91;1m1013 [0m                    [91;1m))[0m[91m;[0m                                                   [2m... [0m
+[91;1m1014 [0m                [91;1m}[0m                                                         [2m... [0m
+[91;1m1015 [0m                                                                          [2m... [0m
+[91;1m1016 [0m                [91munwind_info.sort_by_key[0m[91;1m(|[0m[91me[0m[91;1m|[0m [91me.pc[0m[91;1m)[0m[91m;[0m                        [2m... [0m
+[91;1m1017 [0m                [1mOk[0m([1mUnwindInfo[0m::[1mVec[0m([91munwind_info[0m))                          [92;1m982 [0m                [1mOk[0m([1mUnwindInfo[0m::[1mVec[0m([92mrows[0m))
+[2m1018 [0m            }                                                             [2m983 [0m            }
+[2m1019 [0m            [1mRuntime[0m::[1mZig[0m {                                                [2m984 [0m            [1mRuntime[0m::[1mZig[0m {
+[2m1020 [0m                start_low_address,                                        [2m985 [0m                start_low_address,
+
+[1m[93msrc/usym.rs[39m[0m[2m --- 1/2 --- Rust[0m
+[2m  1 [0m[2m  1 [0m[1muse[0m std::borrow::[1mBorrow[0m;
+[2m  . [0m[92;1m  2 [0m[92;1muse[0m [92mstd::collections::[0m[92;1mHashMap[0m[92m;[0m
+[2m  2 [0m[92;1m  3 [0m[1muse[0m std::path::[92;1m{Path[0m[92m,[0m [1mPathBuf[0m[92;1m}[0m;
+[2m  3 [0m[2m  4 [0m
+[2m  4 [0m[2m  5 [0m[1muse[0m blazesym::symbolize::[1mCodeInfo[0m;
+[2m  5 [0m[2m  6 [0m[1muse[0m blazesym::symbolize::[1mInput[0m;
+
+[1msrc/usym.rs[0m[2m --- 2/2 --- Rust[0m
+[2m108 [0m[2m109 [0m    res
+[2m109 [0m[2m110 [0m}
+[2m... [0m[92;1m111 [0m
+[2m... [0m[92;1m112 [0m[92;3m/// Keep inline and source information from DWARF when available. For the[0m
+[2m... [0m[92;1m113 [0m[92;3m/// rest, open the Go table once for the batch of unique PCs in this object.[0m
+[2m... [0m[92;1m114 [0m[92;1mpub(crate)[0m [92;1mfn[0m [92msymbolize_missing_go_frames[0m[92;1m([0m
+[2m... [0m[92;1m115 [0m    [92mpath:[0m [92;1m&Path[0m[92m,[0m
+[2m... [0m[92;1m116 [0m    [92mframes:[0m [92;1m&mut[0m [92;1mHashMap<FrameAddress[0m[92m,[0m [92;1mVec<Frame>>[0m[92m,[0m
+[2m... [0m[92;1m117 [0m[92;1m)[0m [92;1m{[0m
+[2m... [0m[92;1m118 [0m    [92;1mlet[0m [92;1mmut[0m [92mmissing[0m [92m=[0m [92mframes[0m
+[2m... [0m[92;1m119 [0m        [92m.iter_mut[0m[92;1m()[0m
+[2m... [0m[92;1m120 [0m        [92m.filter[0m[92;1m(|([0m[92m_,[0m [92mstack[0m[92;1m)|[0m [92;1m{[0m
+[2m... [0m[92;1m121 [0m            [92m!stack[0m
+[2m... [0m[92;1m122 [0m                [92m.iter[0m[92;1m()[0m
+[2m... [0m[92;1m123 [0m                [92m.any[0m[92;1m(|[0m[92mf[0m[92;1m|[0m [92mmatches![0m[92;1m([0m[92mf.symbolization_result,[0m [92;1mSome(Ok([0m[92m_[0m[92;1m))))[0m
+[2m... [0m[92;1m124 [0m        [92;1m})[0m
+[2m... [0m[92;1m125 [0m        [92m.peekable[0m[92;1m()[0m[92m;[0m
+[2m... [0m[92;1m126 [0m    [92;1mif[0m [92mmissing.peek[0m[92;1m()[0m[92m.is_none[0m[92;1m()[0m [92;1m{[0m
+[2m... [0m[92;1m127 [0m        [92;1mreturn[0m[92m;[0m
+[2m... [0m[92;1m128 [0m    [92;1m}[0m
+[2m... [0m[92;1m129 [0m    [92;1mlet[0m [92;1mOk([0m[92mfile[0m[92;1m)[0m [92m=[0m [92mlightswitch_object::[0m[92;1mMappedObjectFile[0m[92m::from_path[0m[92;1m([0m[92mpath[0m[92;1m)[0m [92;1melse[0m [92;1m{[0m
+[2m... [0m[92;1m130 [0m        [92;1mreturn[0m[92m;[0m
+[2m... [0m[92;1m131 [0m    [92;1m}[0m[92m;[0m
+[2m... [0m[92;1m132 [0m    [92;1mlet[0m [92;1mOk(Some([0m[92mtable[0m[92;1m))[0m [92m=[0m [92mfile.object[0m[92;1m()[0m[92m.go_pclntab[0m[92;1m()[0m [92;1melse[0m [92;1m{[0m
+[2m... [0m[92;1m133 [0m        [92;1mreturn[0m[92m;[0m
+[2m... [0m[92;1m134 [0m    [92;1m}[0m[92m;[0m
+[2m... [0m[92;1m135 [0m    [92;1mfor[0m [92;1m([0m[92maddress,[0m [92mstack[0m[92;1m)[0m [92;1min[0m [92mmissing[0m [92;1m{[0m
+[2m... [0m[92;1m136 [0m        [92;1mif[0m [92;1mlet[0m [92;1mSome(([0m[92mstart,[0m [92mname[0m[92;1m))[0m [92m=[0m [92mtable.function[0m[92;1m([0m[92maddress.file_offset[0m[92;1m)[0m [92;1m{[0m
+[2m... [0m[92;1m137 [0m            [92mstack.clear[0m[92;1m()[0m[92m;[0m
+[2m... [0m[92;1m138 [0m            [92mstack.push[0m[92;1m(Frame[0m [92;1m{[0m
+[2m... [0m[92;1m139 [0m                [92mvirtual_address:[0m [92maddress.virtual_address,[0m
+[2m... [0m[92;1m140 [0m                [92mfile_offset:[0m [92;1mSome([0m[92mstart[0m[92;1m)[0m[92m,[0m
+[2m... [0m[92;1m141 [0m                [92msymbolization_result:[0m [92;1mSome(Ok(SymbolizedFrame[0m[92m::new[0m[92;1m([0m
+[2m... [0m[92;1m142 [0m                    [92mname.into[0m[92;1m()[0m[92m,[0m
+[2m... [0m[92;1m143 [0m                    [92;1mfalse[0m[92m,[0m
+[2m... [0m[92;1m144 [0m                    [92;1mNone[0m[92m,[0m
+[2m... [0m[92;1m145 [0m                    [92;1mNone[0m[92m,[0m
+[2m... [0m[92;1m146 [0m                [92;1m)))[0m[92m,[0m
+[2m... [0m[92;1m147 [0m            [92;1m})[0m[92m;[0m
+[2m... [0m[92;1m148 [0m        [92;1m}[0m
+[2m... [0m[92;1m149 [0m    [92;1m}[0m
+[2m... [0m[92;1m150 [0m[92;1m}[0m
+[2m110 [0m[2m151 [0m
+[2m111 [0m[2m152 [0m#[cfg(test)]
+[2m112 [0m[2m153 [0m[1mmod[0m tests {
+
+[1m[93mtests/integration_test.rs[39m[0m[2m --- 1/2 --- Rust[0m
+[2m  9 [0m[1muse[0m crossbeam_channel::bounded;                                            [2m  9 [0m[1muse[0m crossbeam_channel::bounded;
+[2m 10 [0m                                                                           [2m 10 [0m
+[2m 11 [0m[1muse[0m lightswitch::collector::{[1mAggregatorCollector[0m, [1mCollector[0m, [1mNullCollecto[0m  [2m 11 [0m[1muse[0m lightswitch::collector::{[1mAggregatorCollector[0m, [1mCollector[0m, [1mNullCollecto[0m
+[2m[2m .. [0m[0m[1mr[0m};                                                                        [2m[2m .. [0m[0m[1mr[0m};
+[91;1m 12 [0m[1muse[0m lightswitch::profile::[91;1mAggregatedProfile[0m;                               [92;1m 12 [0m[1muse[0m lightswitch::profile::[92msymbolize_profile[0m;
+[91;1m 13 [0m[1muse[0m lightswitch::profile::[91msymbolize_profile[0m;                               [92;1m 13 [0m[1muse[0m lightswitch::profile::[92;1m{AggregatedProfile[0m[92m,[0m [92;1mSampleResult}[0m;
+[2m 14 [0m[1muse[0m lightswitch::profiler::{[1mProfiler[0m, [1mProfilerConfig[0m};                     [2m 14 [0m[1muse[0m lightswitch::profiler::{[1mProfiler[0m, [1mProfilerConfig[0m};
+[2m 15 [0m[1muse[0m lightswitch_capabilities::system_info::[1mSystemInfo[0m;                     [2m 15 [0m[1muse[0m lightswitch_capabilities::system_info::[1mSystemInfo[0m;
+[2m 16 [0m[1muse[0m lightswitch_metadata::metadata_provider::[1mGlobalMetadataProvider[0m;       [2m 16 [0m[1muse[0m lightswitch_metadata::metadata_provider::[1mGlobalMetadataProvider[0m;
+
+[1mtests/integration_test.rs[0m[2m --- 2/2 --- Rust[0m
+[2m396 [0m        observed_stacks.join([95m"\n"[0m),                                        [2m396 [0m        observed_stacks.join([95m"\n"[0m),
+[2m397 [0m    );                                                                     [2m397 [0m    );
+[2m398 [0m                                                                           [2m398 [0m
+[91;1m399 [0m    [91massert![0m[91;1m([0m[91massert_any_stack_contains[0m[91;1m([0m                                     [2m... [0m
+[91;1m400 [0m        [91;1m&[0m[91msymbolized_profile,[0m                                               [2m... [0m
+[91;1m401 [0m        [91;1m&[0m[                                                                 [92;1m399 [0m    [92;1mlet[0m [92mexpected_go_stack[0m [92m=[0m [
+[2m402 [0m            [95m"main.top2"[0m,                                                   [2m400 [0m        [95m"main.top2"[0m,
+[2m403 [0m            [95m"main.c2"[0m,                                                     [2m401 [0m        [95m"main.c2"[0m,
+[2m404 [0m            [95m"main.b2"[0m,                                                     [2m402 [0m        [95m"main.b2"[0m,
+[2m405 [0m            [95m"main.a2"[0m,                                                     [2m403 [0m        [95m"main.a2"[0m,
+[2m406 [0m            [95m"main.main"[0m,                                                   [2m404 [0m        [95m"main.main"[0m,
+[2m407 [0m            [95m"runtime.main"[0m,                                                [2m405 [0m        [95m"runtime.main"[0m,
+[91;1m408 [0m        ][91m,[0m                                                                 [2m406 [0m    ];
+[91;1m409 [0m        [91mgo_proc.pid[0m[91;1m()[0m[91m,[0m                                                     [2m... [0m
+[91;1m410 [0m    [91;1m))[0m;                                                                    [2m... [0m
+[91;1m411 [0m                                                                           [2m... [0m
+[91;1m412 [0m    [91massert![0m[91;1m([0m[91massert_any_stack_contains[0m[91;1m([0m                                     [2m... [0m
+[91;1m413 [0m        [91;1m&[0msymbolized_profile[91m,[0m                                               [92;1m407 [0m    [92;1mlet[0m [92msuccessful_samples[0m [92m=[0m symbolized_profile
+[91;1m414 [0m        [91;1m&[[0m                                                                 [92;1m408 [0m        [92m.into_iter[0m[92;1m()[0m
+[91;1m415 [0m            [91m"main.top2",[0m                                                   [92;1m409 [0m        [92m.filter[0m[92;1m(|[0m[92msample[0m[92;1m|[0m [92msample.result[0m [92m==[0m [92;1mSampleResult[0m[92m::[0m[92;1mSuccess)[0m
+[91;1m416 [0m            [91m"main.c2",[0m                                                     [2m... [0m
+[91;1m417 [0m            [91m"main.b2",[0m                                                     [2m... [0m
+[91;1m418 [0m            [91m"main.a2",[0m                                                     [2m... [0m
+[91;1m419 [0m            [91m"main.main",[0m                                                   [2m... [0m
+[91;1m420 [0m            [91m"runtime.main",[0m                                                [2m... [0m
+[91;1m421 [0m        [91;1m][0m[91m,[0m                                                                 [2m... [0m
+[91;1m422 [0m        [91mgo_static_proc[0m.[91mpid[0m()[91m,[0m                                              [92;1m410 [0m        .[92mcollect[0m();
+[91;1m423 [0m    [91;1m))[0m;                                                                    [92;1m411 [0m    [92;1mfor[0m [92mpid[0m [92;1min[0m [92;1m[[0m[92mgo_proc.pid[0m[92;1m()[0m[92m,[0m [92mgo_static_proc.pid[0m[92;1m()[0m[92m,[0m [92mgo_stripped_proc.pid[0m
+[91;1m[2m... [0m[0m                                                                           [92;1m[2m... [0m[0m[92;1m()][0m [92;1m{[0m
+[91;1m424 [0m                                                                           [2m... [0m
+[91;1m425 [0m    [91;3m// Stripped binaries aren't supported yet. Looking at you, Cilium.[0m     [2m... [0m
+[91;1m426 [0m    assert!([91m![0massert_any_stack_contains(                                    [2m412 [0m        assert!(
+[91;1m427 [0m        [1m&[0m[91msymbolized_profile[0m,                                               [92;1m413 [0m            assert_any_stack_contains([1m&[0m[92msuccessful_samples[0m, [1m&[0m[92mexpected_go_s[0m
+[91;1m[2m... [0m[0m                                                                           [92;1m[2m... [0m[0m[92mtack[0m, pid,)[92m,[0m
+[91;1m428 [0m        [1m&[0m[91;1m[][0m,                                                               [92;1m414 [0m            [92m"no successful sample contained the Go call chain for PID {pi[0m
+[91;1m[2m... [0m[0m                                                                           [92;1m[2m... [0m[0m[92md}"[0m
+[91;1m429 [0m        [91mgo_stripped_proc.[0mpid[91;1m()[0m,                                            [2m... [0m
+[2m430 [0m    ));                                                                    [2m415 [0m        );
+[2m... [0m                                                                           [92;1m416 [0m    [92;1m}[0m
+[2m431 [0m}                                                                          [2m417 [0m}
+[2m432 [0m                                                                           [2m418 [0m
+[2m433 [0m#[test]                                                                    [2m419 [0m#[test]
+

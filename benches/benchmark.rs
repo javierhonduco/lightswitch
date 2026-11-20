@@ -153,5 +153,24 @@ pub fn benchmark_bpf_array(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchmark_bpf_array, benchmark_ksym_readallksyms);
+fn benchmark_go_pcsp(c: &mut Criterion) {
+    let bytes = std::fs::read("lightswitch-object/src/testdata/main-go").unwrap();
+    c.bench_function("decode Go pcsp unwind rows", |b| {
+        b.iter(|| {
+            lightswitch_unwind_info::CompactUnwindInfoBuilder::with_callback(&bytes, None, |row| {
+                std::hint::black_box(row);
+            })
+            .unwrap()
+            .process()
+            .unwrap()
+        })
+    });
+}
+
+criterion_group!(
+    benches,
+    benchmark_bpf_array,
+    benchmark_ksym_readallksyms,
+    benchmark_go_pcsp
+);
 criterion_main!(benches);

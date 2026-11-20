@@ -247,8 +247,6 @@ enum AddUnwindInformationError {
     Eviction,
     #[error("unwind information too large for executable: {0} which has {1} unwind rows")]
     TooLarge(String, usize),
-    #[error("generic error: {0} for executable: {1}")]
-    Generic(String, String),
     #[error("unwind information contains no entries")]
     Empty,
     #[error("failed to create BPF map that stores unwind information")]
@@ -257,8 +255,6 @@ enum AddUnwindInformationError {
     BpfUnwindWrite { source: anyhow::Error },
     #[error("failed to write to BPF map that stores pages")]
     BpfPages { source: AddPagesError },
-    #[error("stripped Go binaries aren't supported yet")]
-    StrippedGo,
     #[error("failed to fetch unwind info")]
     FetchUnwind(#[from] FetchUnwindInfoError),
     #[error("object file not found")]
@@ -964,104 +960,45 @@ impl Profiler {
             return Err(AddUnwindInformationError::MissingObjectFile(executable_id));
         };
         let executable_path = executable_info.path.clone();
-        let mut elf_loads = executable_info.elf_load_segments.clone();
         let opened_exe_path = if executable_info.is_vdso {
             executable_info.path.clone()
         } else {
             opened_exe_path(pid, start_address, end_address)
         };
         let is_arm64 = architecture() == Architecture::Arm64;
-        let needs_synthesis = executable_info.is_vdso && is_arm64;
-        let runtime = executable_info.runtime.clone();
-        std::mem::drop(object_files);
-
-        let unwind_info = match runtime {
-            Runtime::Go(stop_frames) => {
-                if stop_frames.is_empty() {
-                    self.afflicted_processes.put(pid, ());
-                    return Err(AddUnwindInformationError::StrippedGo);
-                }
-                let mut unwind_info = Vec::new();
-
-                // For each bottom frame, add a end of function marker to stop
-                // unwinding covering the exact size of the
-                // function, assuming the function after it
-                // has frame pointers.
-                for stop_frame in stop_frames {
-                    unwind_info.push(CompactUnwindRow::stop_unwinding(stop_frame.start_address));
-                    unwind_info.push(CompactUnwindRow::frame_pointer(
-                        stop_frame.end_address,
-                        is_arm64,
-                    ));
-                }
-
-                // Go since pretty early on compiles with frame pointers by
-                // default.
-                elf_loads.sort_by_key(|e| e.p_vaddr);
-                if let Some(code_elf_load) = elf_loads.first() {
-                    unwind_info.push(CompactUnwindRow::frame_pointer(
-                        code_elf_load.p_vaddr,
-                        is_arm64,
-                    ));
-                    unwind_info.push(CompactUnwindRow::stop_unwinding(
-                        code_elf_load.p_vaddr + code_elf_load.p_filesz,
-                    ));
-                } else {
-                    return Err(AddUnwindInformationError::Generic(
-                        "Go binary has no elf load segments".into(),
-                        "".into(),
-                    ));
-                }
-
-                unwind_info.sort_by_key(|e| e.pc);
-                Ok(UnwindInfo::Vec(unwind_info))
-            }
+        let synthesize_vdso = executable_info.is_vdso && is_arm64;
+        let first_frame_override = match executable_info.runtime {
             Runtime::Zig {
                 start_low_address,
                 start_high_address,
-            } => {
-                let _span = span!(
-                    Level::DEBUG,
-                    "calling in_memory_unwind_info",
-                    "{} aka {}",
-                    opened_exe_path.display(),
-                    executable_path.display()
-                )
-                .entered();
-                let executable_mmap = mmap_executable(&opened_exe_path)?;
-                self.unwind_info_manager.fetch_unwind_info(
-                    &executable_mmap,
-                    executable_id,
-                    Some((start_low_address, start_high_address)),
-                    false,
-                )
-            }
-            Runtime::CLike => {
-                if needs_synthesis {
-                    debug!("synthetising arm64 unwind information using frame pointers for vDSO");
-                    Ok(UnwindInfo::Vec(vec![
-                        CompactUnwindRow::frame_pointer(start_address, is_arm64),
-                        CompactUnwindRow::stop_unwinding(end_address),
-                    ]))
-                } else {
-                    let _span = span!(
-                        Level::DEBUG,
-                        "calling in_memory_unwind_info",
-                        "{} aka {}",
-                        opened_exe_path.display(),
-                        executable_path.display()
-                    )
-                    .entered();
-                    let executable_mmap = mmap_executable(&opened_exe_path)?;
-                    self.unwind_info_manager.fetch_unwind_info(
-                        &executable_mmap,
-                        executable_id,
-                        None,
-                        false,
-                    )
-                }
-            }
-        }?;
+            } => Some((start_low_address, start_high_address)),
+            _ => None,
+        };
+        std::mem::drop(object_files);
+
+        let unwind_info = if synthesize_vdso {
+            debug!("synthesizing arm64 unwind information using frame pointers for vDSO");
+            UnwindInfo::Vec(vec![
+                CompactUnwindRow::frame_pointer(start_address, is_arm64),
+                CompactUnwindRow::stop_unwinding(end_address),
+            ])
+        } else {
+            let _span = span!(
+                Level::DEBUG,
+                "calling in_memory_unwind_info",
+                "{} aka {}",
+                opened_exe_path.display(),
+                executable_path.display()
+            )
+            .entered();
+            let executable_mmap = mmap_executable(&opened_exe_path)?;
+            self.unwind_info_manager.fetch_unwind_info(
+                &executable_mmap,
+                executable_id,
+                first_frame_override,
+                false,
+            )?
+        };
 
         if !self.maybe_evict_executables(unwind_info.len(), self.max_native_unwind_info_size_mb) {
             return Err(AddUnwindInformationError::Eviction);

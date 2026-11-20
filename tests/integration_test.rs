@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use std::io;
-use std::io::Write;
+use std::io::{Seek, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::bounded;
 
 use lightswitch::collector::{AggregatorCollector, Collector, NullCollector};
-use lightswitch::profile::AggregatedProfile;
 use lightswitch::profile::symbolize_profile;
+use lightswitch::profile::{AggregatedProfile, SampleResult};
 use lightswitch::profiler::{Profiler, ProfilerConfig};
 use lightswitch_capabilities::system_info::SystemInfo;
 use lightswitch_metadata::metadata_provider::GlobalMetadataProvider;
@@ -316,15 +316,19 @@ fn test_integration() {
     let go_proc = TestProcess::new("main_go", false);
     let go_static_proc = TestProcess::new("main_go_static", false);
     let go_stripped_proc = TestProcess::new("main_go_stripped", false);
+    let cache = tempfile::tempdir().unwrap();
 
     let collector = Arc::new(Mutex::new(
         Box::new(AggregatorCollector::new()) as Box<dyn Collector + Send>
     ));
 
     let profiler_config = ProfilerConfig {
+        cache_dir_base: cache.path().to_path_buf(),
         libbpf_debug: bpf_test_debug,
         bpf_logging: bpf_test_debug,
         duration: Duration::from_secs(5),
+        // Let the asynchronous collector receive batches before profiling ends.
+        session_duration: Duration::from_secs(1),
         sample_freq: 999,
         userspace_pid_ns_level: system_info.available_bpf_features.userspace_pid_ns_level,
         use_task_pt_regs_helper: system_info.available_bpf_features.has_task_pt_regs_helper
@@ -396,38 +400,54 @@ fn test_integration() {
         observed_stacks.join("\n"),
     );
 
-    assert!(assert_any_stack_contains(
-        &symbolized_profile,
-        &[
-            "main.top2",
-            "main.c2",
-            "main.b2",
-            "main.a2",
-            "main.main",
-            "runtime.main",
-        ],
-        go_proc.pid(),
-    ));
-
-    assert!(assert_any_stack_contains(
-        &symbolized_profile,
-        &[
-            "main.top2",
-            "main.c2",
-            "main.b2",
-            "main.a2",
-            "main.main",
-            "runtime.main",
-        ],
-        go_static_proc.pid(),
-    ));
-
-    // Stripped binaries aren't supported yet. Looking at you, Cilium.
-    assert!(!assert_any_stack_contains(
-        &symbolized_profile,
-        &[],
-        go_stripped_proc.pid(),
-    ));
+    let expected_go_stack = [
+        "main.top2",
+        "main.c2",
+        "main.b2",
+        "main.a2",
+        "main.main",
+        "runtime.main",
+    ];
+    let successful_samples = symbolized_profile
+        .into_iter()
+        .filter(|sample| sample.result == SampleResult::Success)
+        .collect();
+    for pid in [go_proc.pid(), go_static_proc.pid()] {
+        assert!(
+            assert_any_stack_contains(&successful_samples, &expected_go_stack, pid),
+            "no successful sample contained the Go call chain for PID {pid}"
+        );
+    }
+    // Independently check the PCs collected for the stripped binary. This
+    // tool is only used by the test, after profiling has finished.
+    let mut pcs = tempfile::tempfile().unwrap();
+    for sample in &raw_profile {
+        if sample.pid == go_stripped_proc.pid() && sample.result == SampleResult::Success {
+            for frame in &sample.ustack {
+                writeln!(pcs, "{:x}", frame.file_offset.unwrap_or(0)).unwrap();
+            }
+            writeln!(pcs, "0").unwrap(); // Keep samples separate.
+        }
+    }
+    pcs.rewind().unwrap();
+    let output = Command::new("target/nix/bin/go-addr2line")
+        .arg("target/nix/bin/main_go_stripped")
+        .stdin(pcs)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let symbols = String::from_utf8(output.stdout).unwrap();
+    let functions = symbols.lines().step_by(2).collect::<Vec<_>>();
+    assert!(
+        functions
+            .windows(expected_go_stack.len())
+            .any(|stack| stack == expected_go_stack),
+        "no successful sample contained the stripped Go call chain"
+    );
 }
 
 #[test]

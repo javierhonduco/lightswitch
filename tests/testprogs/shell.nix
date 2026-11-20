@@ -102,12 +102,14 @@ let
       go build -o main_go main.go
       CGO_ENABLED=0 go build -ldflags "-w -s" -o main_go_stripped main.go
       CGO_ENABLED=0 go build -o main_go_static main.go
+      go build -o go-addr2line cmd/addr2line
     '';
     installPhase = ''
       mkdir -p $out/bin
       cp main_go $out/bin
       cp main_go_stripped $out/bin
       cp main_go_static $out/bin
+      cp go-addr2line $out/bin
     '';
     buildInputs = [
       pkgs.go

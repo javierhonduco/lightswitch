@@ -288,6 +288,10 @@ impl<'a> CompactUnwindInfoBuilder<'a> {
         let object_file = object::File::parse(self.object_bytes)
             .map_err(|e| UnwindInfoError::ParsingObjectFile(e.to_string()))?;
 
+        if let Some(table) = crate::pclntab::PclnTab::from_object(&object_file)? {
+            return table.unwind(object_file.architecture(), &mut self.callback);
+        }
+
         let endian = if object_file.is_little_endian() {
             gimli::RunTimeEndian::Little
         } else {
