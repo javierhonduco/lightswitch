@@ -42,6 +42,7 @@ fn snapshot(version: i32) -> Result<(File, Layout)> {
         ("CodeBlob", "_frame_size", 12),
         ("CodeBlob", "_frame_complete_offset", 16),
         ("nmethod", "_state", 20),
+        ("nmethod", "_compile_id", 84),
         ("nmethod", "_stub_offset", 24),
         ("nmethod", "_scopes_pcs_offset", 28),
         ("nmethod", "_dependencies_offset", 32),
@@ -95,6 +96,7 @@ fn snapshot(version: i32) -> Result<(File, Layout)> {
     let blob = 0x4050;
     ptr(&mut data, blob, 0x2820);
     put(&mut data, 0x2820, b"nmethod\0");
+    int(&mut data, blob + 84, 17);
     int(&mut data, blob + 8, 480);
     int(&mut data, blob + 12, 6); // words
     int(&mut data, blob + 16, 4); // bytes from code start

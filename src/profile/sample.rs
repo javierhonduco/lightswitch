@@ -10,9 +10,9 @@ use tracing::error;
 
 use crate::bpf::profiler_bindings::sample_result;
 use crate::kernel::KERNEL_PID;
-use crate::process::ObjectFileInfo;
 use crate::process::Pid;
 use crate::process::ProcessInfo;
+use crate::process::{ExecutableMappingType, ObjectFileInfo};
 use crate::profile::Frame;
 
 #[derive(Default, Debug, Eq, Clone, Copy, PartialEq, Hash)]
@@ -223,6 +223,7 @@ impl RawAggregatedSample {
 
             let file_offset = match objs.get(&mapping.executable_id) {
                 Some(obj) => obj.normalized_address(*virtual_address, mapping),
+                None if mapping.kind == ExecutableMappingType::Anonymous => None,
                 None => {
                     error!("executable with id 0x{} not found", mapping.executable_id);
                     None

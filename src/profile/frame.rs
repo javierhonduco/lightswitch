@@ -73,6 +73,7 @@ impl Frame {
             Some(Err(e)) => {
                 format!("error: {e:?}")
             }
+            None if self.file_offset.is_none() => format!("{:#x}", self.virtual_address),
             None => "frame not symbolized".to_string(),
         }
     }

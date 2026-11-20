@@ -34,9 +34,10 @@ _Static_assert(MAX_BINARY_SEARCH_DEPTH >= UNWIND_INFO_PAGE_BIT_LEN, "unwind tabl
 
 #define MAX_EXECUTABLE_TO_PAGE_ENTRIES 500 * 1000
 
-#define MAPPING_TYPE_FILE 0
-#define MAPPING_TYPE_ANON 1
-#define MAPPING_TYPE_VDSO 2
+#define MAPPING_TYPE_FILE    0
+#define MAPPING_TYPE_ANON    1
+#define MAPPING_TYPE_VDSO    2
+#define MAPPING_TYPE_HOTSPOT 3
 
 typedef struct {
     u64 executable_id;
@@ -47,6 +48,36 @@ typedef struct {
     u32 low_index;
     u32 high_index;
 } page_value_t;
+
+// One immutable array per (PID, executable VMA). Its first entries index
+// 64 KiB pages, followed by method identities and sorted covered PC ranges.
+typedef struct {
+    u64 pid;
+    u64 mapping_start;
+} hotspot_table_key_t;
+
+typedef struct {
+    u64 begin;
+    u64 end;
+    u32 guard_index;
+    u16 frame_size;
+} hotspot_site_t;
+
+typedef struct {
+    u64 id_address;
+    u64 state_address;
+    u64 name_address;
+    u64 name;
+    u64 segment_address;
+    u64 used_address;
+    s32 compile_id;
+} hotspot_method_t;
+
+typedef union {
+    page_value_t page;
+    hotspot_site_t site;
+    hotspot_method_t method;
+} hotspot_entry_t;
 
 // Values for the unwind table's CFA type.
 #define CFA_TYPE_RBP                   1

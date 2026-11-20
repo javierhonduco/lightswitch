@@ -74,6 +74,12 @@ impl Bpf {
             .expect("open skel");
 
         let _map_handle = Self::create_unwind_info_maps(&mut open_skel);
+        let hotspot_shape = crate::hotspot::array(1).expect("HotSpot inner map shape");
+        open_skel
+            .maps
+            .hotspot_tables
+            .set_inner_map_fd(hotspot_shape.as_fd())
+            .expect("set HotSpot inner map shape");
         Self::setup_profiler_maps(&mut open_skel, profiler_config);
         let native_unwinder = ManuallyDrop::new(open_skel.load().expect("load skel"));
 

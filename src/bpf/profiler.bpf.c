@@ -40,6 +40,13 @@ struct {
 } outer_map SEC(".maps");
 
 struct {
+    __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
+    __uint(max_entries, MAX_OUTER_UNWIND_MAP_ENTRIES);
+    __type(key, hotspot_table_key_t);
+    __type(value, u32);
+} hotspot_tables SEC(".maps");
+
+struct {
     __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
     __uint(max_entries, 5);
     __type(key, u32);
@@ -302,6 +309,49 @@ static __always_inline void send_sample(struct bpf_perf_event_data* ctx,
     send_sample_impl(ctx, &(unwind_state->sample));
 }
 
+// HotSpot publishes immutable rows for one compilation. A miss (including
+// an unmapped or recycled nmethod) ends this stack at its known current PC.
+static __noinline int hotspot_frame_size(int pid, u64 base, u64 pc) {
+    hotspot_table_key_t key = {.pid = pid, .mapping_start = base};
+    void* table = bpf_map_lookup_elem(&hotspot_tables, &key);
+    if (!table || pc < base)
+        return 0;
+    u32 page = (pc - base) >> UNWIND_INFO_PAGE_BIT_LEN;
+    hotspot_entry_t* directory = bpf_map_lookup_elem(table, &page);
+    if (!directory)
+        return 0;
+    u32 lo = directory->page.low_index;
+    u32 hi = directory->page.high_index;
+    for (int i = 0; i < MAX_BINARY_SEARCH_DEPTH && lo < hi; i++) {
+        u32 mid = lo + (hi - lo) / 2;
+        hotspot_entry_t* entry = bpf_map_lookup_elem(table, &mid);
+        if (!entry)
+            return 0;
+        if (pc < entry->site.begin) {
+            hi = mid;
+        } else if (pc >= entry->site.end) {
+            lo = mid + 1;
+        } else {
+            u32 guard = entry->site.guard_index;
+            hotspot_entry_t* identity = bpf_map_lookup_elem(table, &guard);
+            if (!identity)
+                return 0;
+            hotspot_method_t* method = &identity->method;
+            u8 tag, used, state;
+            u64 name;
+            s32 id;
+            if (bpf_probe_read_user(&tag, sizeof(tag), (void*)method->segment_address) || tag != 0 ||
+                bpf_probe_read_user(&used, sizeof(used), (void*)method->used_address) || used != 1 ||
+                bpf_probe_read_user(&name, sizeof(name), (void*)method->name_address) || name != method->name ||
+                bpf_probe_read_user(&state, sizeof(state), (void*)method->state_address) || state != 0 ||
+                bpf_probe_read_user(&id, sizeof(id), (void*)method->id_address) || id != method->compile_id)
+                return 0;
+            return entry->site.frame_size;
+        }
+    }
+    return 0;
+}
+
 // The unwinding machinery lives here.
 SEC("perf_event")
 int dwarf_unwind(struct bpf_perf_event_data* ctx) {
@@ -342,6 +392,31 @@ int dwarf_unwind(struct bpf_perf_event_data* ctx) {
             send_event(&event, ctx);
             unwind_state->sample.result = SAMPLE_MAPPING_DOES_NOT_CONTAIN_PC;
             break;
+        }
+
+        if (mapping->type == MAPPING_TYPE_HOTSPOT) {
+            u32 depth = unwind_state->sample.stack.ulen;
+            if (depth < MAX_STACK_DEPTH) {
+                unwind_state->sample.stack.addresses[depth] = unwind_state->ip;
+                unwind_state->sample.stack.ulen++;
+            }
+            int size = hotspot_frame_size(per_process_id, mapping->load_address, unwind_state->ip);
+            if (size < 16) {
+                bump_unwind_jit_encountered();
+                unwind_state->sample.result = SAMPLE_MAPPING_JIT;
+                break;
+            }
+            u64 sp = unwind_state->sp + size;
+            u64 saved[2];
+            int err = bpf_probe_read_user(saved, sizeof(saved), (void*)(sp - sizeof(saved)));
+            if (err || !saved[1]) {
+                unwind_state->sample.result = err == -EFAULT ? SAMPLE_MEM_READ_FAULT_ERROR : SAMPLE_UNWINDING_ERROR;
+                break;
+            }
+            unwind_state->sp = sp;
+            unwind_state->bp = saved[0];
+            unwind_state->ip = previous_instruction_addr(remove_pac(saved[1]));
+            continue;
         }
 
         if (mapping->type == MAPPING_TYPE_ANON) {

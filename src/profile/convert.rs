@@ -16,8 +16,8 @@ use tracing::{Level, debug, error, span};
 use crate::kernel::KERNEL_PID;
 use crate::ksym::Ksym;
 use crate::ksym::KsymIter;
-use crate::process::ObjectFileInfo;
 use crate::process::ProcessInfo;
+use crate::process::{ExecutableMappingType, ObjectFileInfo};
 use crate::profile::{
     AggregatedProfile, AggregatedSample, Frame, FrameAddress, RawAggregatedProfile, SampleResult,
     SymbolizedFrame,
@@ -132,6 +132,12 @@ pub fn to_pprof(
                 // todo: maybe append an error frame for debugging?
                 continue;
             };
+
+            if mapping.kind == ExecutableMappingType::Anonymous {
+                // JIT PCs have no file-backed pprof mapping or debug file.
+                location_ids.push(pprof.add_location(virtual_address, 0, vec![]));
+                continue;
+            }
 
             match objs.get(&mapping.executable_id) {
                 Some(obj) => {
@@ -487,6 +493,11 @@ fn symbolize_user_stack(
             ));
             continue;
         };
+
+        if mapping.kind == ExecutableMappingType::Anonymous {
+            result.push(frame.clone());
+            continue;
+        }
 
         // We need the file offsets to symbolize.
         let Some(file_offset) = frame.file_offset else {

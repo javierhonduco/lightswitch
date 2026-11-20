@@ -126,6 +126,8 @@
           devShells.default = mkShell {
             nativeBuildInputs = nativeBuildInputs;
             buildInputs = buildInputs ++ [
+              # HotSpot unwind integration test (javac, java, JNI headers).
+              jdk21_headless
               (rust-toolchain.override {
                 extensions = [
                   "rust-src"

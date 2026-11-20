@@ -5,6 +5,7 @@ pub mod bpf_poller;
 pub mod collector;
 pub mod debug_info;
 pub mod deletion_scheduler;
+mod hotspot;
 pub mod kernel;
 pub mod ksym;
 pub mod native_unwind_state;

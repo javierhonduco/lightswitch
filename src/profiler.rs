@@ -90,6 +90,7 @@ pub struct Profiler {
     /// Profiler stop notification channel.
     stop_chan_receive: Receiver<()>,
     native_unwind_state: NativeUnwindState,
+    hotspot: crate::hotspot::HotspotTables,
     /// Pids excluded from profiling.
     filter_pids: HashMap<Pid, bool>,
     /// Profile channels.
@@ -330,6 +331,7 @@ impl Profiler {
             tracers_chan_receive,
             stop_chan_receive: stop_signal_receive,
             native_unwind_state,
+            hotspot: Default::default(),
             filter_pids: HashMap::new(),
             profile_send,
             profile_receive,
@@ -525,20 +527,13 @@ impl Profiler {
         let object_files = self.object_files.clone();
         let collector = collector.clone();
 
-        thread::spawn(move || {
-            loop {
-                match profile_receive.recv() {
-                    Ok(profile) => {
-                        collector.lock().expect("lock collector").collect(
-                            profile,
-                            &procs.read(),
-                            &object_files.read(),
-                        );
-                    }
-                    Err(_e) => {
-                        // println!("failed to receive event {:?}", e);
-                    }
-                }
+        let collector_thread = thread::spawn(move || {
+            while let Ok(profile) = profile_receive.recv() {
+                collector.lock().expect("lock collector").collect(
+                    profile,
+                    &procs.read(),
+                    &object_files.read(),
+                );
             }
         });
 
@@ -614,7 +609,11 @@ impl Profiler {
             }
         }
 
-        start.elapsed()
+        let elapsed = start.elapsed();
+        // Callers read the collector immediately after run returns.
+        drop(self.profile_send);
+        collector_thread.join().expect("profile collector thread");
+        elapsed
     }
 
     fn scheduled_deletion(&mut self) {
@@ -652,6 +651,11 @@ impl Profiler {
 
     pub fn handle_process_eviction(&mut self, pid: Pid, partial_write: bool) {
         debug!("eviction for process {pid}");
+        self.hotspot.remove(
+            &self.bpf.native_unwinder.maps.hotspot_tables,
+            pid,
+            0..u64::MAX,
+        );
         let mut procs = self.procs.write();
         if let Some(proc_info) = procs.get_mut(&pid) {
             if proc_info.status == ProcessStatus::Exited {
@@ -683,6 +687,11 @@ impl Profiler {
 
     pub fn delete_process(&mut self, pid: Pid, partial_write: bool, from_userspace: bool) {
         // TODO: remove BPF ratelimits for this process.
+        self.hotspot.remove(
+            &self.bpf.native_unwinder.maps.hotspot_tables,
+            pid,
+            0..u64::MAX,
+        );
         let _ = self.afflicted_processes.pop(&pid);
         let mut procs = self.procs.write();
         match procs.get_mut(&pid) {
@@ -730,6 +739,11 @@ impl Profiler {
     }
 
     pub fn handle_munmap(&mut self, pid: Pid, start_address: u64, end_address: u64) {
+        self.hotspot.remove(
+            &self.bpf.native_unwinder.maps.hotspot_tables,
+            pid,
+            start_address..end_address,
+        );
         let mut procs = self.procs.write();
 
         match procs.get_mut(&pid) {
@@ -864,11 +878,9 @@ impl Profiler {
 
         let mut errored = false;
         let mut bpf_mappings = Vec::new();
+        let mut jvm = None;
         // Get unwind info
-        for mapping in mappings {
-            // There is no unwind information for anonymous (JIT) mappings, so
-            // let's skip them. In the future we could either try to
-            // synthesise the unwind information.
+        for mapping in &mappings {
             if mapping.kind == ExecutableMappingType::Anonymous {
                 bpf_mappings.push(mapping_t {
                     load_address: 0,
@@ -883,10 +895,12 @@ impl Profiler {
             let object_file = self.object_files.read();
             // We might know about a mapping that failed to open for some
             // reason.
-            let object_file_info = object_file.get(&mapping.executable_id);
-            if object_file_info.is_none() {
+            let Some(obj) = object_file.get(&mapping.executable_id) else {
                 warn!("mapping not found");
                 continue;
+            };
+            if obj.path.file_name().is_some_and(|name| name == "libjvm.so") {
+                jvm = Some(mapping);
             }
             std::mem::drop(object_file);
 
@@ -929,6 +943,12 @@ impl Profiler {
             }
         }
 
+        if !errored
+            && let Some(jvm) = jvm
+            && let Err(err) = self.register_hotspot(pid, jvm, &mut bpf_mappings)
+        {
+            debug!(pid, %err, "could not register HotSpot code heaps");
+        }
         // Store all mappings in BPF maps.
         if let Err(e) = self.bpf.add_mappings(pid, &bpf_mappings) {
             errored = true;
@@ -947,6 +967,28 @@ impl Profiler {
             // Evict a process to make room for more.
             debug!("eviction result {}", self.maybe_evict_process(false));
         }
+    }
+
+    fn register_hotspot(
+        &mut self,
+        pid: Pid,
+        jvm: &ExecutableMapping,
+        mappings: &mut [mapping_t],
+    ) -> Result<()> {
+        let elf = mmap_executable(&opened_exe_path(pid, jvm.start_addr, jvm.end_addr))?;
+        let mem = File::open(format!("/proc/{pid}/mem"))?;
+        let heaps = lightswitch_unwind_info::hotspot::unwind_info(&elf, jvm.load_address, &mem)?;
+        let budget = (self.max_native_unwind_info_size_mb.max(0) as usize * 1_000_000)
+            .saturating_sub(self.native_unwind_state.unwind_info_memory_usage() as usize)
+            .saturating_sub(self.hotspot.bytes());
+        self.hotspot.register(
+            &self.bpf.native_unwinder.maps.hotspot_tables,
+            pid,
+            mappings,
+            &heaps,
+            budget,
+        );
+        Ok(())
     }
 
     fn add_unwind_information_for_executable(
@@ -1139,7 +1181,11 @@ impl Profiler {
         // Check if this executable unwind info would exceed the approximate
         // memory limit.
         const MB_TO_BYTES: u64 = 1_000_000;
-        let max_memory_bytes = max_memory_mb as u64 * MB_TO_BYTES;
+        let max_memory_bytes =
+            (max_memory_mb as u64 * MB_TO_BYTES).saturating_sub(self.hotspot.bytes() as u64);
+        if self.hotspot.bytes() != 0 && unwind_info_size_bytes(unwind_info_len) > max_memory_bytes {
+            return false;
+        }
         let total_memory_used_bytes = self.native_unwind_state.unwind_info_memory_usage();
         let this_unwind_info_bytes = unwind_info_size_bytes(unwind_info_len);
         let total_memory_used_after_bytes = total_memory_used_bytes + this_unwind_info_bytes;
@@ -1564,7 +1610,9 @@ impl Profiler {
                         debug!("could not insert object file due to {:?}", info);
                     }
                 }
-                procfs::process::MMapPath::Anonymous => {
+                path if matches!(path, procfs::process::MMapPath::Anonymous)
+                    || matches!(path, procfs::process::MMapPath::Other(name) if name.starts_with("anon:")) =>
+                {
                     mappings.push(ExecutableMapping {
                         executable_id: ExecutableId(0), // Placeholder for JIT.
                         kind: ExecutableMappingType::Anonymous,

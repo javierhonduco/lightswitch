@@ -2310,6 +2310,7 @@ dependencies = [
  "lazy_static",
  "lightswitch-object",
  "memmap2",
+ "nix",
  "object 0.40.0",
  "plain",
  "ring",

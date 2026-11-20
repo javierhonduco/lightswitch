@@ -8,6 +8,8 @@ lightswitch
 ===========
 **lightswitch** is a profiler as a library for Linux suitable for on-demand and continuous on-CPU profiling. It's written in Rust with sprinkles of C for eBPF. Currently C, C++, Rust, Zig, and Go are fully supported on x86_64 and arm64.
 
+For OpenJDK HotSpot 17, 21, and 25, attach to a warmed-up JVM with `--pids` to unwind compiled Java callers at supported call sites without frame pointers. Lightswitch reads the code heaps when it registers the process. A sample stops at an uncovered instruction or a compilation that has been replaced. Java frames are collected as instruction addresses. See [Profiling a HotSpot JVM](docs/hotspot.md).
+
 Features / design goals
 -----------------------
 
@@ -61,6 +63,8 @@ $ sudo ./target/debug/lightswitch # or ./target/release for optimized builds
 # after running `nix develop`
 $ cargo test
 ```
+
+For the JVM fixtures, test commands, and x86-64 emulation setup, see [Testing HotSpot unwinding](docs/hotspot_testing.md).
 
 ### Running kernel tests
 ```shell

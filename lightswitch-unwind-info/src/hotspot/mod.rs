@@ -26,16 +26,31 @@ use vmstructs::{Layout, Memory, add};
 pub struct CodeHeap {
     pub range: Range<u64>,
     pub rows: Vec<CompactUnwindRow>,
+    pub methods: Vec<CompiledMethod>,
 }
 
-/// Extract compact unwind rows from a consistent snapshot of a Linux HotSpot
+/// Identity and allocation metadata to validate before using a live method's
+/// rows.
+#[derive(Debug)]
+pub struct CompiledMethod {
+    pub rows: Range<usize>,
+    pub id_address: u64,
+    pub compile_id: i32,
+    pub state_address: u64,
+    pub name_address: u64,
+    pub name: u64,
+    pub used_address: u64,
+    pub segment_address: u64,
+}
+
+/// Extract compact unwind rows from a Linux HotSpot
 /// process (64-bit little-endian OpenJDK 17, 21 or 25). `libjvm` is the mapped
 /// libjvm.so ELF file, `load_bias` is its ELF relocation bias, and positional
 /// reads on `memory` must use target virtual addresses (e.g. /proc/PID/mem).
 ///
-/// The code heaps, allocation headers, and nmethods must come from the same
-/// snapshot. A live collector is responsible for synchronization and for
-/// discarding rows when a method is unloaded or its address is reused.
+/// A stopped VM supplies a consistent snapshot. In a running VM the heap walk
+/// can fail during allocation. Each emitted method is checked before and after
+/// reading its metadata. Live users must validate its identity again at use.
 ///
 /// Emits rules at the first frame-complete PC, ordinary Java calls, and
 /// in-method safepoint polls. A call's range includes the adjusted return PC
@@ -123,6 +138,7 @@ impl Parser<'_> {
         let map = mem.bytes(segmap.start, count)?;
         let header_size = l.size("HeapBlock")?;
         let mut rows = vec![CompactUnwindRow::stop_unwinding(0)];
+        let mut methods = Vec::new();
         let mut index = 0;
         while index < count {
             // Unallocated tail is 0xff. A free block inside the allocated
@@ -132,6 +148,7 @@ impl Parser<'_> {
                 0 => {}
                 _ => anyhow::bail!("expected start of HotSpot heap block"),
             }
+            let segment_address = add(segmap.start, index)?;
             let block = add(range.start, index << shift)?;
             let header = l.member(block, "HeapBlock", "_header")?;
             let length_addr = l.member(header, "HeapBlock::Header", "_length")?;
@@ -145,18 +162,57 @@ impl Parser<'_> {
                 "invalid HotSpot heap block length"
             );
             index += length;
-            if mem.read::<1>(l.member(header, "HeapBlock::Header", "_used")?)? == [1] {
+            let used_address = l.member(header, "HeapBlock::Header", "_used")?;
+            if mem.read::<1>(used_address)? == [1] {
                 let blob = add(block, header_size)?;
                 let end = add(range.start, index << shift)?;
                 ensure!(blob < end, "truncated HotSpot heap block");
-                self.blob(blob, end, segment_size, range.start, &mut rows)
-                    .with_context(|| format!("HotSpot CodeBlob at {blob:#x}"))?;
+                let name_address = l.member(blob, "CodeBlob", "_name")?;
+                let name = mem.ptr(name_address)?;
+                if name == 0 || mem.read::<8>(name)? != *b"nmethod\0" {
+                    continue;
+                }
+                let id_address = l.member(blob, "nmethod", "_compile_id")?;
+                let state_address = l.member(blob, "nmethod", "_state")?;
+                let compile_id = mem.int(id_address)?;
+                if compile_id <= 0 || mem.read::<1>(state_address)? != [0] {
+                    continue;
+                }
+                let first = rows.len();
+                let parsed = self.blob(blob, end, segment_size, range.start, &mut rows);
+                if parsed.is_ok() && rows.len() == first {
+                    continue;
+                }
+                if mem.int(id_address)? != compile_id
+                    || mem.read::<1>(state_address)? != [0]
+                    || mem.ptr(name_address)? != name
+                    || mem.read::<1>(used_address)? != [1]
+                    || mem.read::<1>(segment_address)? != [0]
+                {
+                    rows.truncate(first);
+                    continue;
+                }
+                parsed.with_context(|| format!("HotSpot CodeBlob at {blob:#x}"))?;
+                methods.push(CompiledMethod {
+                    rows: first..rows.len(),
+                    id_address,
+                    compile_id,
+                    state_address,
+                    name_address,
+                    name,
+                    used_address,
+                    segment_address,
+                });
             }
         }
         if rows.len() == 1 {
             rows.clear();
         }
-        Ok(CodeHeap { range, rows })
+        Ok(CodeHeap {
+            range,
+            rows,
+            methods,
+        })
     }
 
     fn blob(
@@ -170,16 +226,6 @@ impl Parser<'_> {
         let mem = &self.mem;
         let l = &self.layout;
         let field = |name| l.member(blob, "CodeBlob", name);
-        let nm = |name| l.member(blob, "nmethod", name);
-        // CodeBlob::_name is an internal kind label. The nmethod constructors
-        // distinguish Java compilations ("nmethod") from JNI wrappers.
-        let name = mem.ptr(field("_name")?)?;
-        if name == 0
-            || mem.read::<8>(name)? != *b"nmethod\0"
-            || mem.read::<1>(nm("_state")?)? != [0]
-        {
-            return Ok(());
-        }
         let frame_words = mem.int(field("_frame_size")?)?;
         let Ok(frame_bytes) = u16::try_from(i64::from(frame_words) * 8) else {
             return Ok(());
